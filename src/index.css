@@ -1,0 +1,215 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+
+  /* Brand: BENECO Enterprise System — standard theme is dark green */
+  --color-brand-50: #ecfdf5;
+  --color-brand-100: #dcfce7;
+  --color-brand-200: #bbf7d0;
+  --color-brand-300: #86efac;
+  --color-brand-400: #4ade80;
+  --color-brand-500: #22c55e;
+  --color-brand-600: #16a34a;
+  --color-brand-700: #0f8b4c;
+  --color-brand-800: #0b6b3a;
+  --color-brand-900: #085229;
+  --color-brand-950: #04331a;
+
+  /* Secondary success/positive green, kept a touch more emerald than brand */
+  --color-green-50: #eefbf5;
+  --color-green-100: #d6f5e6;
+  --color-green-200: #aeeacd;
+  --color-green-300: #79d9ad;
+  --color-green-400: #43c08f;
+  --color-green-500: #17a06e;
+  --color-green-600: #0f8358;
+  --color-green-700: #0c6947;
+  --color-green-800: #0b5439;
+  --color-green-900: #0a4330;
+
+  --color-gold-50: #fdf8ec;
+  --color-gold-100: #faedc7;
+  --color-gold-200: #f4d888;
+  --color-gold-300: #edc158;
+  --color-gold-400: #e5a92e;
+  --color-gold-500: #cf8f1c;
+  --color-gold-600: #ab7015;
+  --color-gold-700: #895616;
+  --color-gold-800: #714518;
+  --color-gold-900: #5f3a19;
+
+  --color-canvas: #f4f7f5;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f1f5f3;
+
+  /* Fixed (never overridden per-theme) tokens for surfaces that are always
+     dark regardless of light/dark mode — the sidebar and the login page's
+     photo/glass background. Using theme-reactive brand-* shades here would
+     flip to badge-tint values in dark mode and go near-invisible. */
+  --color-ondark: #dcfce7;
+  --color-ondark-subtle: #bbf7d0;
+  --color-onlight: #0f172a;
+  --color-onlight-accent: #0f8b4c;
+  --color-sidebar: #085229;
+
+  --color-status-success: #0f8358;
+  --color-status-warning: #ab7015;
+  --color-status-pending: #16a34a;
+  --color-status-urgent: #c1272d;
+  --color-status-rejected: #8a1c22;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Dark theme overrides. Applied via [data-theme="dark"] on <html>,       */
+/* set by ThemeContext (which also resolves "system" preference in JS).  */
+/* Every Tailwind utility that reads --color-* picks these up for free.  */
+/* ---------------------------------------------------------------------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-canvas: #0a100d;
+  --color-surface: #131f1a;
+  --color-surface-hover: #1a281f;
+  --color-sidebar: #031d10;
+
+  /* Neutral (Tailwind default slate ramp, inverted + green-tinted) */
+  --color-slate-50: #18211c;
+  --color-slate-100: #202b24;
+  --color-slate-200: #2e3b33;
+  --color-slate-300: #44544a;
+  --color-slate-400: #66796d;
+  --color-slate-500: #8a9c90;
+  --color-slate-600: #a9b8ae;
+  --color-slate-700: #c6d2cb;
+  --color-slate-800: #e4ebe6;
+  --color-slate-900: #f6faf7;
+  --color-slate-950: #fbfefc;
+
+  /* Brand green */
+  --color-brand-50: #0e2118;
+  --color-brand-100: #123a26;
+  --color-brand-200: #1c5536;
+  --color-brand-300: #2f8055;
+  --color-brand-400: #3fa86c;
+  --color-brand-500: #34c883;
+  --color-brand-600: #22c55e;
+  --color-brand-700: #7fe3ab;
+  --color-brand-800: #a8f0c6;
+  --color-brand-900: #0c2e1c;
+  --color-brand-950: #071f13;
+
+  /* Success/secondary green */
+  --color-green-50: #0c2118;
+  --color-green-100: #123023;
+  --color-green-200: #1e4a36;
+  --color-green-300: #2f6f52;
+  --color-green-400: #3f9670;
+  --color-green-500: #34d399;
+  --color-green-600: #22c55e;
+  --color-green-700: #7ee9bf;
+  --color-green-800: #a8f2d6;
+  --color-green-900: #d6fbe9;
+
+  /* Gold / warning */
+  --color-gold-50: #241c0c;
+  --color-gold-100: #392c12;
+  --color-gold-200: #5c481c;
+  --color-gold-300: #86691f;
+  --color-gold-400: #c99a2e;
+  --color-gold-500: #eab545;
+  --color-gold-600: #f0c766;
+  --color-gold-700: #f4d888;
+  --color-gold-800: #fbe7ac;
+  --color-gold-900: #fff3d1;
+
+  /* Destructive red (Tailwind default palette, overridden) */
+  --color-red-50: #2a1215;
+  --color-red-100: #3d181c;
+  --color-red-200: #5c262c;
+  --color-red-300: #833038;
+  --color-red-400: #b83c43;
+  --color-red-500: #e04b4b;
+  --color-red-600: #f04444;
+  --color-red-700: #fca5a5;
+  --color-red-800: #fecaca;
+  --color-red-900: #fee2e2;
+
+  /* Returned/orange */
+  --color-orange-50: #2b1b0d;
+  --color-orange-100: #3d2712;
+  --color-orange-200: #5c3d1c;
+  --color-orange-300: #855b26;
+  --color-orange-400: #c07f2e;
+  --color-orange-500: #f0973f;
+  --color-orange-600: #fb923c;
+  --color-orange-700: #fdba74;
+  --color-orange-800: #fed7aa;
+  --color-orange-900: #ffedd5;
+
+  --color-status-success: #34d399;
+  --color-status-warning: #eab545;
+  --color-status-pending: #22c55e;
+  --color-status-urgent: #f87171;
+  --color-status-rejected: #fca5a5;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-slate-200);
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-slate-900);
+    font-family: var(--font-sans);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--color-slate-300);
+    border-radius: 8px;
+  }
+
+  /* Mottled dark-green grunge texture for the sidebar: a fixed base color,
+     a few soft irregular color blotches, a corner vignette, and a fine
+     film-grain layer (procedural SVG noise, no image asset needed). */
+  .bg-sidebar-texture {
+    background-color: var(--color-sidebar);
+    background-image:
+      radial-gradient(ellipse 60% 45% at 25% 15%, rgba(74, 222, 128, 0.16), transparent 60%),
+      radial-gradient(ellipse 55% 50% at 80% 30%, rgba(2, 20, 12, 0.65), transparent 60%),
+      radial-gradient(ellipse 65% 55% at 20% 80%, rgba(2, 20, 12, 0.6), transparent 60%),
+      radial-gradient(ellipse 50% 45% at 85% 90%, rgba(74, 222, 128, 0.10), transparent 55%),
+      radial-gradient(ellipse 90% 80% at 50% 50%, transparent 45%, rgba(0, 0, 0, 0.55) 100%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/></svg>");
+    background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, repeat;
+    background-size: cover, cover, cover, cover, cover, 180px 180px;
+  }
+  .print-only { display: none; }
+  @media print {
+    .no-print { display: none !important; }
+    .print-only { display: block; }
+  }
+}
