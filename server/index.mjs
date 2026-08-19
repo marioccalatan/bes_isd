@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import oracledb from 'oracledb';
 import { config } from './config.mjs';
 import { initializeDatabase, withConnection } from './db.mjs';
 import { createOpaqueToken, hashPassword, hashToken, verifyPassword } from './security.mjs';
@@ -263,6 +264,148 @@ async function currentSessionUser(connection, token) {
 
 const isTaskModerator = (user) => ['Department Manager', 'Secretary', 'Administrator'].includes(user?.APP_ROLE);
 
+const DB_SYNC_TABLES = [
+  'BES_USERS',
+  'BES_ROLES',
+  'BES_PERMISSIONS',
+  'BES_ROLE_PERMISSIONS',
+  'BES_USER_ROLES',
+  'BES_CALENDAR_EVENTS',
+  'BES_WORK_TASKS',
+  'BES_WORK_COMMENTS',
+];
+const DB_SYNC_DELETE_ORDER = [
+  'BES_WORK_COMMENTS',
+  'BES_WORK_TASKS',
+  'BES_CALENDAR_EVENTS',
+  'BES_USER_ROLES',
+  'BES_ROLE_PERMISSIONS',
+  'BES_USERS',
+  'BES_ROLES',
+  'BES_PERMISSIONS',
+];
+const DB_SYNC_INSERT_ORDER = [
+  'BES_USERS',
+  'BES_ROLES',
+  'BES_PERMISSIONS',
+  'BES_ROLE_PERMISSIONS',
+  'BES_USER_ROLES',
+  'BES_CALENDAR_EVENTS',
+  'BES_WORK_TASKS',
+  'BES_WORK_COMMENTS',
+];
+const DB_SYNC_ALLOWED = new Set(DB_SYNC_TABLES);
+
+const oracleConnectString = (details) => {
+  const host = normalize(details.host);
+  const port = normalize(details.port) || '1521';
+  const serviceName = normalize(details.serviceName);
+  const mode = normalize(details.mode || details.connectionMode || 'serviceName').toLowerCase();
+  if (!host || !serviceName) throw Object.assign(new Error('Host and service/SID are required.'), { statusCode: 400 });
+  if (!/^\d{1,5}$/.test(port)) throw Object.assign(new Error('Oracle port must be numeric.'), { statusCode: 400 });
+  return mode === 'sid'
+    ? `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=${host})(PORT=${port}))(CONNECT_DATA=(SID=${serviceName})))`
+    : `${host}:${port}/${serviceName}`;
+};
+
+const oracleTargetConfig = (details) => {
+  const user = normalize(details.username);
+  const password = String(details.password ?? '');
+  if (!user || !password) throw Object.assign(new Error('Oracle username and password are required.'), { statusCode: 400 });
+  return { user, password, connectString: oracleConnectString(details) };
+};
+
+async function requireAdministrator(token) {
+  if (!token) return null;
+  return withConnection(async (c) => {
+    const user = await currentSessionUser(c, token);
+    if (!user) return null;
+    if (user.APP_ROLE === 'Administrator') return user;
+    const roleResult = await c.execute(`SELECT COUNT(*) role_count
+      FROM bes_user_roles
+      WHERE user_id = :userId
+        AND role_code = 'Administrator'
+        AND is_active = 'Y'`, { userId: user.USER_ID });
+    return Number(roleResult.rows[0]?.ROLE_COUNT ?? 0) > 0 ? user : null;
+  });
+}
+
+async function listSyncTables(connection) {
+  const tableResult = await connection.execute(`SELECT table_name
+    FROM user_tables
+    WHERE table_name IN (${DB_SYNC_TABLES.map((_, index) => `:t${index}`).join(',')})
+    ORDER BY table_name`, Object.fromEntries(DB_SYNC_TABLES.map((table, index) => [`t${index}`, table])));
+  const rows = [];
+  for (const table of tableResult.rows.map((row) => row.TABLE_NAME)) {
+    const countResult = await connection.execute(`SELECT COUNT(*) row_count FROM ${table}`);
+    rows.push({ tableName: table, rowCount: Number(countResult.rows[0]?.ROW_COUNT ?? 0) });
+  }
+  return rows;
+}
+
+async function tableColumns(connection, tableName) {
+  if (!DB_SYNC_ALLOWED.has(tableName)) throw Object.assign(new Error(`Table ${tableName} is not allowed for sync.`), { statusCode: 400 });
+  const result = await connection.execute(`SELECT column_name
+    FROM user_tab_columns
+    WHERE table_name = :tableName
+    ORDER BY column_id`, { tableName });
+  return result.rows.map((row) => row.COLUMN_NAME);
+}
+
+async function syncOracleTables(targetDetails, requestedTables) {
+  const selected = Array.isArray(requestedTables)
+    ? [...new Set(requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)))]
+    : [];
+  if (selected.length === 0) throw Object.assign(new Error('Select at least one BES table to sync.'), { statusCode: 400 });
+
+  const target = await oracledb.getConnection(oracleTargetConfig(targetDetails));
+  try {
+    return await withConnection(async (source) => {
+      const sourceTables = new Set((await listSyncTables(source)).map((table) => table.tableName));
+      const targetTables = new Set((await listSyncTables(target)).map((table) => table.tableName));
+      const missing = selected.filter((table) => !sourceTables.has(table) || !targetTables.has(table));
+      if (missing.length) {
+        const error = new Error(`These selected tables are missing in either source or target Oracle schema: ${missing.join(', ')}`);
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const report = [];
+      for (const table of DB_SYNC_DELETE_ORDER.filter((table) => selected.includes(table))) {
+        await target.execute(`DELETE FROM ${table}`);
+      }
+
+      for (const table of DB_SYNC_INSERT_ORDER.filter((table) => selected.includes(table))) {
+        const sourceColumns = await tableColumns(source, table);
+        const targetColumns = await tableColumns(target, table);
+        const targetColumnSet = new Set(targetColumns);
+        const columns = sourceColumns.filter((column) => targetColumnSet.has(column));
+        if (columns.length === 0) {
+          report.push({ tableName: table, rowCount: 0, columns: 0, note: 'No matching columns.' });
+          continue;
+        }
+
+        const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
+        if (sourceResult.rows.length > 0) {
+          await target.executeMany(
+            `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map((column) => `:${column}`).join(', ')})`,
+            sourceResult.rows,
+            { autoCommit: false }
+          );
+        }
+        report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length });
+      }
+      await target.commit();
+      return report;
+    });
+  } catch (error) {
+    try { await target.rollback(); } catch {}
+    throw error;
+  } finally {
+    await target.close();
+  }
+}
+
 async function handle(req, res) {
   if (!req.url?.startsWith('/api/')) return serveStatic(req, res);
   const url = new URL(req.url, 'http://127.0.0.1');
@@ -489,6 +632,47 @@ async function handle(req, res) {
           note: r.ASSIGNMENT_NOTE,
         })),
       });
+    }
+    if (req.method === 'GET' && req.url === '/api/admin/database-sync/local-tables') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 403, { error: 'Administrator access is required for database sync.' });
+      const tables = await withConnection((c) => listSyncTables(c));
+      return json(res, 200, {
+        tables,
+        excludedTables: [
+          { tableName: 'BES_AUTH_SESSIONS', reason: 'Live login sessions are not copied between environments.' },
+          { tableName: 'BES_PASSWORD_RESETS', reason: 'Password reset hashes are not copied between environments.' },
+        ],
+      });
+    }
+    if (req.method === 'POST' && req.url === '/api/admin/database-sync/test') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 403, { error: 'Administrator access is required for database sync.' });
+      const body = await readBody(req);
+      const target = await oracledb.getConnection(oracleTargetConfig(body.connection ?? body));
+      try {
+        const result = await target.execute(`SELECT
+            SYS_CONTEXT('USERENV','DB_NAME') db_name,
+            SYS_CONTEXT('USERENV','CON_NAME') container_name,
+            SYS_CONTEXT('USERENV','CURRENT_SCHEMA') schema_name
+          FROM dual`);
+        return json(res, 200, {
+          ok: true,
+          database: result.rows[0]?.DB_NAME,
+          container: result.rows[0]?.CONTAINER_NAME,
+          schema: result.rows[0]?.SCHEMA_NAME,
+        });
+      } finally {
+        await target.close();
+      }
+    }
+    if (req.method === 'POST' && req.url === '/api/admin/database-sync/run') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 403, { error: 'Administrator access is required for database sync.' });
+      const body = await readBody(req);
+      const startedAt = new Date().toISOString();
+      const tables = await syncOracleTables(body.connection ?? body.target ?? {}, body.tables);
+      return json(res, 200, { ok: true, startedAt, finishedAt: new Date().toISOString(), tables });
     }
     if (req.method === 'GET' && req.url === '/api/calendar/events') {
       const token = bearerToken(req);

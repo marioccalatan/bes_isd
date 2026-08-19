@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Check, X, Plus, Pencil, Trash2, RotateCcw, ShieldCheck, ArrowRight, LayoutGrid, HardDrive,
+  Database, PlugZap, RefreshCw, Server,
 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,7 +23,21 @@ import { WORKFLOWS } from '@/lib/workflows';
 import { PROCESS_DEFS } from '@/lib/processDefs';
 import { getToolIcon } from '@/lib/toolIcons';
 import { NAV_ITEMS, defaultSidebarModuleAccess, loadSidebarModuleAccess, saveSidebarModuleAccess, type SidebarModuleAccess } from '@/lib/nav';
-import { deleteAdminUser, fetchAdminUsers, fetchRolePermissionConfig, updateAdminUser, type AdminUser, type RolePermissionConfig, type UserRoleAssignmentInput } from '@/lib/api';
+import {
+  deleteAdminUser,
+  fetchAdminUsers,
+  fetchDatabaseSyncLocalTables,
+  fetchRolePermissionConfig,
+  runDatabaseSync,
+  testDatabaseSyncConnection,
+  updateAdminUser,
+  type AdminUser,
+  type DatabaseSyncResult,
+  type DatabaseSyncTable,
+  type OracleConnectionInput,
+  type RolePermissionConfig,
+  type UserRoleAssignmentInput,
+} from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import type { AppTool, AuditLogEntry, DepartmentId, Employee, ToolAccessLevel } from '@/lib/types';
 
@@ -40,6 +55,7 @@ const TABS = [
   { value: 'refnum', label: 'Reference Numbers' },
   { value: 'notif', label: 'Notification Templates' },
   { value: 'audit', label: 'Audit Logs' },
+  { value: 'dbsync', label: 'Database Sync' },
   { value: 'demo', label: 'Demo Data' },
 ];
 
@@ -89,6 +105,18 @@ const emptyUserEditForm: UserEditForm = {
   accountStatus: 'ACTIVE',
   role: 'Employee',
   roleAssignments: [],
+};
+
+const defaultSyncConnection: OracleConnectionInput = {
+  connectionName: 'BES Server Oracle',
+  connectionType: 'Basic',
+  host: '192.168.62.14',
+  port: '1521',
+  serviceName: 'FREEPDB1',
+  mode: 'serviceName',
+  username: 'BES_ISD',
+  password: '',
+  savePassword: false,
 };
 
 function toUserEditForm(user: AdminUser, roleConfig: RolePermissionConfig | null): UserEditForm {
@@ -234,6 +262,16 @@ export default function Admin() {
   const [moduleSearch, setModuleSearch] = useState('');
   const [moduleAccess, setModuleAccess] = useState<SidebarModuleAccess>(() => loadSidebarModuleAccess());
   const [quotaEdit, setQuotaEdit] = useState<Employee | null>(null);
+  const [syncConnection, setSyncConnection] = useState<OracleConnectionInput>(defaultSyncConnection);
+  const [syncTables, setSyncTables] = useState<DatabaseSyncTable[]>([]);
+  const [syncExcludedTables, setSyncExcludedTables] = useState<{ tableName: string; reason: string }[]>([]);
+  const [syncSelectedTables, setSyncSelectedTables] = useState<string[]>([]);
+  const [syncLoadingTables, setSyncLoadingTables] = useState(false);
+  const [syncTesting, setSyncTesting] = useState(false);
+  const [syncRunning, setSyncRunning] = useState(false);
+  const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
+  const [syncResult, setSyncResult] = useState<DatabaseSyncResult | null>(null);
 
   async function loadOracleUsers(cancelled?: () => boolean) {
     setUsersLoading(true);
@@ -343,6 +381,71 @@ export default function Admin() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  async function loadDatabaseSyncTables() {
+    if (!token) {
+      setSyncMessage('Sign in as an Administrator before loading database sync tables.');
+      return;
+    }
+    setSyncLoadingTables(true);
+    setSyncMessage('');
+    try {
+      const result = await fetchDatabaseSyncLocalTables(token);
+      setSyncTables(result.tables);
+      setSyncExcludedTables(result.excludedTables);
+      setSyncSelectedTables((selected) => selected.length ? selected.filter((table) => result.tables.some((item) => item.tableName === table)) : result.tables.map((table) => table.tableName));
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : 'Unable to load local Oracle tables.');
+    } finally {
+      setSyncLoadingTables(false);
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'dbsync' && syncTables.length === 0 && !syncLoadingTables) {
+      void loadDatabaseSyncTables();
+    }
+  }, [tab]);
+
+  function updateSyncConnection(patch: Partial<OracleConnectionInput>) {
+    setSyncConnection((connection) => ({ ...connection, ...patch }));
+  }
+
+  async function testSyncConnection() {
+    if (!token) {
+      setSyncMessage('Sign in as an Administrator before testing a sync connection.');
+      return;
+    }
+    setSyncTesting(true);
+    setSyncMessage('');
+    try {
+      const result = await testDatabaseSyncConnection(token, syncConnection);
+      setSyncMessage(`Connection OK — ${[result.database, result.container, result.schema].filter(Boolean).join(' / ') || 'Oracle target reached'}.`);
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : 'Unable to connect to the target Oracle database.');
+    } finally {
+      setSyncTesting(false);
+    }
+  }
+
+  async function runSelectedDatabaseSync() {
+    if (!token) {
+      setSyncMessage('Sign in as an Administrator before running database sync.');
+      return;
+    }
+    setSyncRunning(true);
+    setSyncMessage('');
+    try {
+      const result = await runDatabaseSync(token, syncConnection, syncSelectedTables);
+      setSyncResult(result);
+      setSyncMessage(`Sync completed — ${result.tables.reduce((sum, table) => sum + table.rowCount, 0).toLocaleString()} rows copied.`);
+      setSyncConfirmOpen(false);
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : 'Unable to run database sync.');
+    } finally {
+      setSyncRunning(false);
+    }
+  }
 
   const { search: userSearch, setSearch: setUserSearch, pageRows: userRows } = useTableControls(oracleUsers, (e, q) =>
     e.name.toLowerCase().includes(q) ||
@@ -818,6 +921,129 @@ export default function Admin() {
         </Card>
       )}
 
+      {tab === 'dbsync' && (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.75fr)]">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Database className="h-4 w-4" /> Database Sync</CardTitle>
+              <p className="text-xs text-slate-500">Sync selected BES application tables from this local Oracle schema to a server Oracle schema. This is restricted to Administrator accounts.</p>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="rounded-xl border border-slate-200 bg-slate-950/5 dark:bg-white/5">
+                <div className="flex flex-wrap border-b border-slate-200 text-xs">
+                  {['General', 'Advanced', 'Databases', 'SSH', 'Remarks'].map((item) => (
+                    <span key={item} className={`px-3 py-2 ${item === 'General' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950' : 'text-slate-500'}`}>{item}</span>
+                  ))}
+                </div>
+                <div className="grid gap-4 p-4 lg:grid-cols-[180px_minmax(0,1fr)]">
+                  <div className="hidden items-center justify-center gap-5 text-slate-500 lg:flex">
+                    <span className="flex flex-col items-center gap-2 text-xs"><PlugZap className="h-10 w-10" />Local</span>
+                    <ArrowRight className="h-5 w-5" />
+                    <span className="flex flex-col items-center gap-2 text-xs"><Server className="h-10 w-10" />Server</span>
+                  </div>
+                  <div className="grid gap-3">
+                    <div><Label htmlFor="sync-connection-name">Connection Name</Label><Input id="sync-connection-name" value={syncConnection.connectionName} onChange={(e) => updateSyncConnection({ connectionName: e.target.value })} /></div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label htmlFor="sync-connection-type">Connection Type</Label>
+                        <Select id="sync-connection-type" value={syncConnection.connectionType} onChange={() => updateSyncConnection({ connectionType: 'Basic' })}>
+                          <option value="Basic">Basic</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label>Connection Mode</Label>
+                        <div className="mt-2 flex gap-4 text-sm text-slate-700">
+                          <label className="flex items-center gap-2"><input type="radio" checked={syncConnection.mode === 'serviceName'} onChange={() => updateSyncConnection({ mode: 'serviceName' })} /> Service Name</label>
+                          <label className="flex items-center gap-2"><input type="radio" checked={syncConnection.mode === 'sid'} onChange={() => updateSyncConnection({ mode: 'sid' })} /> SID</label>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-[1fr_120px]">
+                      <div><Label htmlFor="sync-host">Host</Label><Input id="sync-host" value={syncConnection.host} onChange={(e) => updateSyncConnection({ host: e.target.value })} placeholder="192.168.62.14" /></div>
+                      <div><Label htmlFor="sync-port">Port</Label><Input id="sync-port" value={syncConnection.port} onChange={(e) => updateSyncConnection({ port: e.target.value })} placeholder="1521" /></div>
+                    </div>
+                    <div><Label htmlFor="sync-service">{syncConnection.mode === 'sid' ? 'SID' : 'Service Name'}</Label><Input id="sync-service" value={syncConnection.serviceName} onChange={(e) => updateSyncConnection({ serviceName: e.target.value })} placeholder="FREEPDB1" /></div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div><Label htmlFor="sync-username">User Name</Label><Input id="sync-username" value={syncConnection.username} onChange={(e) => updateSyncConnection({ username: e.target.value })} placeholder="BES_ISD" /></div>
+                      <div><Label htmlFor="sync-password">Password</Label><Input id="sync-password" type="password" value={syncConnection.password} onChange={(e) => updateSyncConnection({ password: e.target.value })} /></div>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-slate-600">
+                      <Checkbox checked={syncConnection.savePassword} onChange={(e) => updateSyncConnection({ savePassword: e.target.checked })} />
+                      Save password for this browser session
+                    </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="outline" onClick={testSyncConnection} disabled={syncTesting}><PlugZap className="h-4 w-4" /> {syncTesting ? 'Testing...' : 'Test Connection'}</Button>
+                      <Button variant="outline" onClick={loadDatabaseSyncTables} disabled={syncLoadingTables}><RefreshCw className="h-4 w-4" /> {syncLoadingTables ? 'Loading...' : 'Refresh Local Tables'}</Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {syncMessage && (
+                <div className={`rounded-md border px-3 py-2 text-sm ${syncMessage.toLowerCase().includes('ok') || syncMessage.toLowerCase().includes('completed') ? 'border-green-200 bg-green-50 text-green-700' : 'border-gold-200 bg-gold-50 text-gold-800'}`}>
+                  {syncMessage}
+                </div>
+              )}
+
+              <div className="rounded-lg border border-gold-200 bg-gold-50/70 p-3 text-sm text-gold-800">
+                <p className="font-semibold">Sync mode: Replace target rows</p>
+                <p className="mt-1 text-xs">Selected server tables are cleared first, then repopulated from this local Oracle schema. Pick related tables together to preserve foreign-key relationships.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex-row items-center justify-between">
+              <div>
+                <CardTitle>Tables to Sync</CardTitle>
+                <p className="text-xs text-slate-500">Business tables only. Session and password-reset tables are intentionally excluded.</p>
+              </div>
+              <Badge>{syncSelectedTables.length} selected</Badge>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={() => setSyncSelectedTables(syncTables.map((table) => table.tableName))}>Select All</Button>
+                <Button size="sm" variant="ghost" onClick={() => setSyncSelectedTables([])}>Clear</Button>
+              </div>
+              <div className="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2">
+                {syncTables.length === 0 && <p className="p-3 text-sm text-slate-500">{syncLoadingTables ? 'Loading local tables…' : 'No syncable BES tables found yet.'}</p>}
+                {syncTables.map((table) => (
+                  <label key={table.tableName} className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-slate-100 p-2 text-sm text-slate-700 hover:bg-slate-50">
+                    <span className="flex items-center gap-2">
+                      <Checkbox
+                        checked={syncSelectedTables.includes(table.tableName)}
+                        onChange={(e) => setSyncSelectedTables((selected) => e.target.checked ? [...new Set([...selected, table.tableName])] : selected.filter((item) => item !== table.tableName))}
+                      />
+                      <span className="font-mono font-semibold">{table.tableName}</span>
+                    </span>
+                    <Badge>{table.rowCount.toLocaleString()} rows</Badge>
+                  </label>
+                ))}
+              </div>
+              {syncExcludedTables.length > 0 && (
+                <div className="space-y-1 rounded-lg border border-slate-200 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Excluded protected tables</p>
+                  {syncExcludedTables.map((table) => (
+                    <p key={table.tableName} className="text-xs text-slate-500"><span className="font-mono font-semibold">{table.tableName}</span> — {table.reason}</p>
+                  ))}
+                </div>
+              )}
+              <Button className="w-full" onClick={() => setSyncConfirmOpen(true)} disabled={syncSelectedTables.length === 0 || syncRunning}>
+                <Database className="h-4 w-4" /> {syncRunning ? 'Syncing...' : 'Sync Selected Tables'}
+              </Button>
+              {syncResult && (
+                <div className="space-y-1 rounded-lg border border-green-200 bg-green-50 p-3">
+                  <p className="text-sm font-semibold text-green-800">Last sync report</p>
+                  {syncResult.tables.map((table) => (
+                    <p key={table.tableName} className="text-xs text-green-700">{table.tableName}: {table.rowCount.toLocaleString()} rows, {table.columns} columns</p>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {tab === 'demo' && (
         <Card>
           <CardHeader><CardTitle>Demo Data Controls</CardTitle></CardHeader>
@@ -851,6 +1077,15 @@ export default function Admin() {
         onConfirm={() => { resetDemoData(); }}
         title="Clear Created Transactions" description="This will restore baseline mock data, removing transactions created during this demonstration session."
         confirmLabel="Clear Transactions" destructive
+      />
+      <ConfirmDialog
+        open={syncConfirmOpen}
+        onClose={() => setSyncConfirmOpen(false)}
+        onConfirm={runSelectedDatabaseSync}
+        title="Sync local Oracle tables to server?"
+        description={`This will replace rows in ${syncSelectedTables.length} selected server table${syncSelectedTables.length === 1 ? '' : 's'} using the local Oracle schema as the source. Make sure the server connection points to the correct BES_ISD schema.`}
+        confirmLabel={syncRunning ? 'Syncing...' : 'Sync Tables'}
+        destructive
       />
 
       <Dialog open={!!templateEdit} onClose={() => setTemplateEdit(null)} title={`Edit Template — ${templateEdit?.category ?? ''}`} size="md" footer={<Button onClick={() => { toast({ kind: 'success', title: 'Template updated (prototype)' }); setTemplateEdit(null); }}>Save</Button>}>

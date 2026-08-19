@@ -68,6 +68,30 @@ export interface UserRoleAssignmentInput {
   note?: string | null;
 }
 
+export interface OracleConnectionInput {
+  connectionName: string;
+  connectionType: 'Basic';
+  host: string;
+  port: string;
+  serviceName: string;
+  mode: 'serviceName' | 'sid';
+  username: string;
+  password: string;
+  savePassword: boolean;
+}
+
+export interface DatabaseSyncTable {
+  tableName: string;
+  rowCount: number;
+}
+
+export interface DatabaseSyncResult {
+  ok: true;
+  startedAt: string;
+  finishedAt: string;
+  tables: { tableName: string; rowCount: number; columns: number; note?: string }[];
+}
+
 export interface CalendarTaskInput {
   calendarEventId: string;
   controlNumber?: string;
@@ -123,6 +147,29 @@ export async function deleteAdminUser(token: string, userId: string) {
 
 export async function fetchRolePermissionConfig() {
   return apiRequest<RolePermissionConfig>('/api/admin/roles-permissions');
+}
+
+export async function fetchDatabaseSyncLocalTables(token: string) {
+  const result = await apiRequest<{ tables: DatabaseSyncTable[]; excludedTables: { tableName: string; reason: string }[] }>('/api/admin/database-sync/local-tables', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result;
+}
+
+export async function testDatabaseSyncConnection(token: string, connection: OracleConnectionInput) {
+  return apiRequest<{ ok: true; database?: string; container?: string; schema?: string }>('/api/admin/database-sync/test', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ connection }),
+  });
+}
+
+export async function runDatabaseSync(token: string, connection: OracleConnectionInput, tables: string[]) {
+  return apiRequest<DatabaseSyncResult>('/api/admin/database-sync/run', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ connection, tables }),
+  });
 }
 
 export async function updateProfilePhoto(token: string, profilePhoto: string) {
