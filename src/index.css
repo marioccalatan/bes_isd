@@ -183,6 +183,38 @@
 }
 
 @layer utilities {
+  @keyframes login-title-pulse {
+    0%, 100% {
+      text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.55),
+        0 2px 0 rgba(4, 51, 26, 0.55),
+        0 6px 14px rgba(0, 0, 0, 0.55),
+        0 0 0 rgba(134, 239, 172, 0);
+      transform: scale(1);
+    }
+    50% {
+      text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.7),
+        0 2px 0 rgba(4, 51, 26, 0.65),
+        0 8px 18px rgba(0, 0, 0, 0.65),
+        0 0 16px rgba(134, 239, 172, 0.45);
+      transform: scale(1.025);
+    }
+  }
+
+  .login-title-bevel {
+    display: inline-block;
+    color: #ffffff;
+    animation: login-title-pulse 2.8s ease-in-out infinite;
+    -webkit-text-stroke: 1px rgba(0, 0, 0, 0.82);
+    paint-order: stroke fill;
+    transform-origin: center;
+    text-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.55),
+      0 2px 0 rgba(4, 51, 26, 0.55),
+      0 6px 14px rgba(0, 0, 0, 0.55);
+  }
+
   .scrollbar-thin::-webkit-scrollbar {
     width: 8px;
     height: 8px;

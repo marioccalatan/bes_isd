@@ -75,10 +75,11 @@ export function processLabel(type: string): string {
     'data-request': 'Data Request',
     'audit-response': 'Audit Response',
     'management-approval': 'Management Approval',
-    'risk-compliance-submission': 'Risk and Compliance Submission',
-    'support-ticket': 'Support Ticket',
-    'enhancement-request': 'Enhancement Request',
-  };
+      'risk-compliance-submission': 'Risk and Compliance Submission',
+      'support-ticket': 'Support Ticket',
+      'enhancement-request': 'Enhancement Request',
+      'task-assignment': 'Task Assignment',
+    };
   return map[type] ?? type;
 }
 

@@ -12,10 +12,10 @@ import { ThemeProvider } from '@/context/ThemeContext';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider>
-      <BrowserRouter>
-        <ToastProvider>
-          <AuthProvider>
+    <BrowserRouter>
+      <ToastProvider>
+        <AuthProvider>
+          <ThemeProvider>
             <DataProvider>
               <RolePreviewProvider>
                 <UIProvider>
@@ -23,9 +23,9 @@ createRoot(document.getElementById('root')!).render(
                 </UIProvider>
               </RolePreviewProvider>
             </DataProvider>
-          </AuthProvider>
-        </ToastProvider>
-      </BrowserRouter>
-    </ThemeProvider>
+          </ThemeProvider>
+        </AuthProvider>
+      </ToastProvider>
+    </BrowserRouter>
   </StrictMode>
 );

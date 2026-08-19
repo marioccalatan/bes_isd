@@ -1,21 +1,27 @@
 import { useNavigate } from 'react-router-dom';
+import { Pencil, X } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Toolbar } from '@/components/shared/Toolbar';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { Pagination } from '@/components/ui/pagination';
 import { Select } from '@/components/ui/input';
+import { OrgChartCanvas } from '@/components/shared/OrgChartCanvas';
 import { useData } from '@/context/DataContext';
+import { useToast } from '@/context/ToastContext';
 import { useTableControls } from '@/hooks/useTableControls';
 import { initials } from '@/lib/utils';
 import { useState } from 'react';
 import type { Employee } from '@/lib/types';
 
 export default function Organization() {
-  const { departments, employees } = useData();
+  const { departments, employees, enterpriseOrgChart, updateEnterpriseOrgChart } = useData();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [deptFilter, setDeptFilter] = useState('All');
+  const [editingChart, setEditingChart] = useState(false);
 
   const baseRows = deptFilter === 'All' ? employees : employees.filter((e) => e.departmentId === deptFilter);
   const { search, setSearch, page, setPage, pageCount, pageRows, filteredCount } = useTableControls(
@@ -40,21 +46,23 @@ export default function Organization() {
       <PageHeader title="Organization" description="Organizational hierarchy, department directory, and employee directory." crumbs={[{ label: 'Organization' }]} />
 
       <Card className="mb-6">
-        <CardHeader><CardTitle>Organizational Hierarchy</CardTitle></CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Organizational Hierarchy</CardTitle>
+          <Button variant="outline" size="sm" onClick={() => setEditingChart((v) => !v)}>
+            {editingChart ? <><X className="h-3.5 w-3.5" /> Done</> : <><Pencil className="h-3.5 w-3.5" /> Edit Chart</>}
+          </Button>
+        </CardHeader>
         <CardContent>
-          <div className="flex flex-col items-center gap-6 overflow-x-auto py-2">
-            <OrgNode label="Board of Directors" tone="brand" />
-            <Connector />
-            <OrgNode label="General Manager" tone="brand" />
-            <Connector />
-            <div className="flex flex-wrap justify-center gap-3">
-              {departments.map((d) => (
-                <button key={d.id} onClick={() => navigate(`/organization/${d.id}`)} className="min-w-[160px]">
-                  <OrgNode label={d.shortName} sub={d.name} tone="slate" />
-                </button>
-              ))}
-            </div>
-          </div>
+          <OrgChartCanvas
+            chart={enterpriseOrgChart}
+            editable={editingChart}
+            height="480px"
+            onSave={(chart) => {
+              updateEnterpriseOrgChart(chart);
+              toast({ kind: 'success', title: 'Organizational chart saved' });
+              setEditingChart(false);
+            }}
+          />
         </CardContent>
       </Card>
 
@@ -88,17 +96,4 @@ export default function Organization() {
       </Card>
     </div>
   );
-}
-
-function OrgNode({ label, sub, tone }: { label: string; sub?: string; tone: 'brand' | 'slate' }) {
-  return (
-    <div className={`rounded-lg border px-4 py-2.5 text-center shadow-sm ${tone === 'brand' ? 'border-brand-300 bg-brand-700 text-white' : 'border-slate-200 bg-surface'}`}>
-      <p className={`text-sm font-semibold ${tone === 'brand' ? 'text-white' : 'text-slate-800'}`}>{label}</p>
-      {sub && <p className="mt-0.5 max-w-[160px] truncate text-[10px] text-slate-400">{sub}</p>}
-    </div>
-  );
-}
-
-function Connector() {
-  return <div className="h-5 w-px bg-slate-300" aria-hidden="true" />;
 }

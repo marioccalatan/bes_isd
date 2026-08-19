@@ -318,6 +318,20 @@ export const PROCESS_DEFS: Record<ProcessType, ProcessDef> = {
     ],
     approvalChain: () => [],
   },
+  'task-assignment': {
+    type: 'task-assignment', refPrefix: 'TSK', title: 'Task Assignment', summary: 'A task assigned by a supervisor or manager.', icon: 'ListChecks',
+    fields: [
+      { name: 'assignee', label: 'Assignee', type: 'text' },
+      { name: 'controlNumber', label: 'Control Number', type: 'text' },
+      { name: 'officeAssignment', label: 'Office Assignment', type: 'text' },
+      { name: 'taskSubject', label: 'Subject', type: 'text' },
+      { name: 'municipality', label: 'Municipality', type: 'text' },
+      { name: 'barangay', label: 'Barangay', type: 'text' },
+      { name: 'address', label: 'Address', type: 'text' },
+      { name: 'sourceCalendarEventId', label: 'Source Calendar Event', type: 'text' },
+    ],
+    approvalChain: () => [],
+  },
 };
 
 function serviceDef(type: ProcessType, title: string, icon: string): ProcessDef {

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { EmptyState } from './empty-state';
@@ -14,12 +14,13 @@ export interface Column<T> {
 
 export function DataTable<T>({
   columns, rows, getRowId, onRowClick, sortKey, sortDir, onSort, emptyTitle = 'No records found', emptyDescription = 'Try adjusting your filters or search terms.',
-  cardTitle, selectable, selectedIds, onToggleSelect,
+  cardTitle, selectable, selectedIds, onToggleSelect, onRowContextMenu,
 }: {
   columns: Column<T>[];
   rows: T[];
   getRowId: (row: T) => string;
   onRowClick?: (row: T) => void;
+  onRowContextMenu?: (row: T, event: MouseEvent) => void;
   sortKey?: string | null;
   sortDir?: 'asc' | 'desc';
   onSort?: (key: string) => void;
@@ -63,6 +64,7 @@ export function DataTable<T>({
                 <tr
                   key={id}
                   onClick={() => onRowClick?.(row)}
+                  onContextMenu={(event) => onRowContextMenu?.(row, event)}
                   className={cn('transition-colors', onRowClick && 'cursor-pointer hover:bg-brand-50/40')}
                 >
                   {selectable && (
@@ -90,6 +92,7 @@ export function DataTable<T>({
             <div
               key={id}
               onClick={() => onRowClick?.(row)}
+              onContextMenu={(event) => onRowContextMenu?.(row, event)}
               className={cn('rounded-lg border border-slate-200 bg-surface p-3 shadow-sm', onRowClick && 'cursor-pointer active:bg-brand-50/40')}
             >
               {cardTitle && <div className="mb-2 font-semibold text-slate-900">{cardTitle(row)}</div>}

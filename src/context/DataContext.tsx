@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { loadState, saveState, clearAllBesData } from '@/lib/storage';
 import { randomRef } from '@/lib/utils';
+import { createCalendarEvent, createCalendarTask, createWorkComment, deleteCalendarEvent as deleteOracleCalendarEvent, deleteWorkComment, fetchCalendarEvents, fetchWorkTasks, setCalendarEventDone, updateCalendarEvent, updateWorkComment, type CalendarTaskInput } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import {
   DEPARTMENTS, EMPLOYEES, CURRENT_EMPLOYEE,
   buildCalendarEvents, buildNewsPosts, buildAttendance, buildPayslips,
@@ -9,12 +11,13 @@ import {
   buildEmails, buildConversations, buildChatMessages, buildTools,
   buildStorageItems, buildStorageQuotas, DEFAULT_STORAGE_QUOTA_BYTES,
   buildQmsDocuments, buildGmKpiData,
+  ORG_CHARTS, ENTERPRISE_ORG_CHART,
   resetRefCounter,
 } from '@/lib/mockData';
 import type {
   ActivityEntry, ApprovalStep, AppTool, AttendanceRecord, AuditLogEntry, BesModule,
-  CalendarEvent, ChatConversation, ChatMessage, Comment, EmailFolder, EmailMessage,
-  GmKpiData, NewsPost, NewsReadState, Payslip, PolicyDocument, QmsDocument,
+  CalendarEvent, ChatConversation, ChatMessage, Comment, DepartmentId, EmailFolder, EmailMessage,
+  GmKpiData, NewsPost, NewsReadState, OrgChart, Payslip, PolicyDocument, QmsDocument,
   ProcessType, StorageItem, StorageQuota, StrategicProject, SupportTicket, WorkItem, WorkStatus,
 } from '@/lib/types';
 
@@ -43,6 +46,8 @@ function seedAll() {
     storageQuotas: buildStorageQuotas(EMPLOYEES),
     qmsDocuments: buildQmsDocuments(),
     gmKpi: buildGmKpiData(),
+    orgCharts: ORG_CHARTS,
+    enterpriseOrgChart: ENTERPRISE_ORG_CHART,
     clock: { clockedIn: false, lastClockIn: null as string | null },
   };
 }
@@ -72,12 +77,16 @@ interface DataContextValue {
   storageQuotas: StorageQuota[];
   qmsDocuments: QmsDocument[];
   gmKpi: GmKpiData;
+  orgCharts: Record<DepartmentId, OrgChart>;
+  enterpriseOrgChart: OrgChart;
   clockedIn: boolean;
 
   // Calendar
   addPersonalEvent: (e: Omit<CalendarEvent, 'id' | 'editable' | 'color' | 'ownerId'>) => void;
   updatePersonalEvent: (id: string, patch: Partial<CalendarEvent>) => void;
   deletePersonalEvent: (id: string) => void;
+  toggleEventDone: (id: string, done: boolean) => void;
+  createTaskFromCalendarEvent: (task: CalendarTaskInput) => Promise<{ ok: true; task: WorkItem } | { ok: false; error: string }>;
 
   // News
   markNewsRead: (postId: string) => void;
@@ -94,7 +103,9 @@ interface DataContextValue {
   returnStep: (workItemId: string, stepId: string, actorName: string, remarks: string) => void;
   rejectStep: (workItemId: string, stepId: string, actorName: string, remarks: string) => void;
   reassignStep: (workItemId: string, stepId: string, newApprover: string) => void;
-  addComment: (workItemId: string, author: string, message: string) => void;
+  addComment: (workItemId: string, author: string, message: string, authorId?: string, parentCommentId?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  editComment: (workItemId: string, commentId: string, message: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  deleteComment: (workItemId: string, commentId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   cancelWorkItem: (id: string, actorName: string) => void;
 
   // Attendance
@@ -111,6 +122,10 @@ interface DataContextValue {
 
   // ISO / QMS
   updateQmsFlowchart: (docId: string, flowchart: QmsDocument['flowchart']) => void;
+
+  // Organizational charts
+  updateDepartmentOrgChart: (deptId: DepartmentId, chart: OrgChart) => void;
+  updateEnterpriseOrgChart: (chart: OrgChart) => void;
 
   // Personal file storage
   createFolder: (name: string, parentId: string | null, ownerId: string) => void;
@@ -158,10 +173,11 @@ function useSeeded<K extends keyof SeedState>(key: K, seed: SeedState) {
 }
 
 export function DataProvider({ children }: { children: ReactNode }) {
+  const { token, user } = useAuth();
   // Bump this key whenever seedAll()'s shape changes, so browsers with an
   // older cached seed (missing newly added collections) regenerate cleanly
   // instead of crashing on undefined fields.
-  const seed = loadState('seed-marker-v9', seedAll);
+  const seed = loadState('seed-marker-v10', seedAll);
 
   const [events, setEvents] = useSeeded('events', seed);
   const [news, setNews] = useSeeded('news', seed);
@@ -178,12 +194,53 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [storageQuotas, setStorageQuotas] = useSeeded('storageQuotas', seed);
   const [qmsDocuments, setQmsDocuments] = useSeeded('qmsDocuments', seed);
   const [gmKpi] = useSeeded('gmKpi', seed);
+  const [orgCharts, setOrgCharts] = useSeeded('orgCharts', seed);
+  const [enterpriseOrgChart, setEnterpriseOrgChart] = useSeeded('enterpriseOrgChart', seed);
   const [auditLog, setAuditLog] = useSeeded('auditLog', seed);
   const [supportTickets, setSupportTickets] = useSeeded('supportTickets', seed);
   const [emails, setEmails] = useSeeded('emails', seed);
   const [conversations, setConversations] = useSeeded('conversations', seed);
   const [chatMessages, setChatMessages] = useSeeded('chatMessages', seed);
   const [clock, setClock] = useSeeded('clock', seed);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchCalendarEvents(token)
+      .then((oracleEvents) => {
+        if (!cancelled) setEvents(oracleEvents);
+      })
+      .catch((error) => {
+        console.warn('Unable to load Oracle calendar events; keeping local seeded events.', error);
+      });
+    return () => { cancelled = true; };
+  }, [setEvents, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetchWorkTasks(token)
+      .then((tasks) => {
+        if (cancelled) return;
+        setWorkItems((current) => {
+          const currentById = new Map(current.map((item) => [item.id, item]));
+          const mergedTasks = tasks.map((task) => {
+            const existing = currentById.get(task.id);
+            if (!existing) return task;
+            return {
+              ...task,
+              comments: existing.comments.length ? existing.comments : task.comments,
+              activity: existing.activity.length > task.activity.length ? existing.activity : task.activity,
+            };
+          });
+          const taskIds = new Set(tasks.map((task) => task.id));
+          return [...mergedTasks, ...current.filter((item) => item.processType !== 'task-assignment' || !taskIds.has(item.id))];
+        });
+      })
+      .catch((error) => {
+        console.warn('Unable to load Oracle work tasks.', error);
+      });
+    return () => { cancelled = true; };
+  }, [setWorkItems, token]);
 
   function logAction(actor: string, action: string, target: string, category: AuditLogEntry['category']) {
     setAuditLog((prev) => [
@@ -193,16 +250,58 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }
 
   // --- Calendar ---
-  function addPersonalEvent(e: Omit<CalendarEvent, 'id' | 'editable' | 'color' | 'ownerId'>) {
-    const newEvent: CalendarEvent = { ...e, id: `EVT-P-${Date.now()}`, editable: true, color: '#475569', ownerId: CURRENT_EMPLOYEE.id };
+  async function addPersonalEvent(e: Omit<CalendarEvent, 'id' | 'editable' | 'color' | 'ownerId'>) {
+    const newEvent: CalendarEvent = { ...e, id: `EVT-P-${Date.now()}`, editable: true, color: '#475569', ownerId: user?.username ?? CURRENT_EMPLOYEE.id };
     setEvents((prev) => [...prev, newEvent]);
     logAction(CURRENT_EMPLOYEE.name, 'Created personal calendar event', newEvent.title, 'Data Change');
+    if (!token) return;
+    try {
+      const saved = await createCalendarEvent(token, e);
+      setEvents((prev) => prev.map((ev) => (ev.id === newEvent.id ? saved.event : ev)));
+    } catch (error) {
+      console.warn('Unable to save personal calendar event to Oracle.', error);
+    }
   }
-  function updatePersonalEvent(id: string, patch: Partial<CalendarEvent>) {
+  async function updatePersonalEvent(id: string, patch: Partial<CalendarEvent>) {
+    const current = events.find((ev) => ev.id === id);
     setEvents((prev) => prev.map((ev) => (ev.id === id ? { ...ev, ...patch } : ev)));
+    if (!token || !current) return;
+    try {
+      await updateCalendarEvent(token, id, { ...current, ...patch });
+    } catch (error) {
+      console.warn('Unable to update personal calendar event in Oracle.', error);
+    }
   }
-  function deletePersonalEvent(id: string) {
+  async function toggleEventDone(id: string, done: boolean) {
+    const doneAt = done ? new Date().toISOString() : null;
+    setEvents((prev) => prev.map((ev) => (ev.id === id ? { ...ev, done, doneAt, doneBy: done ? user?.username ?? 'current-user' : null } : ev)));
+    if (!token) return;
+    try {
+      await setCalendarEventDone(token, id, done);
+    } catch (error) {
+      console.warn('Unable to update calendar done status in Oracle.', error);
+    }
+  }
+  async function deletePersonalEvent(id: string) {
     setEvents((prev) => prev.filter((ev) => ev.id !== id));
+    if (!token) return;
+    try {
+      await deleteOracleCalendarEvent(token, id);
+    } catch (error) {
+      console.warn('Unable to delete personal calendar event in Oracle.', error);
+    }
+  }
+
+  async function createTaskFromCalendarEvent(task: CalendarTaskInput): Promise<{ ok: true; task: WorkItem } | { ok: false; error: string }> {
+    if (!token) return { ok: false, error: 'You must be signed in to create a task.' };
+    try {
+      const saved = await createCalendarTask(token, task);
+      setWorkItems((prev) => [saved.task, ...prev.filter((item) => item.id !== saved.task.id)]);
+      logAction(user?.name ?? CURRENT_EMPLOYEE.name, task.calendarEventId ? 'Created task from calendar event' : 'Created task', saved.task.title, 'Data Change');
+      return { ok: true, task: saved.task };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'Unable to create task.' };
+    }
   }
 
   // --- News ---
@@ -314,12 +413,71 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }));
   }
 
-  function addComment(workItemId: string, author: string, message: string) {
+  function addNestedComment(comments: Comment[], parentCommentId: string, comment: Comment): Comment[] {
+    return comments.map((existing) => {
+      if (existing.id === parentCommentId) return { ...existing, replies: [...(existing.replies ?? []), comment] };
+      return { ...existing, replies: existing.replies ? addNestedComment(existing.replies, parentCommentId, comment) : existing.replies };
+    });
+  }
+
+  function markNestedCommentDeleted(comments: Comment[], commentId: string): Comment[] {
+    return comments.map((existing) => {
+      if (existing.id === commentId) return { ...existing, deleted: true, message: 'This comment was deleted.' };
+      return { ...existing, replies: existing.replies ? markNestedCommentDeleted(existing.replies, commentId) : existing.replies };
+    });
+  }
+
+  function replaceNestedComment(comments: Comment[], commentId: string, patch: Partial<Comment>): Comment[] {
+    return comments.map((existing) => {
+      if (existing.id === commentId) return { ...existing, ...patch };
+      return { ...existing, replies: existing.replies ? replaceNestedComment(existing.replies, commentId, patch) : existing.replies };
+    });
+  }
+
+  async function addComment(workItemId: string, author: string, message: string, authorId?: string, parentCommentId?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    let comment: Comment;
+    if (token && workItemId.startsWith('TASK-')) {
+      try {
+        const saved = await createWorkComment(token, workItemId, message, parentCommentId);
+        comment = saved.comment;
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Unable to save comment.' };
+      }
+    } else {
+      comment = { id: `C-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, author, authorId, timestamp: new Date().toISOString(), message, replies: [] };
+    }
     setWorkItems((prev) => prev.map((w) => {
       if (w.id !== workItemId) return w;
-      const comment: Comment = { id: `C-${Date.now()}`, author, timestamp: new Date().toISOString(), message };
-      return { ...w, comments: [...w.comments, comment], activity: [...w.activity, buildActivity('Added comment', author, message)] };
+      const comments = parentCommentId ? addNestedComment(w.comments, parentCommentId, comment) : [...w.comments, comment];
+      return { ...w, comments, activity: [...w.activity, buildActivity(parentCommentId ? 'Added reply' : 'Added comment', author, message)] };
     }));
+    return { ok: true };
+  }
+
+  async function editComment(workItemId: string, commentId: string, message: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    let updated: Partial<Comment> = { message };
+    if (token && workItemId.startsWith('TASK-')) {
+      try {
+        const saved = await updateWorkComment(token, workItemId, commentId, message);
+        updated = saved.comment;
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Unable to update comment.' };
+      }
+    }
+    setWorkItems((prev) => prev.map((w) => (w.id === workItemId ? { ...w, comments: replaceNestedComment(w.comments, commentId, updated) } : w)));
+    return { ok: true };
+  }
+
+  async function deleteComment(workItemId: string, commentId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (token && workItemId.startsWith('TASK-')) {
+      try {
+        await deleteWorkComment(token, workItemId, commentId);
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : 'Unable to delete comment.' };
+      }
+    }
+    setWorkItems((prev) => prev.map((w) => (w.id === workItemId ? { ...w, comments: markNestedCommentDeleted(w.comments, commentId) } : w)));
+    return { ok: true };
   }
 
   function cancelWorkItem(id: string, actorName: string) {
@@ -365,6 +523,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
   function updateQmsFlowchart(docId: string, flowchart: QmsDocument['flowchart']) {
     setQmsDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, flowchart } : d)));
     logAction(CURRENT_EMPLOYEE.name, 'Updated procedure flowchart', docId, 'Data Change');
+  }
+
+  // --- Organizational charts ---
+  function updateDepartmentOrgChart(deptId: DepartmentId, chart: OrgChart) {
+    setOrgCharts((prev) => ({ ...prev, [deptId]: chart }));
+    logAction(CURRENT_EMPLOYEE.name, 'Updated department organizational chart', deptId, 'Data Change');
+  }
+  function updateEnterpriseOrgChart(chart: OrgChart) {
+    setEnterpriseOrgChart(chart);
+    logAction(CURRENT_EMPLOYEE.name, 'Updated enterprise organizational chart', 'Organization', 'Data Change');
   }
 
   // --- Personal file storage ---
@@ -524,14 +692,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
     events, news, newsReadStates, attendance, payslips, workItems, documents,
     projects, notifications, modules, auditLog, supportTickets,
     emails, conversations, chatMessages, tools, storageItems, storageQuotas, qmsDocuments, gmKpi,
+    orgCharts, enterpriseOrgChart,
     clockedIn: clock.clockedIn,
-    addPersonalEvent, updatePersonalEvent, deletePersonalEvent,
+    addPersonalEvent, updatePersonalEvent, deletePersonalEvent, toggleEventDone,
     markNewsRead, toggleBookmark, acknowledgeNews, publishNews, updateNews,
-    submitWorkItem, saveDraft, updateWorkItem, approveStep, returnStep, rejectStep, reassignStep, addComment, cancelWorkItem,
+    submitWorkItem, saveDraft, updateWorkItem, approveStep, returnStep, rejectStep, reassignStep, addComment, editComment, deleteComment, cancelWorkItem, createTaskFromCalendarEvent,
     clockIn, clockOut,
     addModule, updateModule,
     updateTool, setToolAccess,
     updateQmsFlowchart,
+    updateDepartmentOrgChart, updateEnterpriseOrgChart,
     createFolder, uploadFile, renameStorageItem, deleteStorageItem, setUserStorageQuota, storageUsedBytes, storageQuotaBytes,
     markNotificationRead, markAllNotificationsRead,
     addSupportTicket,

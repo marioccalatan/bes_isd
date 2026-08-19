@@ -1,16 +1,22 @@
 import { useNavigate, useParams } from 'react-router-dom';
-import { Mail, Phone, MapPin } from 'lucide-react';
+import { Mail, Phone, MapPin, Pencil, X } from 'lucide-react';
+import { useState } from 'react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { OrgChartCanvas } from '@/components/shared/OrgChartCanvas';
 import { useData } from '@/context/DataContext';
+import { useToast } from '@/context/ToastContext';
 import { initials } from '@/lib/utils';
 import NotFound from './NotFound';
 
 export default function OrganizationDepartment() {
   const { deptId } = useParams<{ deptId: string }>();
-  const { departments, employees } = useData();
+  const { departments, employees, orgCharts, updateDepartmentOrgChart } = useData();
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const [editingChart, setEditingChart] = useState(false);
   const dept = departments.find((d) => d.id === deptId);
   if (!dept) return <NotFound />;
 
@@ -20,6 +26,27 @@ export default function OrganizationDepartment() {
   return (
     <div>
       <PageHeader title={dept.name} description={dept.mandate} crumbs={[{ label: 'Organization', to: '/organization' }, { label: dept.shortName }]} />
+
+      <Card className="mb-5">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Organizational Chart</CardTitle>
+          <Button variant="outline" size="sm" onClick={() => setEditingChart((v) => !v)}>
+            {editingChart ? <><X className="h-3.5 w-3.5" /> Done</> : <><Pencil className="h-3.5 w-3.5" /> Edit Chart</>}
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <OrgChartCanvas
+            chart={orgCharts[dept.id]}
+            editable={editingChart}
+            height="520px"
+            onSave={(chart) => {
+              updateDepartmentOrgChart(dept.id, chart);
+              toast({ kind: 'success', title: 'Organizational chart saved', description: `${dept.shortName} chart updated.` });
+              setEditingChart(false);
+            }}
+          />
+        </CardContent>
+      </Card>
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">

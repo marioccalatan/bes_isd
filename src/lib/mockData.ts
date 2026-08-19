@@ -15,6 +15,7 @@ import type {
   Employee,
   NewsPost,
   NewsReadState,
+  OrgChart,
   Payslip,
   GmKpiData,
   PolicyDocument,
@@ -225,6 +226,233 @@ export const DEPARTMENTS: Department[] = [
 export const DEPT_MAP: Record<DepartmentId, Department> = Object.fromEntries(
   DEPARTMENTS.map((d) => [d.id, d])
 ) as Record<DepartmentId, Department>;
+
+// ---------------------------------------------------------------------------
+// Organizational charts — editable position/reporting-line trees, seeded
+// from BENECO's approved staffing pattern charts (one per department, plus
+// an enterprise-wide chart for the Office of the General Manager). Authored
+// here as nested trees and flattened into React-Flow-ready node/edge lists
+// with a simple top-down tree layout (leaves get sequential columns, parents
+// center above their children).
+// ---------------------------------------------------------------------------
+interface OrgTreeInput {
+  label: string;
+  sublabel?: string;
+  children?: OrgTreeInput[];
+}
+
+function layoutOrgTree(root: OrgTreeInput, idPrefix: string): OrgChart {
+  const nodes: OrgChart['nodes'] = [];
+  const edges: OrgChart['edges'] = [];
+  const ROW_H = 130;
+  const COL_W = 210;
+  let counter = 0;
+  let leafCounter = 0;
+
+  function place(node: OrgTreeInput, depth: number, parentId?: string): { id: string; x: number } {
+    const id = `${idPrefix}-${counter++}`;
+    let x: number;
+    if (!node.children || node.children.length === 0) {
+      x = leafCounter * COL_W;
+      leafCounter += 1;
+    } else {
+      const childInfo = node.children.map((c) => place(c, depth + 1, id));
+      x = (childInfo[0].x + childInfo[childInfo.length - 1].x) / 2;
+    }
+    nodes.push({ id, label: node.label, sublabel: node.sublabel, position: { x, y: depth * ROW_H } });
+    if (parentId) edges.push({ id: `e-${parentId}-${id}`, source: parentId, target: id });
+    return { id, x };
+  }
+
+  place(root, 0);
+  return { nodes, edges };
+}
+
+const ORG_TREES: Record<DepartmentId, OrgTreeInput> = {
+  ISD: {
+    label: 'Institutional Services Department Manager', sublabel: '[1] SG 18,19,20',
+    children: [
+      { label: 'Secretary', sublabel: '[1] SG 5,6,7,8' },
+      {
+        label: 'General Services Officer', sublabel: '[1] SG 14,15,16',
+        children: [
+          { label: 'Mechanic', sublabel: '[4] SG 4,5,6,7' },
+          { label: 'Courier', sublabel: '[1] SG 2,3,4,5' },
+          { label: 'Utility', sublabel: '[1] SG 1,2,3,4' },
+          { label: 'Building and Ground Maintenance', sublabel: 'Service Provider' },
+          { label: 'On-call Drivers' },
+        ],
+      },
+      {
+        label: 'Materials and Equipment Management Officer', sublabel: '[1] SG 13,14,15',
+        children: [{ label: 'Materials Inventory Associate', sublabel: '[1] SG 4,5,6,7' }],
+      },
+      {
+        label: 'Community Relations Officer', sublabel: '[1] SG 13,14,15',
+        children: [{ label: 'Community Relations Associate', sublabel: '[4] SG 7,8,9,10' }],
+      },
+      {
+        label: 'Human Resource Officer', sublabel: '[1] SG 14,15,16',
+        children: [{ label: 'HR Associate', sublabel: '[1] SG 9,10,11,12' }],
+      },
+    ],
+  },
+  NSD: {
+    label: 'Network Services Department Manager', sublabel: '[1] SG 19,20',
+    children: [
+      { label: 'Executive and Consumer Associate', sublabel: '[2] SG 8,9,10,11' },
+      {
+        label: 'System Planning and Design Officer', sublabel: '[1] SG 16,17,18',
+        children: [{
+          label: 'System Planning and Design Engineer', sublabel: '[12] SG 10,11,12,13',
+          children: [{ label: 'Engineering Associate', sublabel: '[4] SG 9,10,11,12' }],
+        }],
+      },
+      {
+        label: 'Construction and Maintenance Officer', sublabel: '[4] SG 16,17,18',
+        children: [{
+          label: 'Lineman', sublabel: '[98] SG 9,10,11,12',
+          children: [{ label: 'Construction and Light Maintenance', sublabel: 'Service Provider' }],
+        }],
+      },
+      {
+        label: 'System Control and Protection Officer', sublabel: '[1] SG 16,17,18',
+        children: [{ label: 'System Control and Protection Engineer', sublabel: '[7] SG 10,11,12,13' }],
+      },
+      {
+        label: 'Special Equipment and Metering Officer', sublabel: '[1] SG 16,17,18',
+        children: [{
+          label: 'Special Equipment and Metering Engineer', sublabel: '[7] SG 10,11,12,13',
+          children: [{
+            label: 'Special Equipment and Metering Associate', sublabel: '[2] SG 9,10,11,12',
+            children: [{ label: 'Meter Installation', sublabel: 'Service Provider' }],
+          }],
+        }],
+      },
+    ],
+  },
+  NNSD: {
+    label: 'Non-Network Services Department Manager', sublabel: '[1] SG 18,19,20',
+    children: [
+      { label: 'Secretary', sublabel: '[1] SG 5,6,7,8' },
+      {
+        label: 'Accounting Officer', sublabel: '[1] SG 15,16,17',
+        children: [
+          { label: 'Accounting Associate', sublabel: '[3] SG 9,10,11,12' },
+          { label: 'Rate Analyst', sublabel: '[1] SG 9,10,11,12' },
+          { label: 'Procurement Associate', sublabel: '[1] SG 8,9,10,11' },
+        ],
+      },
+      {
+        label: 'Collection Officer', sublabel: '[1] SG 13,14,15',
+        children: [
+          { label: 'Collection Associate', sublabel: '[15] SG 6,7,8,9' },
+          { label: 'Collecting Agents' },
+        ],
+      },
+      {
+        label: 'Consumer Welfare Officer', sublabel: '[1] SG 15,16,17',
+        children: [{ label: 'Consumer Welfare and Call Center Associate', sublabel: '[9] SG 8,9,10,11' }],
+      },
+      {
+        label: 'Meter Reading, Billing, and Disconnection Officer', sublabel: '[4] SG 13,14,15',
+        children: [
+          {
+            label: 'Meter Reader', sublabel: '[43] SG 7,8,9,10',
+            children: [{ label: 'Meter Reading', sublabel: 'Service Provider' }],
+          },
+          { label: 'Disconnection', sublabel: 'Service Provider' },
+        ],
+      },
+    ],
+  },
+  AUD: {
+    label: 'Internal Auditor', sublabel: '[1] SG 18,19,20',
+    children: [{
+      label: 'Internal Audit Supervisor', sublabel: '[1] SG 18,19',
+      children: [
+        { label: 'Operations Auditor', sublabel: '[3] SG 9,10,11,12' },
+        { label: 'Technical Auditor', sublabel: '[1] SG 10,11,12,13' },
+        { label: 'Seasonal Inventory', sublabel: 'Contractual Employees' },
+      ],
+    }],
+  },
+  PGD: {
+    label: 'Power Generation Department Manager', sublabel: '[1] SG 18,19,20',
+    children: [
+      { label: 'Compliance and Records Officer', sublabel: '[1] SG 3,4,5,6' },
+      { label: 'Forrester, Pollution Control and Safety Officer', sublabel: '[1] SG 6,7,8,9' },
+      {
+        label: 'Hydro-electric Power Plant Operations Superintendent', sublabel: '[1] SG 15,16,17',
+        children: [{
+          label: 'Power Plant Shift Engineer', sublabel: '[5] SG 8,9,10,11',
+          children: [{ label: 'Power Plant Facilities Maintenance Associate', sublabel: '[5] SG 6,7,8,9' }],
+        }],
+      },
+    ],
+  },
+  CPD: {
+    label: 'Corporate Planning Department Manager', sublabel: '[1] SG 18,19,20',
+    children: [
+      { label: 'Secretary', sublabel: '[1] SG 5,6,7,8' },
+      {
+        label: 'Power Supply and Energy Trading Officer', sublabel: '[1] SG 15,16,17',
+        children: [{ label: 'Power Supply and Energy Trading Associate', sublabel: '[2] SG 10,11,12,13' }],
+      },
+      {
+        label: 'Business Development & Regulatory Compliance Officer', sublabel: '[1] SG 15,16,17',
+        children: [{ label: 'Business Development & Regulatory Compliance Associate', sublabel: '[3] SG 10,11,12,13' }],
+      },
+    ],
+  },
+};
+
+export const ORG_CHARTS: Record<DepartmentId, OrgChart> = Object.fromEntries(
+  (Object.keys(ORG_TREES) as DepartmentId[]).map((id) => [id, layoutOrgTree(ORG_TREES[id], id.toLowerCase())])
+) as Record<DepartmentId, OrgChart>;
+
+const ENTERPRISE_ORG_TREE: OrgTreeInput = {
+  label: 'Board of Directors',
+  children: [{
+    label: 'General Manager',
+    children: [
+      {
+        label: 'Executive Secretary', sublabel: '[1] SG 10,11,12,13',
+        children: [
+          { label: 'Secretary to the Board', sublabel: '[1] SG 9,10,11,12' },
+          { label: 'Transcriber' },
+        ],
+      },
+      {
+        label: 'Assistant General Manager', sublabel: '[1] SG 21',
+        children: [{
+          label: 'Health & Safety Officer', sublabel: '[1] SG 14,15,16',
+          children: [
+            { label: 'Safety Associate', sublabel: '[2] SG 10,11,12,13' },
+            { label: 'Company Nurse', sublabel: '[1] SG 8,9,10,11' },
+          ],
+        }],
+      },
+      { label: 'Legal Officer', sublabel: '[1] SG 15,16,17' },
+      {
+        label: 'Management Information and Communication Systems Officer', sublabel: '[1] SG 15,16,17',
+        children: [{
+          label: 'Information Systems Associate', sublabel: '[4] SG 9,10,11,12',
+          children: [{ label: 'Information Technology Associate', sublabel: '[4] SG 9,10,11,12' }],
+        }],
+      },
+      { label: "GM's Driver", sublabel: '[1] SG 5,6,7,8' },
+      { label: 'Institutional Services Department', sublabel: 'ISD' },
+      { label: 'Network Services Department', sublabel: 'NSD' },
+      { label: 'Non-Network Services Department', sublabel: 'NNSD' },
+      { label: 'Audit Department', sublabel: 'AUD' },
+      { label: 'Corporate Planning Department', sublabel: 'CPD' },
+      { label: 'Power Generation Department', sublabel: 'PGD' },
+    ],
+  }],
+};
+
+export const ENTERPRISE_ORG_CHART: OrgChart = layoutOrgTree(ENTERPRISE_ORG_TREE, 'ent');
 
 // ---------------------------------------------------------------------------
 // Employees (40+)

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Check, X, Plus, Pencil, Trash2, RotateCcw, ShieldCheck, ArrowRight, LayoutGrid, HardDrive,
@@ -16,11 +16,13 @@ import { useData } from '@/context/DataContext';
 import { useToast } from '@/context/ToastContext';
 import { useTableControls, exportToCsv } from '@/hooks/useTableControls';
 import { initials, formatDateTime, formatDate, formatBytes } from '@/lib/utils';
-import { PERMISSION_FACTORS, ROLES_FOR_MATRIX, CAPABILITIES, MATRIX, NOTIFICATION_TEMPLATES, REFERENCE_PREFIXES } from '@/lib/adminData';
+import { NOTIFICATION_TEMPLATES, REFERENCE_PREFIXES } from '@/lib/adminData';
 import { CLASS_STYLES_LIST } from '@/lib/docClassifications';
 import { WORKFLOWS } from '@/lib/workflows';
 import { PROCESS_DEFS } from '@/lib/processDefs';
 import { getToolIcon } from '@/lib/toolIcons';
+import { deleteAdminUser, fetchAdminUsers, fetchRolePermissionConfig, updateAdminUser, type AdminUser, type RolePermissionConfig, type UserRoleAssignmentInput } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import Governance from './Governance';
 import type { AppTool, AuditLogEntry, DepartmentId, Employee, ToolAccessLevel } from '@/lib/types';
 
@@ -52,6 +54,70 @@ const LEVEL_BADGE_STYLES: Record<ToolAccessLevel, string> = {
   SOON: 'border-slate-200 bg-slate-100 text-slate-400',
   EXISTING: 'border-slate-200 bg-slate-100 text-slate-400',
 };
+
+type UserEditForm = {
+  employeeNo: string;
+  username: string;
+  email: string;
+  firstName: string;
+  middleName: string;
+  lastName: string;
+  suffix: string;
+  position: string;
+  departmentCode: string;
+  unitName: string;
+  mobileNo: string;
+  employmentStatus: string;
+  accountStatus: string;
+  role: string;
+  roleAssignments: UserRoleAssignmentInput[];
+};
+
+const emptyUserEditForm: UserEditForm = {
+  employeeNo: '',
+  username: '',
+  email: '',
+  firstName: '',
+  middleName: '',
+  lastName: '',
+  suffix: '',
+  position: '',
+  departmentCode: '',
+  unitName: '',
+  mobileNo: '',
+  employmentStatus: 'Active',
+  accountStatus: 'ACTIVE',
+  role: 'Employee',
+  roleAssignments: [],
+};
+
+function toUserEditForm(user: AdminUser, roleConfig: RolePermissionConfig | null): UserEditForm {
+  const assignments = (roleConfig?.assignments ?? [])
+    .filter((assignment) => assignment.username === user.username)
+    .map((assignment) => ({
+      roleCode: assignment.roleCode,
+      departmentCode: assignment.departmentCode ?? '',
+      unitName: assignment.unitName ?? '',
+      note: assignment.note ?? '',
+    }));
+  return {
+    employeeNo: user.employeeNo,
+    username: user.username,
+    email: user.email,
+    firstName: user.firstName,
+    middleName: user.middleName ?? '',
+    lastName: user.lastName,
+    suffix: user.suffix ?? '',
+    position: user.position ?? '',
+    departmentCode: user.departmentCode ?? '',
+    unitName: user.unitName ?? '',
+    mobileNo: user.mobileNo ?? '',
+    employmentStatus: user.employmentStatus,
+    accountStatus: user.accountStatus,
+    role: user.role,
+    roleAssignments: assignments.length > 0 ? assignments : [{ roleCode: user.role, departmentCode: '', unitName: '', note: '' }],
+  };
+}
 
 function ToolAccessEditor({ tool, departments, onClose }: { tool: AppTool; departments: { id: DepartmentId; shortName: string; name: string }[]; onClose: () => void }) {
   const { setToolAccess } = useData();
@@ -145,8 +211,21 @@ function QuotaEditor({ employee, quotaBytes, onClose }: { employee: Employee; qu
 export default function Admin() {
   const navigate = useNavigate();
   const { employees, departments, events, news, auditLog, tools, resetDemoData, storageUsedBytes, storageQuotaBytes } = useData();
+  const { token, user } = useAuth();
   const { toast } = useToast();
   const [tab, setTab] = useState('users');
+  const [oracleUsers, setOracleUsers] = useState<AdminUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [usersError, setUsersError] = useState('');
+  const [userEdit, setUserEdit] = useState<AdminUser | null>(null);
+  const [userEditForm, setUserEditForm] = useState<UserEditForm>(emptyUserEditForm);
+  const [userSaving, setUserSaving] = useState(false);
+  const [userDeleting, setUserDeleting] = useState(false);
+  const [userDeleteOpen, setUserDeleteOpen] = useState(false);
+  const [userSaveError, setUserSaveError] = useState('');
+  const [roleConfig, setRoleConfig] = useState<RolePermissionConfig | null>(null);
+  const [rolesLoading, setRolesLoading] = useState(true);
+  const [rolesError, setRolesError] = useState('');
   const [resetOpen, setResetOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [templateEdit, setTemplateEdit] = useState<typeof NOTIFICATION_TEMPLATES[number] | null>(null);
@@ -154,20 +233,151 @@ export default function Admin() {
   const [toolSearch, setToolSearch] = useState('');
   const [quotaEdit, setQuotaEdit] = useState<Employee | null>(null);
 
-  const { search: userSearch, setSearch: setUserSearch, pageRows: userRows } = useTableControls(employees, (e, q) => e.name.toLowerCase().includes(q) || e.position.toLowerCase().includes(q), 12);
+  async function loadOracleUsers(cancelled?: () => boolean) {
+    setUsersLoading(true);
+    setUsersError('');
+    try {
+      const users = await fetchAdminUsers();
+      if (!cancelled?.()) setOracleUsers(users);
+    } catch (error) {
+      if (!cancelled?.()) setUsersError(error instanceof Error ? error.message : 'Unable to load Oracle users.');
+    } finally {
+      if (!cancelled?.()) setUsersLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    loadOracleUsers(() => cancelled);
+    return () => { cancelled = true; };
+  }, []);
+
+  function openUserEdit(user: AdminUser) {
+    setUserEdit(user);
+    setUserEditForm(toUserEditForm(user, roleConfig));
+    setUserSaveError('');
+  }
+
+  function hasAssignedRole(roleCode: string) {
+    return userEditForm.roleAssignments.some((assignment) => assignment.roleCode === roleCode);
+  }
+
+  function toggleAssignedRole(roleCode: string, checked: boolean) {
+    setUserEditForm((form) => {
+      if (!checked) {
+        const remaining = form.roleAssignments.filter((assignment) => assignment.roleCode !== roleCode);
+        return { ...form, roleAssignments: remaining, role: remaining[0]?.roleCode ?? 'Employee' };
+      }
+      if (form.roleAssignments.some((assignment) => assignment.roleCode === roleCode)) return form;
+      const nextAssignments = [...form.roleAssignments, { roleCode, departmentCode: roleCode === 'Department Manager' ? form.departmentCode : '', unitName: '', note: '' }];
+      return { ...form, roleAssignments: nextAssignments, role: form.roleAssignments.length === 0 ? roleCode : form.role };
+    });
+  }
+
+  function updateAssignedRole(roleCode: string, patch: Partial<UserRoleAssignmentInput>) {
+    setUserEditForm((form) => ({
+      ...form,
+      roleAssignments: form.roleAssignments.map((assignment) => assignment.roleCode === roleCode ? { ...assignment, ...patch } : assignment),
+    }));
+  }
+
+  async function saveUserEdit() {
+    if (!userEdit) return;
+    setUserSaving(true);
+    setUserSaveError('');
+    try {
+      if (userEditForm.roleAssignments.length === 0) throw new Error('Select at least one BES role.');
+      await updateAdminUser(userEdit.id, userEditForm);
+      await loadOracleUsers();
+      toast({ kind: 'success', title: 'Employee information updated', description: `${userEditForm.firstName} ${userEditForm.lastName} was saved to Oracle BES_USERS.` });
+      setUserEdit(null);
+    } catch (error) {
+      setUserSaveError(error instanceof Error ? error.message : 'Unable to update employee information.');
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  async function deleteUserEdit() {
+    if (!userEdit) return;
+    if (!token) {
+      setUserSaveError('Your admin session is required before deleting an employee.');
+      return;
+    }
+    if (String(user?.id) === String(userEdit.id) || user?.username === userEdit.username) {
+      setUserSaveError('You cannot delete your own administrator account while you are signed in.');
+      setUserDeleteOpen(false);
+      return;
+    }
+    setUserDeleting(true);
+    setUserSaveError('');
+    try {
+      await deleteAdminUser(token, userEdit.id);
+      await loadOracleUsers();
+      toast({ kind: 'success', title: 'Employee deleted', description: `${userEdit.name} was disabled, signed out, and removed from the active user list.` });
+      setUserDeleteOpen(false);
+      setUserEdit(null);
+    } catch (error) {
+      setUserSaveError(error instanceof Error ? error.message : 'Unable to delete employee.');
+      setUserDeleteOpen(false);
+    } finally {
+      setUserDeleting(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    setRolesLoading(true);
+    setRolesError('');
+    fetchRolePermissionConfig()
+      .then((config) => {
+        if (!cancelled) setRoleConfig(config);
+      })
+      .catch((error) => {
+        if (!cancelled) setRolesError(error instanceof Error ? error.message : 'Unable to load Oracle roles and permissions.');
+      })
+      .finally(() => {
+        if (!cancelled) setRolesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const { search: userSearch, setSearch: setUserSearch, pageRows: userRows } = useTableControls(oracleUsers, (e, q) =>
+    e.name.toLowerCase().includes(q) ||
+    e.username.toLowerCase().includes(q) ||
+    e.email.toLowerCase().includes(q) ||
+    e.employeeNo.toLowerCase().includes(q) ||
+    (e.position ?? '').toLowerCase().includes(q) ||
+    (e.departmentCode ?? '').toLowerCase().includes(q) ||
+    e.role.toLowerCase().includes(q) ||
+    e.roles.some((role) => role.toLowerCase().includes(q)), 12);
   const { search: auditSearch, setSearch: setAuditSearch, pageRows: auditRows } = useTableControls(auditLog, (a, q) => a.actor.toLowerCase().includes(q) || a.action.toLowerCase().includes(q) || a.target.toLowerCase().includes(q), 15);
   const { search: storageSearch, setSearch: setStorageSearch, pageRows: storageRows } = useTableControls(employees, (e, q) => e.name.toLowerCase().includes(q) || e.position.toLowerCase().includes(q), 12);
 
-  const userColumns: Column<Employee>[] = [
+  const userColumns: Column<AdminUser>[] = [
     { key: 'name', header: 'Name', render: (e) => (
-      <span className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-100 text-[10px] font-bold text-brand-700">{initials(e.name)}</span><span className="font-medium text-slate-800">{e.name}</span></span>
+      <span className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-100 text-[10px] font-bold text-brand-700">{initials(e.name)}</span><span><span className="block font-medium text-slate-800">{e.name}</span><span className="block text-xs text-slate-400">{e.username}</span></span></span>
     ) },
-    { key: 'id', header: 'Employee ID', render: (e) => <span className="font-mono text-xs">{e.id}</span>, hideOnCard: true },
-    { key: 'position', header: 'Position', render: (e) => e.position },
-    { key: 'departmentId', header: 'Dept.', render: (e) => <Badge>{e.departmentId}</Badge> },
-    { key: 'status', header: 'Status', render: (e) => <Badge className={e.status === 'Active' ? 'border-green-200 bg-green-50 text-green-700' : 'border-slate-200 bg-slate-100 text-slate-600'}>{e.status}</Badge> },
-    { key: 'roles', header: 'Special Roles', render: (e) => e.roles.length ? e.roles.join(', ') : '—', hideOnCard: true },
+    { key: 'employeeNo', header: 'Employee ID', render: (e) => <span className="font-mono text-xs">{e.employeeNo}</span>, hideOnCard: true },
+    { key: 'email', header: 'Email', render: (e) => <span className="text-xs">{e.email}</span>, hideOnCard: true },
+    { key: 'position', header: 'Position', render: (e) => e.position || '—' },
+    { key: 'departmentCode', header: 'Dept.', render: (e) => e.departmentCode ? <Badge>{e.departmentCode}</Badge> : '—' },
+    { key: 'accountStatus', header: 'Status', render: (e) => <Badge className={e.accountStatus === 'ACTIVE' ? 'border-green-200 bg-green-50 text-green-700' : 'border-slate-200 bg-slate-100 text-slate-600'}>{e.accountStatus}</Badge> },
+    { key: 'role', header: 'BES Roles', render: (e) => (
+      <span className="flex flex-wrap gap-1">
+        {e.roles.map((role) => <Badge key={role} className={role.startsWith('Administrator') ? 'border-gold-200 bg-gold-50 text-gold-800' : 'border-brand-200 bg-brand-50 text-brand-700'}>{role}</Badge>)}
+      </span>
+    ), hideOnCard: true },
+    { key: 'actions', header: '', className: 'text-right', render: (e) => (
+      <Button variant="ghost" size="sm" onClick={() => openUserEdit(e)}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
+    ) },
   ];
+
+  const roleMatrix = useMemo(() => {
+    const map = new Map<string, boolean>();
+    roleConfig?.matrix.forEach((entry) => map.set(`${entry.roleCode}:${entry.permissionCode}`, entry.granted));
+    return map;
+  }, [roleConfig]);
 
   const auditColumns: Column<AuditLogEntry>[] = [
     { key: 'timestamp', header: 'Timestamp', render: (a) => formatDateTime(a.timestamp) },
@@ -212,11 +422,16 @@ export default function Admin() {
         <Card>
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle>User Management</CardTitle>
-            <Button size="sm" onClick={() => toast({ kind: 'info', title: 'Simulated action', description: 'In production, this creates a new BES account tied to HR records.' })}><Plus className="h-4 w-4" /> Add User</Button>
+            <Button size="sm" onClick={() => toast({ kind: 'info', title: 'Oracle-backed users', description: 'New accounts are created from the login page signup process and stored in BES_USERS.' })}><Plus className="h-4 w-4" /> Add User</Button>
           </CardHeader>
           <CardContent>
-            <Toolbar search={userSearch} onSearchChange={setUserSearch} placeholder="Search users…" onExport={() => exportToCsv('users.csv', ['Name', 'Employee ID', 'Position', 'Department', 'Status'], employees.map((e) => [e.name, e.id, e.position, e.departmentId, e.status]))} />
-            <DataTable columns={userColumns} rows={userRows} getRowId={(e) => e.id} onRowClick={(e) => navigate(`/organization/employee/${e.id}`)} cardTitle={(e) => e.name} />
+            {usersError && <div role="alert" className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{usersError}</div>}
+            <Toolbar search={userSearch} onSearchChange={setUserSearch} placeholder="Search Oracle users…" onExport={() => exportToCsv('bes-users.csv', ['Name', 'Username', 'Email', 'Employee ID', 'Position', 'Department', 'Account Status', 'BES Roles'], oracleUsers.map((e) => [e.name, e.username, e.email, e.employeeNo, e.position ?? '', e.departmentCode ?? '', e.accountStatus, e.roles.join('; ')]))} />
+            {usersLoading ? (
+              <div className="rounded-lg border border-slate-200 p-5 text-sm text-slate-500">Loading users from Oracle BES_USERS…</div>
+            ) : (
+              <DataTable columns={userColumns} rows={userRows} getRowId={(e) => e.id} cardTitle={(e) => e.name} emptyTitle="No Oracle users found" emptyDescription="BES_USERS does not contain users matching this search." />
+            )}
           </CardContent>
         </Card>
       )}
@@ -227,33 +442,64 @@ export default function Admin() {
             <CardContent className="pt-5 text-sm text-slate-600">
               <p className="mb-2 font-semibold text-slate-800">Access is determined by a combination of:</p>
               <div className="flex flex-wrap gap-1.5">
-                {PERMISSION_FACTORS.map((f) => <Badge key={f} className="border-brand-200 bg-brand-50 text-brand-700">{f}</Badge>)}
+                {(roleConfig?.factors ?? []).map((f) => <Badge key={f} className="border-brand-200 bg-brand-50 text-brand-700">{f}</Badge>)}
               </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Active Role Assignments</CardTitle></CardHeader>
+            <CardContent>
+              {rolesLoading ? (
+                <div className="rounded-lg border border-slate-200 p-5 text-sm text-slate-500">Loading assignments from Oracle BES_USER_ROLES...</div>
+              ) : rolesError ? (
+                <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{rolesError}</div>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(roleConfig?.assignments ?? []).map((assignment) => (
+                    <div key={`${assignment.username}-${assignment.roleCode}-${assignment.departmentCode ?? 'all'}`} className="rounded-lg border border-slate-100 p-3">
+                      <p className="text-sm font-semibold text-slate-800">{assignment.name}</p>
+                      <p className="text-xs text-slate-500">{assignment.username}</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <Badge className={assignment.roleCode === 'Administrator' ? 'border-gold-200 bg-gold-50 text-gold-800' : 'border-brand-200 bg-brand-50 text-brand-700'}>
+                          {assignment.roleCode}{assignment.departmentCode ? ` (${assignment.departmentCode})` : ''}
+                        </Badge>
+                        {assignment.note && <Badge className="border-slate-200 bg-slate-100 text-slate-600">{assignment.note}</Badge>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
           <Card>
             <CardHeader><CardTitle>Role and Permission Matrix</CardTitle></CardHeader>
             <CardContent className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500">
-                    <th className="py-2 pr-3 font-semibold">Role</th>
-                    {CAPABILITIES.map((c) => <th key={c} className="px-2 py-2 text-center font-semibold">{c}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {ROLES_FOR_MATRIX.map((role) => (
-                    <tr key={role} className="border-b border-slate-100">
-                      <td className="py-2 pr-3 font-medium text-slate-800">{role}</td>
-                      {MATRIX[role].map((granted, i) => (
-                        <td key={i} className="px-2 py-2 text-center">
-                          {granted ? <Check className="mx-auto h-4 w-4 text-green-600" /> : <X className="mx-auto h-4 w-4 text-slate-300" />}
-                        </td>
-                      ))}
+              {rolesLoading ? (
+                <div className="rounded-lg border border-slate-200 p-5 text-sm text-slate-500">Loading matrix from Oracle BES_ROLE_PERMISSIONS...</div>
+              ) : rolesError ? (
+                <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{rolesError}</div>
+              ) : (
+                <table className="w-full min-w-[820px] text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="py-2 pr-3 font-semibold">Role</th>
+                      {(roleConfig?.permissions ?? []).map((permission) => <th key={permission.code} className="px-2 py-2 text-center font-semibold">{permission.name}</th>)}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(roleConfig?.roles ?? []).map((role) => (
+                      <tr key={role.code} className="border-b border-slate-100">
+                        <td className="py-2 pr-3 font-medium text-slate-800">{role.name}</td>
+                        {(roleConfig?.permissions ?? []).map((permission) => (
+                          <td key={permission.code} className="px-2 py-2 text-center">
+                            {roleMatrix.get(`${role.code}:${permission.code}`) ? <Check className="mx-auto h-4 w-4 text-green-600" /> : <X className="mx-auto h-4 w-4 text-slate-300" />}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -487,6 +733,114 @@ export default function Admin() {
           </div>
         )}
       </Dialog>
+
+      <Dialog
+        open={!!userEdit}
+        onClose={() => setUserEdit(null)}
+        title={`Edit Employee — ${userEdit?.name ?? ''}`}
+        description="Update employee and account information stored in Oracle BES_USERS. Passwords are not editable from this administration form."
+        size="lg"
+        footer={
+          <>
+            <Button
+              variant="destructive"
+              onClick={() => setUserDeleteOpen(true)}
+              disabled={userSaving || userDeleting || !userEdit || String(user?.id) === String(userEdit.id)}
+              className="mr-auto"
+            >
+              <Trash2 className="h-4 w-4" /> {userDeleting ? 'Deleting...' : 'Delete Employee'}
+            </Button>
+            <Button variant="outline" onClick={() => setUserEdit(null)} disabled={userSaving || userDeleting}>Cancel</Button>
+            <Button onClick={saveUserEdit} disabled={userSaving || userDeleting}>{userSaving ? 'Saving...' : 'Save Changes'}</Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {userSaveError && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{userSaveError}</div>}
+          <div className="rounded-md border border-gold-200 bg-gold-50 px-3 py-2 text-sm text-gold-800">
+            Password changes remain restricted to the password reset process.
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div><Label htmlFor="edit-employee-no" required>Employee ID</Label><Input id="edit-employee-no" value={userEditForm.employeeNo} onChange={(e) => setUserEditForm((f) => ({ ...f, employeeNo: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-username" required>Username</Label><Input id="edit-username" value={userEditForm.username} onChange={(e) => setUserEditForm((f) => ({ ...f, username: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-email" required>Email</Label><Input id="edit-email" type="email" value={userEditForm.email} onChange={(e) => setUserEditForm((f) => ({ ...f, email: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-mobile">Mobile No.</Label><Input id="edit-mobile" value={userEditForm.mobileNo} onChange={(e) => setUserEditForm((f) => ({ ...f, mobileNo: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-first-name" required>First Name</Label><Input id="edit-first-name" value={userEditForm.firstName} onChange={(e) => setUserEditForm((f) => ({ ...f, firstName: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-middle-name">Middle Name</Label><Input id="edit-middle-name" value={userEditForm.middleName} onChange={(e) => setUserEditForm((f) => ({ ...f, middleName: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-last-name" required>Last Name</Label><Input id="edit-last-name" value={userEditForm.lastName} onChange={(e) => setUserEditForm((f) => ({ ...f, lastName: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-suffix">Suffix</Label><Input id="edit-suffix" value={userEditForm.suffix} onChange={(e) => setUserEditForm((f) => ({ ...f, suffix: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-position">Position</Label><Input id="edit-position" value={userEditForm.position} onChange={(e) => setUserEditForm((f) => ({ ...f, position: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-department">Department</Label><Input id="edit-department" value={userEditForm.departmentCode} onChange={(e) => setUserEditForm((f) => ({ ...f, departmentCode: e.target.value }))} /></div>
+            <div><Label htmlFor="edit-unit">Unit</Label><Input id="edit-unit" value={userEditForm.unitName} onChange={(e) => setUserEditForm((f) => ({ ...f, unitName: e.target.value }))} /></div>
+            <div>
+              <Label htmlFor="edit-employment-status">Employment Status</Label>
+              <Select id="edit-employment-status" value={userEditForm.employmentStatus} onChange={(e) => setUserEditForm((f) => ({ ...f, employmentStatus: e.target.value }))}>
+                <option value="Active">Active</option>
+                <option value="Probationary">Probationary</option>
+                <option value="Inactive">Inactive</option>
+                <option value="Separated">Separated</option>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="edit-account-status">Account Status</Label>
+              <Select id="edit-account-status" value={userEditForm.accountStatus} onChange={(e) => setUserEditForm((f) => ({ ...f, accountStatus: e.target.value }))}>
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="PENDING">PENDING</option>
+                <option value="LOCKED">LOCKED</option>
+                <option value="DISABLED">DISABLED</option>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <Label>BES Role Assignments</Label>
+            <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+              {(roleConfig?.roles ?? [{ code: 'Employee', name: 'Employee' }, { code: 'Administrator', name: 'Administrator' }]).map((role) => {
+                const assigned = userEditForm.roleAssignments.find((assignment) => assignment.roleCode === role.code);
+                return (
+                  <div key={role.code} className="rounded-md border border-slate-100 p-2">
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                      <Checkbox checked={!!assigned} onChange={(e) => toggleAssignedRole(role.code, e.target.checked)} />
+                      {role.name}
+                    </label>
+                    {assigned && (
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div>
+                          <Label htmlFor={`edit-role-department-${role.code}`} className="text-xs">Department Scope</Label>
+                          <Input
+                            id={`edit-role-department-${role.code}`}
+                            value={assigned.departmentCode ?? ''}
+                            placeholder={role.code === 'Department Manager' ? 'e.g. ISD' : 'Optional'}
+                            onChange={(e) => updateAssignedRole(role.code, { departmentCode: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor={`edit-role-note-${role.code}`} className="text-xs">Assignment Note</Label>
+                          <Input
+                            id={`edit-role-note-${role.code}`}
+                            value={assigned.note ?? ''}
+                            placeholder="Optional"
+                            onChange={(e) => updateAssignedRole(role.code, { note: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-xs text-slate-500">The current primary BES role is kept for compatibility when still selected; all selected roles are saved to Oracle BES_USER_ROLES.</p>
+          </div>
+        </div>
+      </Dialog>
+      <ConfirmDialog
+        open={userDeleteOpen}
+        onClose={() => setUserDeleteOpen(false)}
+        onConfirm={deleteUserEdit}
+        title="Delete Employee"
+        description={`This will disable ${userEdit?.name ?? 'this employee'}, remove active role assignments, sign them out of active sessions, and hide them from the active user list. Historical tasks and comments will be preserved.`}
+        confirmLabel={userDeleting ? 'Deleting...' : 'Delete Employee'}
+        destructive
+      />
 
       <Dialog open={!!toolEdit} onClose={() => setToolEdit(null)} title={`Edit Access — ${toolEdit?.code ?? ''}`} description={toolEdit?.name} size="md">
         {toolEdit && (

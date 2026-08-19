@@ -13,6 +13,7 @@ import { EnterpriseCalendar } from '@/components/shared/EnterpriseCalendar';
 import { GmKpiDashboard } from '@/components/shared/GmKpiDashboard';
 import { DeptKpiDashboard, hasDeptKpi } from '@/components/shared/DeptKpiDashboard';
 import { EmptyState } from '@/components/ui/empty-state';
+import { useAuth } from '@/context/AuthContext';
 import { useData } from '@/context/DataContext';
 import { useRolePreview } from '@/context/RolePreviewContext';
 import { CURRENT_EMPLOYEE } from '@/lib/mockData';
@@ -28,24 +29,26 @@ function greeting() {
 
 export default function Home() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { workItems, news, newsReadStates, events, departments, employees } = useData();
   const { effectiveRole, previewDepartmentId } = useRolePreview();
   const [showKpi, setShowKpi] = useState(false);
 
   const previewDept = effectiveRole === 'Department Manager' && previewDepartmentId ? departments.find((d) => d.id === previewDepartmentId) : null;
   const previewManager = previewDept ? employees.find((e) => e.id === previewDept.managerId) : null;
-  const displayFirstName = previewManager ? previewManager.firstName : 'Alex';
-  const displayPosition = previewManager ? previewManager.position : CURRENT_EMPLOYEE.position;
-  const displayDeptLine = previewDept ? `${previewDept.shortName} — ${previewDept.name}` : `${CURRENT_EMPLOYEE.departmentId} — Institutional Services Department`;
+  const displayFirstName = previewManager?.firstName ?? user?.firstName ?? CURRENT_EMPLOYEE.firstName;
+  const displayPosition = previewManager?.position ?? user?.position ?? CURRENT_EMPLOYEE.position;
+  const displayDeptLine = previewDept ? `${previewDept.shortName} — ${previewDept.name}` : `${user?.departmentCode ?? CURRENT_EMPLOYEE.departmentId} — Institutional Services Department`;
 
   const today = startOfDay(new Date());
   const weekEnd = addDays(today, 7);
+  const myIds = new Set([user?.username, user?.employeeNo, CURRENT_EMPLOYEE.id].filter(Boolean).map(String));
 
   const myApprovals = workItems.filter((w) => w.status === 'Pending Approval' && w.approvalChain.some((s) => s.status === 'Pending'));
-  const myTasksDueToday = workItems.filter((w) => w.requestorId === CURRENT_EMPLOYEE.id && w.dueDate && startOfDay(new Date(w.dueDate)).getTime() === today.getTime());
+  const myTasksDueToday = workItems.filter((w) => (myIds.has(w.requestorId) || (w.assigneeId && myIds.has(w.assigneeId))) && w.dueDate && startOfDay(new Date(w.dueDate)).getTime() === today.getTime());
   const unreadMemos = news.filter((p) => !newsReadStates.find((r) => r.postId === p.id)?.read);
   const upcomingEvents = events.filter((e) => isWithinInterval(new Date(e.start), { start: today, end: weekEnd }));
-  const returnedRequests = workItems.filter((w) => w.requestorId === CURRENT_EMPLOYEE.id && w.status === 'Returned');
+  const returnedRequests = workItems.filter((w) => myIds.has(w.requestorId) && w.status === 'Returned');
   const requiresAck = news.filter((p) => p.requiresAcknowledgment && !newsReadStates.find((r) => r.postId === p.id)?.acknowledged);
   const deadlinesThisWeek = workItems.filter((w) => w.dueDate && isWithinInterval(new Date(w.dueDate), { start: today, end: weekEnd }));
 
@@ -66,13 +69,9 @@ export default function Home() {
         description={`${displayPosition} · ${displayDeptLine}`}
         actions={<Button onClick={() => navigate('/services')}><Plus className="h-4 w-4" /> Quick Create</Button>}
       />
-      {previewDept ? (
+      {previewDept && (
         <div className="mb-5 flex items-center gap-2 rounded-lg border border-gold-200 bg-gold-50 px-4 py-2.5 text-sm text-gold-800">
           <Eye className="h-4 w-4 shrink-0" /> Role Preview — showing Enterprise Home as the {previewDept.name} manager. Task and approval counts below still reflect sample demonstration data.
-        </div>
-      ) : (
-        <div className="mb-5 rounded-lg border border-brand-100 bg-brand-50/60 px-4 py-2.5 text-sm text-brand-800">
-          "Building a unified digital workplace so every BENECO employee starts their day informed, connected, and empowered." — Office of the General Manager
         </div>
       )}
 

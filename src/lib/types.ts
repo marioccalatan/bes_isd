@@ -24,6 +24,28 @@ export interface Department {
   color: string; // tailwind color token used for badges/charts
 }
 
+// Editable organizational chart — a position/reporting-line tree, distinct
+// from the Employee/supervisorId relationship (which drives directory data).
+// Used for the enterprise-wide chart on the Organization page and for each
+// department's own chart on its detail page.
+export interface OrgChartNode {
+  id: string;
+  label: string; // position title, e.g. "Network Services Department Manager"
+  sublabel?: string; // grade/headcount, e.g. "[1] SG 19,20"
+  position: { x: number; y: number };
+}
+
+export interface OrgChartEdge {
+  id: string;
+  source: string;
+  target: string;
+}
+
+export interface OrgChart {
+  nodes: OrgChartNode[];
+  edges: OrgChartEdge[];
+}
+
 export type EmployeeStatus = 'Active' | 'On Leave' | 'Probationary' | 'Retired';
 
 export interface Employee {
@@ -67,11 +89,19 @@ export interface CalendarEvent {
   meetingLink?: string;
   description?: string;
   attendees?: string[];
+  attachments?: { name: string; size: number; type?: string }[];
+  visibility?: 'All employees' | 'Department only' | 'Specific people';
+  visibleToUsernames?: string[];
+  done?: boolean;
+  doneAt?: string | null;
+  doneBy?: string | null;
+  departmentIds?: DepartmentId[];
   departmentId?: DepartmentId;
   editable: boolean; // false for org events, true for personal
   recurring?: 'weekly' | 'monthly' | 'none';
   ownerId?: string; // for personal events
   color: string;
+  sourceName?: string;
 }
 
 export type NewsCategory =
@@ -142,8 +172,12 @@ export interface ActivityEntry {
 export interface Comment {
   id: string;
   author: string;
+  authorId?: string;
   timestamp: string;
   message: string;
+  deleted?: boolean;
+  parentCommentId?: string;
+  replies?: Comment[];
 }
 
 export type ProcessType =
@@ -175,7 +209,8 @@ export type ProcessType =
   | 'management-approval'
   | 'risk-compliance-submission'
   | 'support-ticket'
-  | 'enhancement-request';
+  | 'enhancement-request'
+  | 'task-assignment';
 
 export interface WorkItem {
   id: string; // reference number e.g. BES-LVE-2026-00231

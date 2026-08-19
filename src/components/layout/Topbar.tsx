@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
   Menu, Search, Plus, Bell, HelpCircle, ChevronDown, LogOut, User, Eye,
-  Info, PlayCircle, X as XIcon, Sun, Moon, Monitor, Mail,
+  Info, PlayCircle, X as XIcon, Sun, Moon, Monitor, Mail, Palette, Check,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useData } from '@/context/DataContext';
@@ -20,10 +20,10 @@ import { Badge } from '@/components/ui/badge';
 
 export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   const data = useData();
   const { setAboutOpen, startTour } = useUI();
-  const { mode, resolvedTheme, setMode } = useTheme();
+  const { mode, resolvedTheme, accentTheme, accentThemes, setMode, setAccentTheme } = useTheme();
   const { effectiveRole, isPreviewing, previewDepartmentId, previewLabel, setPreviewRole, setPreviewDepartmentManager, returnToAdministrator } = useRolePreview();
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -55,6 +55,10 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   }, [query, data]);
 
   const unreadCount = data.notifications.filter((n) => !n.read).length;
+  const profileName = user?.name ?? CURRENT_EMPLOYEE.name;
+  const profilePosition = user?.position ?? CURRENT_EMPLOYEE.position;
+  const profileRole = user?.role ?? 'Administrator';
+  const profilePhoto = user?.profilePhoto;
 
   function goTo(to: string) {
     setSearchOpen(false);
@@ -180,24 +184,26 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
         trigger={
           <button className="flex items-center gap-2 rounded-md py-1 pl-1 pr-2 hover:bg-slate-100">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-xs font-bold text-brand-700">
-              {initials(CURRENT_EMPLOYEE.name)}
+              {profilePhoto ? <img src={profilePhoto} alt="" className="h-full w-full rounded-full object-cover" /> : initials(profileName)}
             </span>
             <span className="hidden text-left leading-tight md:block">
-              <span className="block text-xs font-semibold text-slate-800">{CURRENT_EMPLOYEE.name}</span>
-              <span className="block truncate text-[11px] text-slate-500">{isPreviewing ? `Viewing as ${previewLabel}` : 'Administrator view'}</span>
+              <span className="block text-xs font-semibold text-slate-800">{profileName}</span>
+              <span className="block truncate text-[11px] text-slate-500">{isPreviewing ? `Viewing as ${previewLabel}` : `${profileRole} view`}</span>
             </span>
             <ChevronDown className="hidden h-3.5 w-3.5 text-slate-400 md:block" />
           </button>
         }
-        className="w-72"
+        className="w-80"
       >
         {(close) => (
           <>
             <div className="flex items-center gap-3 px-2.5 py-2">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-700">{initials(CURRENT_EMPLOYEE.name)}</span>
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-700">
+                {profilePhoto ? <img src={profilePhoto} alt="" className="h-full w-full rounded-full object-cover" /> : initials(profileName)}
+              </span>
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-800">{CURRENT_EMPLOYEE.name}</p>
-                <p className="truncate text-xs text-slate-500">{CURRENT_EMPLOYEE.position}</p>
+                <p className="truncate text-sm font-semibold text-slate-800">{profileName}</p>
+                <p className="truncate text-xs text-slate-500">{profilePosition}</p>
               </div>
             </div>
             <DropdownSeparator />
@@ -248,6 +254,7 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
                 { value: 'light', label: 'Light', icon: Sun },
                 { value: 'dark', label: 'Dark', icon: Moon },
                 { value: 'system', label: 'System', icon: Monitor },
+                { value: 'custom', label: 'Custom', icon: Palette },
               ] as { value: ThemeMode; label: string; icon: typeof Sun }[]).map((opt) => (
                 <button
                   key={opt.value}
@@ -259,12 +266,39 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
                 </button>
               ))}
             </div>
+            {mode === 'custom' && (
+              <>
+                <DropdownLabel>Custom theme</DropdownLabel>
+                <div className="mb-1 grid grid-cols-2 gap-1 px-2.5 sm:grid-cols-4">
+                  {accentThemes.map((theme) => (
+                    <button
+                      key={theme.id}
+                      type="button"
+                      onClick={() => setAccentTheme(theme.id)}
+                      aria-pressed={accentTheme === theme.id}
+                      title={theme.name}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-[11px] font-medium transition',
+                        accentTheme === theme.id ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      )}
+                    >
+                      <span className="h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10" style={{ backgroundColor: theme.swatch }} />
+                      <span className="min-w-0 flex-1 truncate">{theme.name.replace('BENECO ', '')}</span>
+                      {accentTheme === theme.id ? <Check className="h-3 w-3 shrink-0" /> : null}
+                    </button>
+                  ))}
+                </div>
+                <p className="px-2.5 pb-1 text-[11px] text-slate-400">
+                  <Palette className="mr-1 inline h-3 w-3" /> Saved separately for each username.
+                </p>
+              </>
+            )}
             <DropdownSeparator />
             <DropdownItem onClick={() => { close(); startTour(); }}>
               <PlayCircle className="h-4 w-4 text-slate-400" /> Start Guided Tour
             </DropdownItem>
             <DropdownItem onClick={() => { close(); setAboutOpen(true); }}>
-              <Info className="h-4 w-4 text-slate-400" /> About This Prototype
+              <Info className="h-4 w-4 text-slate-400" /> About BES
             </DropdownItem>
             <DropdownSeparator />
             <DropdownItem danger onClick={() => { close(); logout(); navigate('/login'); }}>
