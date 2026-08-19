@@ -41,8 +41,16 @@ const CALENDAR_LAYER_COLOR = {
   Projects: '#0d9488',
   Maintenance: '#ea580c',
   Personal: '#475569',
+  'Reservation (Bonuan)': '#0891b2',
+  'Reservation (DPS)': '#2563eb',
+  'Reservation (Dumol)': '#16a34a',
+  'Reservation (Sanchez)': '#d97706',
 };
-const calendarLayer = (value) => CALENDAR_LAYER_COLOR[normalize(value)] ? normalize(value) : 'Personal';
+const calendarLayer = (value) => normalize(value) || 'Personal';
+const calendarColor = (layer, value) => {
+  const color = normalize(value);
+  return /^#[0-9a-f]{6}$/i.test(color) ? color : (CALENDAR_LAYER_COLOR[layer] || '#475569');
+};
 const attachmentList = (value) => {
   if (!value) return [];
   try {
@@ -93,6 +101,7 @@ const calendarEvent = (row) => ({
   doneBy: row.DONE_BY_USERNAME || undefined,
   departmentIds: departmentCodesFromValue(row.DEPARTMENT_CODE),
   departmentId: departmentCodesFromValue(row.DEPARTMENT_CODE)[0],
+  officeAssignment: row.OFFICE_ASSIGNMENT || undefined,
   editable: row.EDITABLE === 'Y',
   recurring: row.RECURRING || 'none',
   ownerId: row.OWNER_USERNAME || undefined,
@@ -754,9 +763,11 @@ async function handle(req, res) {
         if (!user) return null;
         const eventUid = `EVT-P-${Date.now()}-${Math.round(Math.random() * 1e5)}`;
         const layer = calendarLayer(body.layer);
+        const color = calendarColor(layer, body.color);
         const visibility = normalize(body.visibility) || 'All employees';
         const visibleToUsers = Array.isArray(body.visibleToUsernames) ? body.visibleToUsernames.map((v) => normalize(v).toLowerCase()).filter(Boolean).join('|') : null;
         const departmentCodes = departmentCodesFromBody(body);
+        const officeAssignment = nullableNormalize(body.officeAssignment);
         const attachments = Array.isArray(body.attachments)
           ? JSON.stringify(body.attachments.map((file) => ({
             name: normalize(file.name),
@@ -766,14 +777,14 @@ async function handle(req, res) {
           : null;
         await c.execute(`INSERT INTO bes_calendar_events
           (event_uid, title, layer, start_at, end_at, all_day, location, meeting_link, description, attendees,
-           attachments, visibility, visible_to_users, department_code, owner_user_id, editable, recurring, color, source_name, is_active)
+           attachments, visibility, visible_to_users, department_code, office_assignment, owner_user_id, editable, recurring, color, source_name, is_active)
           VALUES
           (:eventUid, :title, :layer, TO_TIMESTAMP(:startAt, 'YYYY-MM-DD HH24:MI'), TO_TIMESTAMP(:endAt, 'YYYY-MM-DD HH24:MI'),
-           :allDay, :location, :meetingLink, :description, :attendees, :attachments, :visibility, :visibleToUsers, :departmentCode, :ownerUserId, 'Y', :recurring, :color, 'BES personal calendar', 'Y')`, {
+           :allDay, :location, :meetingLink, :description, :attendees, :attachments, :visibility, :visibleToUsers, :departmentCode, :officeAssignment, :ownerUserId, 'Y', :recurring, :color, 'BES personal calendar', 'Y')`, {
           eventUid,
           title,
           layer,
-          color: CALENDAR_LAYER_COLOR[layer],
+          color,
           startAt,
           endAt,
           allDay: body.allDay ? 'Y' : 'N',
@@ -785,6 +796,7 @@ async function handle(req, res) {
           visibility,
           visibleToUsers,
           departmentCode: departmentCodes.length ? departmentCodes.join('|') : null,
+          officeAssignment,
           ownerUserId: user.USER_ID,
           recurring: nullableNormalize(body.recurring) ?? 'none',
         });
@@ -837,9 +849,11 @@ async function handle(req, res) {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
         const layer = calendarLayer(body.layer);
+        const color = calendarColor(layer, body.color);
         const visibility = normalize(body.visibility) || 'All employees';
         const visibleToUsers = Array.isArray(body.visibleToUsernames) ? body.visibleToUsernames.map((v) => normalize(v).toLowerCase()).filter(Boolean).join('|') : null;
         const departmentCodes = departmentCodesFromBody(body);
+        const officeAssignment = nullableNormalize(body.officeAssignment);
         const attachments = Array.isArray(body.attachments)
           ? JSON.stringify(body.attachments.map((file) => ({
             name: normalize(file.name),
@@ -861,6 +875,7 @@ async function handle(req, res) {
             visibility = :visibility,
             visible_to_users = :visibleToUsers,
             department_code = :departmentCode,
+            office_assignment = :officeAssignment,
             recurring = :recurring,
             color = :color,
             updated_at = SYSTIMESTAMP
@@ -871,7 +886,7 @@ async function handle(req, res) {
           ownerUserId: user.USER_ID,
           title,
           layer,
-          color: CALENDAR_LAYER_COLOR[layer],
+          color,
           startAt,
           endAt,
           allDay: body.allDay ? 'Y' : 'N',
@@ -883,6 +898,7 @@ async function handle(req, res) {
           visibility,
           visibleToUsers,
           departmentCode: departmentCodes.length ? departmentCodes.join('|') : null,
+          officeAssignment,
           recurring: nullableNormalize(body.recurring) ?? 'none',
         });
         if (!updated.rowsAffected) return false;

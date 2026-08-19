@@ -68,15 +68,7 @@ export interface Employee {
   isManager?: boolean;
 }
 
-export type CalendarLayer =
-  | 'Enterprise-wide'
-  | 'Management'
-  | 'Department'
-  | 'Training'
-  | 'Compliance'
-  | 'Projects'
-  | 'Maintenance'
-  | 'Personal';
+export type CalendarLayer = string;
 
 export interface CalendarEvent {
   id: string;
@@ -90,13 +82,14 @@ export interface CalendarEvent {
   description?: string;
   attendees?: string[];
   attachments?: { name: string; size: number; type?: string }[];
-  visibility?: 'All employees' | 'Department only' | 'Specific people';
+  visibility?: 'All employees' | 'Department only' | 'Specific people' | 'Me';
   visibleToUsernames?: string[];
   done?: boolean;
   doneAt?: string | null;
   doneBy?: string | null;
   departmentIds?: DepartmentId[];
   departmentId?: DepartmentId;
+  officeAssignment?: string;
   editable: boolean; // false for org events, true for personal
   recurring?: 'weekly' | 'monthly' | 'none';
   ownerId?: string; // for personal events

@@ -11,7 +11,6 @@ import type { CalendarEvent, CalendarLayer, DepartmentId } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Dialog, ConfirmDialog } from '@/components/ui/dialog';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
-import { Pill } from '@/components/ui/tabs';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useData } from '@/context/DataContext';
 import { useToast } from '@/context/ToastContext';
@@ -21,8 +20,31 @@ import { canApprove } from '@/lib/permissions';
 import { fetchUserDirectory, type DirectoryUser } from '@/lib/api';
 import { loadState, saveState } from '@/lib/storage';
 
-const ALL_LAYERS: CalendarLayer[] = ['Enterprise-wide', 'Management', 'Department', 'Training', 'Compliance', 'Projects', 'Maintenance', 'Personal'];
+const DEFAULT_LAYER_COLORS: Record<string, string> = {
+  'Enterprise-wide': '#1a4fd6',
+  Management: '#7c3aed',
+  Department: '#158055',
+  Training: '#cf8f1c',
+  Compliance: '#c1272d',
+  Projects: '#0d9488',
+  Maintenance: '#ea580c',
+  Personal: '#475569',
+  'Reservation (Bonuan)': '#0891b2',
+  'Reservation (DPS)': '#2563eb',
+  'Reservation (Dumol)': '#16a34a',
+  'Reservation (Sanchez)': '#d97706',
+};
+const BASE_LAYERS: CalendarLayer[] = Object.keys(DEFAULT_LAYER_COLORS);
+const CREATE_NEW_LAYER = '__CREATE_NEW_LAYER__';
 const UNASSIGNED_DEPARTMENT = '__UNASSIGNED__';
+const OFFICE_ASSIGNMENTS = [
+  'General Services Office',
+  'Materials and Equipment Management Office',
+  'Community Relations Office',
+  'Human Resource Office',
+];
+const CALENDAR_SCOPE_OPTIONS = ['my', 'our'] as const;
+type CalendarScope = typeof CALENDAR_SCOPE_OPTIONS[number];
 type CalendarView = 'month' | 'week' | 'agenda';
 
 function directoryDisplayName(person: DirectoryUser) {
@@ -34,6 +56,10 @@ interface CalendarUserSettings {
   cursorDate?: string;
   activeLayers?: CalendarLayer[];
   activeDepartmentIds?: string[] | null;
+  activeOfficeAssignments?: string[] | null;
+  activeCalendarScopes?: CalendarScope[];
+  customLayers?: CalendarLayer[];
+  layerColors?: Record<string, string>;
 }
 
 function calendarSettingsKey(username: string) {
@@ -57,8 +83,27 @@ function safeCalendarCursor(value: unknown) {
 }
 
 function safeCalendarLayers(value: unknown) {
-  if (!Array.isArray(value)) return new Set<CalendarLayer>(ALL_LAYERS);
-  return new Set(value.filter((item): item is CalendarLayer => ALL_LAYERS.includes(item as CalendarLayer)));
+  if (!Array.isArray(value)) return new Set<CalendarLayer>(BASE_LAYERS);
+  const layers = value.map((item) => String(item).trim()).filter(Boolean);
+  return new Set(layers.length ? layers : BASE_LAYERS);
+}
+
+function safeCustomLayers(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))];
+}
+
+function safeLayerColors(value: unknown) {
+  if (!value || typeof value !== 'object') return {};
+  const colors: Record<string, string> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([layer, color]) => {
+    if (typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color)) colors[layer] = color;
+  });
+  return colors;
+}
+
+function layerColor(layer: string, layerColors: Record<string, string>) {
+  return layerColors[layer] ?? DEFAULT_LAYER_COLORS[layer] ?? '#475569';
 }
 
 function safeDepartmentIds(value: unknown) {
@@ -67,26 +112,85 @@ function safeDepartmentIds(value: unknown) {
   return new Set(value.map((item) => String(item)));
 }
 
+function safeOfficeAssignments(value: unknown) {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  return new Set(value.map((item) => String(item)).filter((item) => OFFICE_ASSIGNMENTS.includes(item)));
+}
+
+function safeCalendarScopes(value: unknown) {
+  if (!Array.isArray(value)) return new Set<CalendarScope>(CALENDAR_SCOPE_OPTIONS);
+  const scopes = value.filter((item): item is CalendarScope => CALENDAR_SCOPE_OPTIONS.includes(item as CalendarScope));
+  return new Set<CalendarScope>(scopes.length ? scopes : CALENDAR_SCOPE_OPTIONS);
+}
+
 function eventDepartmentIds(event: Partial<CalendarEvent>) {
   return event.departmentIds?.length ? event.departmentIds : event.departmentId ? [event.departmentId] : [];
+}
+
+function eventOfficeAssignments(event: Partial<CalendarEvent>) {
+  return String(event.officeAssignment ?? '').split(',').map((item) => item.trim()).filter(Boolean);
 }
 
 function EventDot({ color }: { color: string }) {
   return <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />;
 }
 
-function EventForm({ initial, onSave, onCancel, onDelete, existingEvents }: { initial?: Partial<CalendarEvent>; onSave: (v: { title: string; layer: CalendarLayer; date: string; startTime: string; endTime: string; location: string; description: string; departmentIds: string[]; visibility: CalendarEvent['visibility']; visibleToUsernames: string[]; attachments: NonNullable<CalendarEvent['attachments']> }) => void; onCancel: () => void; onDelete?: () => void; existingEvents: CalendarEvent[] }) {
+function dayBounds(day: Date) {
+  const start = new Date(day);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(day);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
+function eventTouchesDay(event: CalendarEvent, day: Date) {
+  const { start: dayStart, end: dayEnd } = dayBounds(day);
+  const eventStart = parseISO(event.start);
+  const eventEnd = parseISO(event.end);
+  return eventStart <= dayEnd && eventEnd >= dayStart;
+}
+
+function EventForm({
+  initial,
+  onSave,
+  onCancel,
+  onDelete,
+  existingEvents,
+  layers,
+  layerColors,
+  onAddLayer,
+  onLayerColorChange,
+}: {
+  initial?: Partial<CalendarEvent>;
+  onSave: (v: { title: string; layer: CalendarLayer; color: string; date: string; endDate: string; startTime: string; endTime: string; location: string; description: string; departmentIds: string[]; officeAssignment: string; visibility: CalendarEvent['visibility']; visibleToUsernames: string[]; attachments: NonNullable<CalendarEvent['attachments']> }) => void;
+  onCancel: () => void;
+  onDelete?: () => void;
+  existingEvents: CalendarEvent[];
+  layers: CalendarLayer[];
+  layerColors: Record<string, string>;
+  onAddLayer: (layer: string, color: string) => void;
+  onLayerColorChange: (layer: string, color: string) => void;
+}) {
   const { departments } = useData();
   const { token } = useAuth();
   const [directoryUsers, setDirectoryUsers] = useState<DirectoryUser[]>([]);
   const [title, setTitle] = useState(initial?.title ?? '');
   const [layer, setLayer] = useState<CalendarLayer>(initial?.layer ?? 'Personal');
+  const [creatingLayer, setCreatingLayer] = useState(false);
+  const [newLayerName, setNewLayerName] = useState('');
+  const [categoryColor, setCategoryColor] = useState(initial?.color ?? layerColor(initial?.layer ?? 'Personal', layerColors));
   const [date, setDate] = useState(initial?.start ? initial.start.slice(0, 10) : format(new Date(), 'yyyy-MM-dd'));
+  const [endDate, setEndDate] = useState(initial?.end ? initial.end.slice(0, 10) : initial?.start ? initial.start.slice(0, 10) : format(new Date(), 'yyyy-MM-dd'));
+  const [pickerMonth, setPickerMonth] = useState(() => new Date(`${initial?.start ? initial.start.slice(0, 10) : format(new Date(), 'yyyy-MM-dd')}T00:00:00`));
+  const [rangePickerOpen, setRangePickerOpen] = useState(false);
+  const [selectingRangeEnd, setSelectingRangeEnd] = useState(false);
   const [startTime, setStartTime] = useState(initial?.start ? initial.start.slice(11, 16) : '09:00');
   const [endTime, setEndTime] = useState(initial?.end ? initial.end.slice(11, 16) : '10:00');
   const [location, setLocation] = useState(initial?.location ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [departmentIds, setDepartmentIds] = useState<string[]>(eventDepartmentIds(initial ?? {}));
+  const [officeAssignments, setOfficeAssignments] = useState<string[]>(eventOfficeAssignments(initial ?? {}));
   const [visibility, setVisibility] = useState<CalendarEvent['visibility']>(initial?.visibility ?? 'All employees');
   const [visibleToUsernames, setVisibleToUsernames] = useState<string[]>(initial?.visibleToUsernames ?? []);
   const [attachments, setAttachments] = useState<NonNullable<CalendarEvent['attachments']>>(initial?.attachments ?? []);
@@ -106,25 +210,35 @@ function EventForm({ initial, onSave, onCancel, onDelete, existingEvents }: { in
   }, [token]);
 
   const conflicts = useMemo(() => {
-    if (!date || !startTime || !endTime || endTime <= startTime) return [];
+    if (!date || !endDate || !startTime || !endTime) return [];
     const s = new Date(`${date}T${startTime}`);
-    const e = new Date(`${date}T${endTime}`);
+    const e = new Date(`${endDate}T${endTime}`);
+    if (e <= s) return [];
     return existingEvents.filter((ev) => {
       if (initial?.id && ev.id === initial.id) return false;
-      if (!isSameDay(parseISO(ev.start), s)) return false;
       const evS = parseISO(ev.start);
       const evE = parseISO(ev.end);
       return s < evE && e > evS;
     });
-  }, [date, startTime, endTime, existingEvents, initial?.id]);
+  }, [date, endDate, startTime, endTime, existingEvents, initial?.id]);
+
+  const pickerDays = useMemo(() => eachDayOfInterval({ start: startOfWeek(startOfMonth(pickerMonth)), end: endOfWeek(endOfMonth(pickerMonth)) }), [pickerMonth]);
+  const dateRangeLabel = useMemo(() => {
+    if (!date) return 'Select date or range';
+    const startLabel = format(new Date(`${date}T00:00:00`), 'MMM d, yyyy');
+    if (!endDate || endDate === date) return startLabel;
+    return `${startLabel} – ${format(new Date(`${endDate}T00:00:00`), 'MMM d, yyyy')}`;
+  }, [date, endDate]);
 
   function submit() {
-    if (!title.trim() || !date || !startTime || !endTime) {
+    if (!title.trim() || !date || !endDate || !startTime || !endTime) {
       setError('Please complete all required fields.');
       return;
     }
-    if (endTime <= startTime) {
-      setError('End time must be after the start time.');
+    const start = new Date(`${date}T${startTime}`);
+    const end = new Date(`${endDate}T${endTime}`);
+    if (end <= start) {
+      setError('End date/time must be after the start date/time.');
       return;
     }
     if (visibility === 'Department only' && departmentIds.length === 0) {
@@ -135,7 +249,65 @@ function EventForm({ initial, onSave, onCancel, onDelete, existingEvents }: { in
       setError('Select at least one person who can see this event.');
       return;
     }
-    onSave({ title: title.trim(), layer, date, startTime, endTime, location, description, departmentIds, visibility, visibleToUsernames, attachments });
+    onSave({ title: title.trim(), layer, color: categoryColor, date, endDate, startTime, endTime, location, description, departmentIds, officeAssignment: officeAssignments.join(', '), visibility, visibleToUsernames, attachments });
+  }
+
+  function selectDateFromPicker(day: Date) {
+    const value = format(day, 'yyyy-MM-dd');
+    setError('');
+    if (!selectingRangeEnd) {
+      setDate(value);
+      setEndDate(value);
+      setPickerMonth(day);
+      setSelectingRangeEnd(true);
+      return;
+    }
+    const start = new Date(`${date}T00:00:00`);
+    const picked = new Date(`${value}T00:00:00`);
+    if (picked < start) {
+      setDate(value);
+      setEndDate(date);
+    } else {
+      setEndDate(value);
+    }
+    setPickerMonth(day);
+    setSelectingRangeEnd(false);
+    setRangePickerOpen(false);
+  }
+
+  function finishSingleDay() {
+    setEndDate(date);
+    setSelectingRangeEnd(false);
+    setRangePickerOpen(false);
+  }
+
+  function handleLayerChange(value: string) {
+    if (value === CREATE_NEW_LAYER) {
+      setCreatingLayer(true);
+      setNewLayerName('');
+      return;
+    }
+    setCreatingLayer(false);
+    setLayer(value);
+    setCategoryColor(layerColor(value, layerColors));
+  }
+
+  function addNewLayer() {
+    const nextLayer = newLayerName.trim();
+    if (!nextLayer) {
+      setError('Enter a subject/category name to add.');
+      return;
+    }
+    onAddLayer(nextLayer, categoryColor);
+    setLayer(nextLayer);
+    setCreatingLayer(false);
+    setNewLayerName('');
+    setError('');
+  }
+
+  function changeCategoryColor(color: string) {
+    setCategoryColor(color);
+    if (layer && !creatingLayer) onLayerColorChange(layer, color);
   }
 
   function addFiles(files: FileList | File[]) {
@@ -158,7 +330,23 @@ function EventForm({ initial, onSave, onCancel, onDelete, existingEvents }: { in
   }
 
   function toggleDepartment(departmentId: string) {
-    setDepartmentIds((current) => current.includes(departmentId) ? current.filter((item) => item !== departmentId) : [...current, departmentId]);
+    setDepartmentIds((current) => {
+      const next = current.includes(departmentId) ? current.filter((item) => item !== departmentId) : [...current, departmentId];
+      if (!next.includes('ISD')) setOfficeAssignments([]);
+      return next;
+    });
+  }
+
+  function toggleOfficeAssignment(office: string) {
+    setDepartmentIds((current) => current.includes('ISD') ? current : [...current, 'ISD']);
+    setOfficeAssignments((current) => current.includes(office) ? current.filter((item) => item !== office) : [...current, office]);
+  }
+
+  function changeVisibility(value: CalendarEvent['visibility']) {
+    setVisibility(value);
+    if (value === 'Me') {
+      setVisibleToUsernames([]);
+    }
   }
 
   return (
@@ -169,17 +357,101 @@ function EventForm({ initial, onSave, onCancel, onDelete, existingEvents }: { in
       </div>
       <div>
         <Label htmlFor="ev-layer" required>Category</Label>
-        <Select id="ev-layer" value={layer} onChange={(e) => setLayer(e.target.value as CalendarLayer)}>
-          {ALL_LAYERS.map((item) => (
+        <Select id="ev-layer" value={creatingLayer ? CREATE_NEW_LAYER : layer} onChange={(e) => handleLayerChange(e.target.value)}>
+          {layers.map((item) => (
             <option key={item} value={item}>{item}</option>
           ))}
+          <option value={CREATE_NEW_LAYER}>+ Create New Subject…</option>
         </Select>
+        {creatingLayer && (
+          <div className="mt-2 flex gap-2">
+            <Input value={newLayerName} onChange={(e) => setNewLayerName(e.target.value)} placeholder="Enter new subject/category" />
+            <Button type="button" variant="outline" onClick={addNewLayer}>Add</Button>
+          </div>
+        )}
       </div>
-      <div className="grid grid-cols-3 gap-3">
-        <div className="col-span-1">
-          <Label htmlFor="ev-date" required>Date</Label>
-          <Input id="ev-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      <div>
+        <Label htmlFor="ev-category-color">Category Color</Label>
+        <div className="mt-1 flex items-center gap-2">
+          <Input id="ev-category-color" type="color" value={categoryColor} onChange={(e) => changeCategoryColor(e.target.value)} className="h-10 w-14 p-1" />
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+            <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: categoryColor }} />
+            <span className="truncate text-sm font-medium" style={{ color: categoryColor }}>{creatingLayer ? newLayerName || 'New subject preview' : layer}</span>
+          </div>
         </div>
+      </div>
+      <div>
+        <Label htmlFor="ev-date" required>Date / Date Range</Label>
+        <button
+          id="ev-date"
+          type="button"
+          onClick={() => {
+            setRangePickerOpen((open) => !open);
+            setSelectingRangeEnd(false);
+          }}
+          className="mt-1 flex h-10 w-full items-center justify-between rounded-md border border-slate-300 bg-surface px-3 text-left text-sm font-medium text-slate-800 shadow-sm transition hover:border-brand-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+        >
+          <span>{dateRangeLabel}</span>
+          <span className="text-xs text-slate-400">{date === endDate ? '1 day' : 'Range'}</span>
+        </button>
+        {rangePickerOpen && (
+          <div className="mt-2 rounded-lg border border-slate-200 bg-surface p-3 shadow-xl">
+            <div className="mb-2 flex items-center justify-between">
+              <Button type="button" variant="outline" size="icon" onClick={() => setPickerMonth((month) => subMonths(month, 1))} aria-label="Previous month"><ChevronLeft className="h-4 w-4" /></Button>
+              <div className="text-center">
+                <p className="text-sm font-semibold text-slate-800">{format(pickerMonth, 'MMMM yyyy')}</p>
+                <p className="text-[11px] text-slate-500">{selectingRangeEnd ? 'Select the end date, or Done for 1 day.' : 'Select the start date.'}</p>
+              </div>
+              <Button type="button" variant="outline" size="icon" onClick={() => setPickerMonth((month) => addMonths(month, 1))} aria-label="Next month"><ChevronRight className="h-4 w-4" /></Button>
+            </div>
+            <div className="grid grid-cols-7 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <div key={day} className="py-1">{day}</div>)}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {pickerDays.map((day) => {
+                const value = format(day, 'yyyy-MM-dd');
+                const rangeStart = new Date(`${date}T00:00:00`);
+                const rangeEnd = new Date(`${endDate || date}T00:00:00`);
+                const inSelectedMonth = isSameMonth(day, pickerMonth);
+                const isStart = value === date;
+                const isEnd = value === endDate;
+                const inRange = day >= rangeStart && day <= rangeEnd;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => selectDateFromPicker(day)}
+                    className={cn(
+                      'h-8 rounded-md text-xs font-medium transition-colors hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+                      !inSelectedMonth && 'text-slate-300',
+                      inSelectedMonth && 'text-slate-700',
+                      inRange && 'bg-brand-50 text-brand-700',
+                      (isStart || isEnd) && 'bg-brand-600 text-white hover:bg-brand-600'
+                    )}
+                  >
+                    {format(day, 'd')}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+              <p className="text-xs text-slate-500">Pick one date for a single day, or pick a second date for a range.</p>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => {
+                  const today = new Date();
+                  const value = format(today, 'yyyy-MM-dd');
+                  setDate(value);
+                  setEndDate(value);
+                  setPickerMonth(today);
+                  setSelectingRangeEnd(false);
+                }}>Today</Button>
+                <Button type="button" size="sm" onClick={finishSingleDay}>Done</Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-3">
         <div>
           <Label htmlFor="ev-start" required>Start Time</Label>
           <Input id="ev-start" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
@@ -196,7 +468,7 @@ function EventForm({ initial, onSave, onCancel, onDelete, existingEvents }: { in
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <Label>Departments</Label>
-          <div id="ev-dept" className="max-h-28 overflow-y-auto rounded-md border border-slate-200 bg-surface p-2">
+          <div id="ev-dept" className="max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-surface p-2">
             <label className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-slate-50">
               <input
                 type="checkbox"
@@ -206,23 +478,45 @@ function EventForm({ initial, onSave, onCancel, onDelete, existingEvents }: { in
               />
               <span className="font-medium text-slate-700">No department / enterprise-wide</span>
             </label>
-            {departments.map((department) => (
-              <label key={department.id} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-slate-50">
-                <input
-                  type="checkbox"
-                  checked={departmentIds.includes(department.id)}
-                  onChange={() => toggleDepartment(department.id)}
-                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
-                />
-                <span className="font-medium text-slate-700">{department.name}</span>
-              </label>
-            ))}
-          </div>
+            {departments.map((department) => {
+              const departmentSelected = departmentIds.includes(department.id);
+              return (
+                <div key={department.id}>
+                  <label className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={departmentSelected}
+                      onChange={() => toggleDepartment(department.id)}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+                    />
+                    <span className="font-medium text-slate-700">{department.name}</span>
+                  </label>
+                  {department.id === 'ISD' && (
+                    <div className="ml-5 border-l border-slate-200 pl-2">
+                      <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Offices</p>
+                      {OFFICE_ASSIGNMENTS.map((office) => (
+                        <label key={office} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={officeAssignments.includes(office)}
+                            onChange={() => toggleOfficeAssignment(office)}
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+                          />
+                          <span className={cn('font-medium', departmentSelected ? 'text-slate-600' : 'text-slate-500')}>{office}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            </div>
         </div>
         <div>
           <Label htmlFor="ev-visibility" required>Who can see this post</Label>
-          <Select id="ev-visibility" value={visibility} onChange={(e) => setVisibility(e.target.value as CalendarEvent['visibility'])}>
+          <Select id="ev-visibility" value={visibility} onChange={(e) => changeVisibility(e.target.value as CalendarEvent['visibility'])}>
             <option>All employees</option>
+            <option>Me</option>
             <option>Department only</option>
             <option>Specific people</option>
           </Select>
@@ -310,6 +604,10 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
   const [cursor, setCursor] = useState(() => safeCalendarCursor(loadCalendarSettings(username).cursorDate));
   const [activeLayers, setActiveLayers] = useState<Set<CalendarLayer>>(() => safeCalendarLayers(loadCalendarSettings(username).activeLayers));
   const [activeDepartmentIds, setActiveDepartmentIds] = useState<Set<string> | null>(() => safeDepartmentIds(loadCalendarSettings(username).activeDepartmentIds));
+  const [activeOfficeAssignments, setActiveOfficeAssignments] = useState<Set<string> | null>(() => safeOfficeAssignments(loadCalendarSettings(username).activeOfficeAssignments));
+  const [activeCalendarScopes, setActiveCalendarScopes] = useState<Set<CalendarScope>>(() => safeCalendarScopes(loadCalendarSettings(username).activeCalendarScopes));
+  const [customLayers, setCustomLayers] = useState<CalendarLayer[]>(() => safeCustomLayers(loadCalendarSettings(username).customLayers));
+  const [layerColors, setLayerColors] = useState<Record<string, string>>(() => ({ ...DEFAULT_LAYER_COLORS, ...safeLayerColors(loadCalendarSettings(username).layerColors) }));
   const [settingsOwner, setSettingsOwner] = useState(username);
   const [departmentMenuOpen, setDepartmentMenuOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -331,6 +629,10 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
     setCursor(safeCalendarCursor(settings.cursorDate));
     setActiveLayers(safeCalendarLayers(settings.activeLayers));
     setActiveDepartmentIds(safeDepartmentIds(settings.activeDepartmentIds));
+    setActiveOfficeAssignments(safeOfficeAssignments(settings.activeOfficeAssignments));
+    setActiveCalendarScopes(safeCalendarScopes(settings.activeCalendarScopes));
+    setCustomLayers(safeCustomLayers(settings.customLayers));
+    setLayerColors({ ...DEFAULT_LAYER_COLORS, ...safeLayerColors(settings.layerColors) });
     setDepartmentMenuOpen(false);
     setSettingsOwner(username);
   }, [username]);
@@ -342,8 +644,12 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
       cursorDate: format(cursor, 'yyyy-MM-dd'),
       activeLayers: [...activeLayers],
       activeDepartmentIds: activeDepartmentIds ? [...activeDepartmentIds] : null,
+      activeOfficeAssignments: activeOfficeAssignments ? [...activeOfficeAssignments] : null,
+      activeCalendarScopes: [...activeCalendarScopes],
+      customLayers,
+      layerColors,
     });
-  }, [activeDepartmentIds, activeLayers, cursor, settingsOwner, username, view]);
+  }, [activeCalendarScopes, activeDepartmentIds, activeLayers, activeOfficeAssignments, cursor, customLayers, layerColors, settingsOwner, username, view]);
 
   useEffect(() => {
     if (!taskSource) return;
@@ -364,20 +670,50 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
   ], [departments]);
 
   const activeDepartmentCount = activeDepartmentIds ? activeDepartmentIds.size : departmentFilterOptions.length;
+  const activeOfficeCount = activeOfficeAssignments ? activeOfficeAssignments.size : 0;
   const departmentFilterLabel = activeDepartmentIds === null
-    ? 'All departments'
+    ? activeOfficeCount
+      ? `${activeOfficeCount} office${activeOfficeCount === 1 ? '' : 's'}`
+      : 'All departments'
     : activeDepartmentCount === 0
       ? 'No departments'
-      : `${activeDepartmentCount} department${activeDepartmentCount === 1 ? '' : 's'}`;
+      : `${activeDepartmentCount} department${activeDepartmentCount === 1 ? '' : 's'}${activeOfficeCount ? `, ${activeOfficeCount} office${activeOfficeCount === 1 ? '' : 's'}` : ''}`;
   const departmentNameById = useMemo(() => new Map(departments.map((department) => [department.id, department.name])), [departments]);
+  const calendarLayers = useMemo(() => {
+    const fromEvents = events.map((event) => event.layer).filter(Boolean);
+    return [...new Set([...BASE_LAYERS, ...customLayers, ...fromEvents])];
+  }, [customLayers, events]);
 
   const visibleEvents = useMemo(() => events.filter((e) => {
     if (!activeLayers.has(e.layer)) return false;
-    if (!activeDepartmentIds) return true;
-    const ids = eventDepartmentIds(e);
-    if (ids.length === 0) return activeDepartmentIds.has(UNASSIGNED_DEPARTMENT);
-    return ids.some((id) => activeDepartmentIds.has(id));
-  }), [events, activeLayers, activeDepartmentIds]);
+    if (e.visibility === 'Me' && !activeCalendarScopes.has('my')) return false;
+    if (e.visibility === 'Specific people' && !activeCalendarScopes.has('our')) return false;
+    if (activeDepartmentIds) {
+      const ids = eventDepartmentIds(e);
+      if (ids.length === 0) {
+        if (!activeDepartmentIds.has(UNASSIGNED_DEPARTMENT)) return false;
+      } else if (!ids.some((id) => activeDepartmentIds.has(id))) {
+        return false;
+      }
+    }
+    if (activeOfficeAssignments) {
+      const offices = eventOfficeAssignments(e);
+      if (offices.length === 0 || !offices.some((office) => activeOfficeAssignments.has(office))) return false;
+    }
+    return true;
+  }), [events, activeLayers, activeCalendarScopes, activeDepartmentIds, activeOfficeAssignments]);
+
+  function addLayer(layerName: string, color: string) {
+    const nextLayer = layerName.trim();
+    if (!nextLayer) return;
+    setCustomLayers((current) => current.includes(nextLayer) || BASE_LAYERS.includes(nextLayer) ? current : [...current, nextLayer]);
+    setLayerColors((current) => ({ ...current, [nextLayer]: color }));
+    setActiveLayers((current) => new Set([...current, nextLayer]));
+  }
+
+  function updateLayerColor(layerName: string, color: string) {
+    setLayerColors((current) => ({ ...current, [layerName]: color }));
+  }
 
   function toggleLayer(l: CalendarLayer) {
     setActiveLayers((prev) => {
@@ -391,16 +727,42 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
     setActiveDepartmentIds((current) => {
       const next = new Set(current ?? departmentFilterOptions.map((option) => option.id));
       if (next.has(id)) next.delete(id); else next.add(id);
+      if (id === 'ISD' && !next.has('ISD')) setActiveOfficeAssignments(null);
       return next.size === departmentFilterOptions.length ? null : next;
+    });
+  }
+
+  function toggleOfficeFilter(office: string) {
+    setActiveOfficeAssignments((current) => {
+      const next = new Set(current ?? OFFICE_ASSIGNMENTS);
+      if (next.has(office)) next.delete(office); else next.add(office);
+      return next.size === OFFICE_ASSIGNMENTS.length ? null : next;
+    });
+    setActiveDepartmentIds((current) => {
+      const next = new Set(current ?? departmentFilterOptions.map((option) => option.id));
+      next.add('ISD');
+      return next.size === departmentFilterOptions.length ? null : next;
+    });
+  }
+
+  function toggleCalendarScope(scope: CalendarScope) {
+    setActiveCalendarScopes((current) => {
+      const next = new Set(current);
+      if (next.has(scope)) next.delete(scope); else next.add(scope);
+      return next;
     });
   }
 
   function selectAllDepartments() {
     setActiveDepartmentIds(null);
+    setActiveOfficeAssignments(null);
+    setActiveCalendarScopes(new Set(CALENDAR_SCOPE_OPTIONS));
   }
 
   function clearDepartmentFilters() {
     setActiveDepartmentIds(new Set());
+    setActiveOfficeAssignments(new Set());
+    setActiveCalendarScopes(new Set());
   }
 
   const monthDays = useMemo(() => {
@@ -412,7 +774,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
   const weekDays = useMemo(() => eachDayOfInterval({ start: startOfWeek(cursor), end: endOfWeek(cursor) }), [cursor]);
 
   function eventsOnDay(day: Date) {
-    return visibleEvents.filter((e) => isSameDay(parseISO(e.start), day)).sort((a, b) => a.start.localeCompare(b.start));
+    return visibleEvents.filter((e) => eventTouchesDay(e, day)).sort((a, b) => a.start.localeCompare(b.start));
   }
 
   function goPrev() {
@@ -426,18 +788,23 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
     setSelectedDate(new Date());
   }
 
-  const agendaEvents = useMemo(() => visibleEvents.filter((e) => new Date(e.start) >= new Date(new Date().setHours(0, 0, 0, 0))).sort((a, b) => a.start.localeCompare(b.start)).slice(0, compact ? 6 : 40), [visibleEvents, compact]);
+  const agendaEvents = useMemo(() => {
+    const todayStart = new Date(new Date().setHours(0, 0, 0, 0));
+    return visibleEvents.filter((e) => parseISO(e.end) >= todayStart).sort((a, b) => a.start.localeCompare(b.start)).slice(0, compact ? 6 : 40);
+  }, [visibleEvents, compact]);
+  const eventColor = (event: CalendarEvent) => layerColors[event.layer] ?? event.color ?? layerColor(event.layer, layerColors);
 
-  function handleSaveEvent(v: { title: string; layer: CalendarLayer; date: string; startTime: string; endTime: string; location: string; description: string; departmentIds: string[]; visibility: CalendarEvent['visibility']; visibleToUsernames: string[]; attachments: NonNullable<CalendarEvent['attachments']> }) {
+  function handleSaveEvent(v: { title: string; layer: CalendarLayer; color: string; date: string; endDate: string; startTime: string; endTime: string; location: string; description: string; departmentIds: string[]; officeAssignment: string; visibility: CalendarEvent['visibility']; visibleToUsernames: string[]; attachments: NonNullable<CalendarEvent['attachments']> }) {
     const start = `${v.date}T${v.startTime}:00`;
-    const end = `${v.date}T${v.endTime}:00`;
+    const end = `${v.endDate}T${v.endTime}:00`;
     const departmentIds = v.departmentIds as DepartmentId[];
     const departmentId = departmentIds[0] as DepartmentId | undefined;
+    updateLayerColor(v.layer, v.color);
     if (editingEvent) {
-      updatePersonalEvent(editingEvent.id, { title: v.title, layer: v.layer, start, end, location: v.location, description: v.description, departmentIds, departmentId, visibility: v.visibility, visibleToUsernames: v.visibleToUsernames, attachments: v.attachments });
+      updatePersonalEvent(editingEvent.id, { title: v.title, layer: v.layer, color: v.color, start, end, location: v.location, description: v.description, departmentIds, departmentId, officeAssignment: v.officeAssignment, visibility: v.visibility, visibleToUsernames: v.visibleToUsernames, attachments: v.attachments });
       toast({ kind: 'success', title: 'Event updated' });
     } else {
-      addPersonalEvent({ title: v.title, start, end, location: v.location, description: v.description, departmentIds, departmentId, visibility: v.visibility, visibleToUsernames: v.visibleToUsernames, attachments: v.attachments, layer: v.layer });
+      addPersonalEvent({ title: v.title, start, end, location: v.location, description: v.description, departmentIds, departmentId, officeAssignment: v.officeAssignment, visibility: v.visibility, visibleToUsernames: v.visibleToUsernames, attachments: v.attachments, layer: v.layer, color: v.color });
       toast({ kind: 'success', title: 'Personal event created' });
     }
     setFormOpen(false);
@@ -509,9 +876,25 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
 
       <div className="mb-3 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex flex-wrap gap-1.5">
-          {ALL_LAYERS.map((l) => (
-            <Pill key={l} label={l} active={activeLayers.has(l)} onClick={() => toggleLayer(l)} />
-          ))}
+          {calendarLayers.map((l) => {
+            const color = layerColor(l, layerColors);
+            const active = activeLayers.has(l);
+            return (
+              <button
+                key={l}
+                onClick={() => toggleLayer(l)}
+                aria-pressed={active}
+                className="rounded-full border px-3 py-1 text-xs font-medium transition-colors"
+                style={{
+                  borderColor: active ? color : `${color}66`,
+                  backgroundColor: active ? color : `${color}1a`,
+                  color: active ? '#ffffff' : color,
+                }}
+              >
+                {l}
+              </button>
+            );
+          })}
         </div>
         <div className="relative shrink-0">
           <Button
@@ -524,27 +907,69 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
             Department: {departmentFilterLabel}
           </Button>
           {departmentMenuOpen && (
-            <div id="calendar-department-filter" className="absolute right-0 z-30 mt-2 w-72 rounded-lg border border-slate-200 bg-surface p-3 shadow-xl">
+            <div id="calendar-department-filter" className="absolute right-0 z-30 mt-2 w-80 rounded-lg border border-slate-200 bg-surface p-3 shadow-xl">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Filter departments</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Filter calendar</p>
                 <div className="flex gap-1">
                   <button type="button" onClick={selectAllDepartments} className="rounded px-2 py-1 text-[11px] font-medium text-brand-600 hover:bg-brand-50">All</button>
                   <button type="button" onClick={clearDepartmentFilters} className="rounded px-2 py-1 text-[11px] font-medium text-slate-500 hover:bg-slate-100">Clear</button>
                 </div>
               </div>
+              <div className="mb-2 rounded-md border border-slate-100 bg-slate-50/60 p-2">
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Personal / shared</p>
+                <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={activeCalendarScopes.has('my')}
+                    onChange={() => toggleCalendarScope('my')}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+                  />
+                  <span><span className="font-medium text-slate-700">My Calendar</span><span className="block text-slate-400">Events marked “Me”</span></span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={activeCalendarScopes.has('our')}
+                    onChange={() => toggleCalendarScope('our')}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+                  />
+                  <span><span className="font-medium text-slate-700">Our Calendar</span><span className="block text-slate-400">Events shared with specific people</span></span>
+                </label>
+              </div>
               <div className="max-h-64 overflow-y-auto pr-1">
                 {departmentFilterOptions.map((department) => {
                   const checked = activeDepartmentIds ? activeDepartmentIds.has(department.id) : true;
                   return (
-                    <label key={department.id} className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleDepartmentFilter(department.id)}
-                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
-                      />
-                      <span className="font-medium text-slate-700">{department.name}</span>
-                    </label>
+                    <div key={department.id}>
+                      <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleDepartmentFilter(department.id)}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+                        />
+                        <span className="font-medium text-slate-700">{department.name}</span>
+                      </label>
+                      {department.id === 'ISD' && checked && (
+                        <div className="ml-5 border-l border-slate-200 pl-2">
+                          <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Different offices</p>
+                          {OFFICE_ASSIGNMENTS.map((office) => {
+                            const officeChecked = activeOfficeAssignments ? activeOfficeAssignments.has(office) : true;
+                            return (
+                              <label key={office} className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50">
+                                <input
+                                  type="checkbox"
+                                  checked={officeChecked}
+                                  onChange={() => toggleOfficeFilter(office)}
+                                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
+                                />
+                                <span className="font-medium text-slate-600">{office}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -582,11 +1007,14 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
                     {format(day, 'd')}
                   </span>
                   <div className="flex w-full flex-col gap-0.5">
-                    {dayEvents.slice(0, compact ? 2 : large ? 5 : 3).map((e) => (
-                      <span key={e.id} onClick={(ev) => { ev.stopPropagation(); setDetailEvent(e); }} className={cn('flex items-center gap-1 truncate rounded px-1 py-0.5 font-medium hover:bg-surface', large ? 'text-[11px] py-1' : 'text-[10px]')} style={{ backgroundColor: `${e.color}1a`, color: e.color }}>
-                        <EventDot color={e.color} /> {e.done && <ThumbsUp className="h-3 w-3 shrink-0" />} <span className={cn('truncate', e.done && 'line-through opacity-75')}>{e.title}</span>
+                    {dayEvents.slice(0, compact ? 2 : large ? 5 : 3).map((e) => {
+                      const color = eventColor(e);
+                      return (
+                      <span key={e.id} onClick={(ev) => { ev.stopPropagation(); setDetailEvent(e); }} className={cn('flex items-center gap-1 truncate rounded px-1 py-0.5 font-medium hover:bg-surface', large ? 'text-[11px] py-1' : 'text-[10px]')} style={{ backgroundColor: `${color}1a`, color }}>
+                        <EventDot color={color} /> {e.done && <ThumbsUp className="h-3 w-3 shrink-0" />} <span className={cn('truncate', e.done && 'line-through opacity-75')}>{e.title}</span>
                       </span>
-                    ))}
+                      );
+                    })}
                     {dayEvents.length > (compact ? 2 : large ? 5 : 3) && <span className="text-[10px] text-slate-400">+{dayEvents.length - (compact ? 2 : large ? 5 : 3)} more</span>}
                   </div>
                 </button>
@@ -607,13 +1035,16 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
                   <p className="text-xs text-slate-400">No events scheduled.</p>
                 ) : (
                   <div className="space-y-1">
-                    {dayEvents.map((e) => (
-                      <button key={e.id} onClick={() => setDetailEvent(e)} className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-surface" style={{ backgroundColor: `${e.color}12` }}>
-                        <EventDot color={e.color} />
+                    {dayEvents.map((e) => {
+                      const color = eventColor(e);
+                      return (
+                      <button key={e.id} onClick={() => setDetailEvent(e)} className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-surface" style={{ backgroundColor: `${color}12` }}>
+                        <EventDot color={color} />
                         <span className="font-medium text-slate-700">{format(parseISO(e.start), 'h:mm a')}</span>
                         <span className="truncate text-slate-600">{e.title}</span>
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -635,7 +1066,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
                   <p className="truncate text-sm font-medium text-slate-800">{e.title}</p>
                   <p className="truncate text-xs text-slate-500">{format(parseISO(e.start), 'h:mm a')} · {e.layer}{e.location ? ` · ${e.location}` : ''}</p>
                 </div>
-                <EventDot color={e.color} />
+                <EventDot color={eventColor(e)} />
               </button>
             ))}
           </div>
@@ -651,7 +1082,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
             <div className="space-y-1">
               {eventsOnDay(selectedDate).map((e) => (
                 <button key={e.id} onClick={() => setDetailEvent(e)} className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-slate-50">
-                  <EventDot color={e.color} /> <span className="font-medium">{format(parseISO(e.start), 'h:mm a')}</span> <span className="truncate text-slate-600">{e.title}</span>
+                  <EventDot color={eventColor(e)} /> <span className="font-medium">{format(parseISO(e.start), 'h:mm a')}</span> <span className="truncate text-slate-600">{e.title}</span>
                 </button>
               ))}
             </div>
@@ -674,18 +1105,23 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
       >
         {detailEvent && (
           <div className="space-y-3 text-sm">
-            <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium" style={{ backgroundColor: `${detailEvent.color}1a`, color: detailEvent.color }}>
-              <EventDot color={detailEvent.color} /> {detailEvent.layer}
+            <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium" style={{ backgroundColor: `${eventColor(detailEvent)}1a`, color: eventColor(detailEvent) }}>
+              <EventDot color={eventColor(detailEvent)} /> {detailEvent.layer}
             </span>
             {detailEvent.done && (
               <p className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 p-2 text-xs font-medium text-green-700">
                 <ThumbsUp className="h-3.5 w-3.5" /> Done{detailEvent.doneBy ? ` by ${detailEvent.doneBy}` : ''}{detailEvent.doneAt ? ` · ${format(parseISO(detailEvent.doneAt), 'MMM d, yyyy h:mm a')}` : ''}
               </p>
             )}
-            <p className="text-slate-600">{format(parseISO(detailEvent.start), 'EEEE, MMMM d, yyyy · h:mm a')} – {format(parseISO(detailEvent.end), 'h:mm a')}</p>
+            <p className="text-slate-600">
+              {format(parseISO(detailEvent.start), 'EEEE, MMMM d, yyyy · h:mm a')} – {isSameDay(parseISO(detailEvent.start), parseISO(detailEvent.end)) ? format(parseISO(detailEvent.end), 'h:mm a') : format(parseISO(detailEvent.end), 'EEEE, MMMM d, yyyy · h:mm a')}
+            </p>
             <p className="flex items-center gap-2 text-slate-600">
               <MapPin className="h-4 w-4 text-slate-400" /> Departments: {eventDepartmentIds(detailEvent).map((id) => departmentNameById.get(id) ?? id).join(', ') || 'Not assigned'}
             </p>
+            {detailEvent.officeAssignment && (
+              <p className="flex items-center gap-2 text-slate-600"><MapPin className="h-4 w-4 text-slate-400" /> Offices: {detailEvent.officeAssignment}</p>
+            )}
             {detailEvent.location && <p className="flex items-center gap-2 text-slate-600"><MapPin className="h-4 w-4 text-slate-400" /> {detailEvent.location}</p>}
             {detailEvent.meetingLink && <p className="flex items-center gap-2 text-brand-600"><Video className="h-4 w-4" /> {detailEvent.meetingLink}</p>}
             {detailEvent.attendees && <p className="flex items-center gap-2 text-slate-600"><Users className="h-4 w-4 text-slate-400" /> {detailEvent.attendees.join(', ')}</p>}
@@ -718,6 +1154,10 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
           onDelete={editingEvent ? () => { setDeleteTarget(editingEvent); setFormOpen(false); setEditingEvent(null); setNewEventDate(null); } : undefined}
           onSave={handleSaveEvent}
           existingEvents={visibleEvents}
+          layers={calendarLayers}
+          layerColors={layerColors}
+          onAddLayer={addLayer}
+          onLayerColorChange={updateLayerColor}
         />
       </Dialog>
 

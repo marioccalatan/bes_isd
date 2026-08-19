@@ -82,7 +82,7 @@ interface DataContextValue {
   clockedIn: boolean;
 
   // Calendar
-  addPersonalEvent: (e: Omit<CalendarEvent, 'id' | 'editable' | 'color' | 'ownerId'>) => void;
+  addPersonalEvent: (e: Omit<CalendarEvent, 'id' | 'editable' | 'ownerId'>) => void;
   updatePersonalEvent: (id: string, patch: Partial<CalendarEvent>) => void;
   deletePersonalEvent: (id: string) => void;
   toggleEventDone: (id: string, done: boolean) => void;
@@ -250,8 +250,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }
 
   // --- Calendar ---
-  async function addPersonalEvent(e: Omit<CalendarEvent, 'id' | 'editable' | 'color' | 'ownerId'>) {
-    const newEvent: CalendarEvent = { ...e, id: `EVT-P-${Date.now()}`, editable: true, color: '#475569', ownerId: user?.username ?? CURRENT_EMPLOYEE.id };
+  async function addPersonalEvent(e: Omit<CalendarEvent, 'id' | 'editable' | 'ownerId'>) {
+    const newEvent: CalendarEvent = { ...e, id: `EVT-P-${Date.now()}`, editable: true, color: e.color ?? '#475569', ownerId: user?.username ?? CURRENT_EMPLOYEE.id };
     setEvents((prev) => [...prev, newEvent]);
     logAction(CURRENT_EMPLOYEE.name, 'Created personal calendar event', newEvent.title, 'Data Change');
     if (!token) return;

@@ -153,7 +153,7 @@ export async function fetchCalendarEvents(token?: string) {
   return result.events;
 }
 
-export async function createCalendarEvent(token: string, event: Omit<CalendarEvent, 'id' | 'editable' | 'color' | 'ownerId'>) {
+export async function createCalendarEvent(token: string, event: Omit<CalendarEvent, 'id' | 'editable' | 'ownerId'>) {
   return apiRequest<{ event: CalendarEvent }>('/api/calendar/events', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
