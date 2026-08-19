@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { visibleNavItems } from '@/lib/nav';
+import { loadSidebarModuleAccess, visibleNavItems } from '@/lib/nav';
 import { useRolePreview } from '@/context/RolePreviewContext';
 import { useData } from '@/context/DataContext';
+import { useAuth } from '@/context/AuthContext';
 import { CURRENT_EMPLOYEE } from '@/lib/mockData';
 import benecoLogo from '@/assets/brand/beneco-logo.png';
 
@@ -24,12 +26,24 @@ function Logo({ collapsed }: { collapsed?: boolean }) {
 }
 
 function NavList({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
-  const { effectiveRole } = useRolePreview();
+  const { effectiveRole, previewDepartmentId } = useRolePreview();
+  const { user } = useAuth();
   const { emails, chatMessages } = useData();
-  const items = visibleNavItems(effectiveRole);
+  const [moduleAccess, setModuleAccess] = useState(() => loadSidebarModuleAccess());
+  const items = visibleNavItems(effectiveRole, previewDepartmentId ?? user?.departmentCode, moduleAccess);
   const unreadMail = emails.filter((m) => m.folder === 'inbox' && !m.read).length;
   const unreadChat = chatMessages.filter((m) => m.senderId !== CURRENT_EMPLOYEE.id && !m.read).length;
   const inboxUnread = unreadMail + unreadChat;
+
+  useEffect(() => {
+    const refresh = () => setModuleAccess(loadSidebarModuleAccess());
+    window.addEventListener('storage', refresh);
+    window.addEventListener('bes-sidebar-access-changed', refresh);
+    return () => {
+      window.removeEventListener('storage', refresh);
+      window.removeEventListener('bes-sidebar-access-changed', refresh);
+    };
+  }, []);
 
   return (
     <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 py-3 scrollbar-thin" aria-label="Primary">

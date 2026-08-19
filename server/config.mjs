@@ -13,6 +13,7 @@ export const config = {
   user: process.env.ORACLE_USER ?? 'BES_ISD',
   password: process.env.ORACLE_PASSWORD,
   connectString: process.env.ORACLE_CONNECT_STRING ?? 'localhost:1521/FREEPDB1',
+  host: process.env.API_HOST ?? '127.0.0.1',
   port: Number(process.env.API_PORT ?? 3001),
 };
 

@@ -3,17 +3,19 @@ import { useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
   Menu, Search, Plus, Bell, HelpCircle, ChevronDown, LogOut, User, Eye,
-  Info, PlayCircle, X as XIcon, Sun, Moon, Monitor, Mail, Palette, Check,
+  Info, PlayCircle, X as XIcon, Sun, Moon, Monitor, Palette, Check,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useData } from '@/context/DataContext';
 import { useUI } from '@/context/UIContext';
 import { useTheme, type ThemeMode } from '@/context/ThemeContext';
-import { useRolePreview, PREVIEWABLE_ROLES, DEPARTMENT_MANAGER_OPTIONS } from '@/context/RolePreviewContext';
+import { useRolePreview, PREVIEWABLE_ROLES, DEPARTMENT_MANAGER_OPTIONS, ISD_PREVIEW_OPTIONS } from '@/context/RolePreviewContext';
 import { CURRENT_EMPLOYEE } from '@/lib/mockData';
 import { buildSearchResults, type SearchResult } from '@/lib/search';
-import { SERVICES, QUICK_CREATE_ITEMS } from '@/lib/services';
+import { SERVICES } from '@/lib/services';
 import { cn, initials, timeAgo } from '@/lib/utils';
+import { canSeeAdministration } from '@/lib/permissions';
+import type { AppRole } from '@/lib/types';
 import { DropdownMenu, DropdownItem, DropdownSeparator, DropdownLabel } from '@/components/ui/dropdown';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -24,7 +26,7 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const data = useData();
   const { setAboutOpen, startTour } = useUI();
   const { mode, resolvedTheme, accentTheme, accentThemes, setMode, setAccentTheme } = useTheme();
-  const { effectiveRole, isPreviewing, previewDepartmentId, previewLabel, setPreviewRole, setPreviewDepartmentManager, returnToAdministrator } = useRolePreview();
+  const { effectiveRole, isPreviewing, previewDepartmentId, previewLabel, setPreviewRole, setPreviewDepartmentManager, setPreviewPersona, returnToAdministrator } = useRolePreview();
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -58,6 +60,8 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const profileName = user?.name ?? CURRENT_EMPLOYEE.name;
   const profilePosition = user?.position ?? CURRENT_EMPLOYEE.position;
   const profileRole = user?.role ?? 'Administrator';
+  const signedInAsAdministrator = canSeeAdministration(profileRole as AppRole) || (user?.roles ?? []).some((role) => role.startsWith('Administrator'));
+  const showRolePreviewMenu = signedInAsAdministrator && !isPreviewing;
   const profilePhoto = user?.profilePhoto;
 
   function goTo(to: string) {
@@ -117,21 +121,9 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
         }
       >
         {(close) => (
-          <>
-            <DropdownLabel>File a Request</DropdownLabel>
-            {QUICK_CREATE_ITEMS.map((s) => (
-              <DropdownItem key={s.id} onClick={() => { close(); navigate(s.processType ? `/requests/new/${s.processType}` : s.to); }}>
-                <s.icon className="h-4 w-4 text-slate-400" /> {s.name}
-              </DropdownItem>
-            ))}
-            <DropdownSeparator />
-            <DropdownItem onClick={() => { close(); navigate('/calendar?new=1'); }}>
-              <Plus className="h-4 w-4 text-slate-400" /> New Calendar Event
-            </DropdownItem>
-            <DropdownItem onClick={() => { close(); navigate('/inbox?compose=1'); }}>
-              <Mail className="h-4 w-4 text-slate-400" /> Compose Email
-            </DropdownItem>
-          </>
+          <DropdownItem onClick={() => { close(); navigate('/calendar?new=1'); }}>
+            <Plus className="h-4 w-4 text-slate-400" /> New Calendar Event
+          </DropdownItem>
         )}
       </DropdownMenu>
 
@@ -210,39 +202,60 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
             <DropdownItem onClick={() => { close(); navigate('/profile'); }}>
               <User className="h-4 w-4 text-slate-400" /> View Profile
             </DropdownItem>
-            <DropdownSeparator />
-            <DropdownLabel>View BES As (Role Preview)</DropdownLabel>
-            {PREVIEWABLE_ROLES.map((role) => {
-              if (role === 'Department Manager') {
-                return (
-                  <div key={role}>
-                    <p className="px-2.5 pb-0.5 pt-1.5 text-xs font-medium text-slate-500">Department Manager</p>
-                    {DEPARTMENT_MANAGER_OPTIONS.map((opt) => {
-                      const active = effectiveRole === 'Department Manager' && previewDepartmentId === opt.departmentId;
-                      return (
-                        <DropdownItem
-                          key={opt.departmentId}
-                          onClick={() => { close(); setPreviewDepartmentManager(opt.departmentId); }}
-                          className={cn('pl-6', active ? 'bg-brand-50 text-brand-700' : '')}
-                        >
-                          <Eye className="h-4 w-4 text-slate-400" />
-                          <span className="min-w-0">
-                            <span className="block truncate">{opt.departmentName}</span>
-                            <span className="block truncate text-[11px] text-slate-400">{opt.managerName}</span>
-                          </span>
-                        </DropdownItem>
-                      );
-                    })}
-                  </div>
-                );
-              }
-              return (
-                <DropdownItem key={role} onClick={() => { close(); setPreviewRole(role); }} className={effectiveRole === role ? 'bg-brand-50 text-brand-700' : ''}>
-                  <Eye className="h-4 w-4 text-slate-400" /> {role}
-                </DropdownItem>
-              );
-            })}
-            {isPreviewing && (
+            {(showRolePreviewMenu || isPreviewing) && <DropdownSeparator />}
+            {showRolePreviewMenu && (
+              <>
+                <DropdownLabel>View BES As (Role Preview)</DropdownLabel>
+                <p className="px-2.5 pb-0.5 pt-1.5 text-xs font-medium text-slate-500">Institutional Services Department</p>
+                {ISD_PREVIEW_OPTIONS.map((opt) => {
+                  const active = effectiveRole === opt.role && previewDepartmentId === opt.departmentId && previewLabel.includes(opt.office);
+                  return (
+                    <DropdownItem
+                      key={opt.id}
+                      onClick={() => { close(); setPreviewPersona(opt.role, opt.departmentId, `${opt.role} — ${opt.office}`); }}
+                      className={cn('pl-6', active ? 'bg-brand-50 text-brand-700' : '')}
+                    >
+                      <Eye className="h-4 w-4 text-slate-400" />
+                      <span className="min-w-0">
+                        <span className="block truncate">{opt.office}</span>
+                        <span className="block truncate text-[11px] text-slate-400">{opt.name} · {opt.position} · {opt.role}</span>
+                      </span>
+                    </DropdownItem>
+                  );
+                })}
+                {PREVIEWABLE_ROLES.map((role) => {
+                  if (role === 'Department Manager') {
+                    return (
+                      <div key={role}>
+                        <p className="px-2.5 pb-0.5 pt-1.5 text-xs font-medium text-slate-500">Department Manager</p>
+                        {DEPARTMENT_MANAGER_OPTIONS.map((opt) => {
+                          const active = effectiveRole === 'Department Manager' && previewDepartmentId === opt.departmentId;
+                          return (
+                            <DropdownItem
+                              key={opt.departmentId}
+                              onClick={() => { close(); setPreviewDepartmentManager(opt.departmentId); }}
+                              className={cn('pl-6', active ? 'bg-brand-50 text-brand-700' : '')}
+                            >
+                              <Eye className="h-4 w-4 text-slate-400" />
+                              <span className="min-w-0">
+                                <span className="block truncate">{opt.departmentName}</span>
+                                <span className="block truncate text-[11px] text-slate-400">{opt.managerName} · {opt.position}</span>
+                              </span>
+                            </DropdownItem>
+                          );
+                        })}
+                      </div>
+                    );
+                  }
+                  return (
+                    <DropdownItem key={role} onClick={() => { close(); setPreviewRole(role); }} className={effectiveRole === role ? 'bg-brand-50 text-brand-700' : ''}>
+                      <Eye className="h-4 w-4 text-slate-400" /> {role}
+                    </DropdownItem>
+                  );
+                })}
+              </>
+            )}
+            {isPreviewing && signedInAsAdministrator && (
               <DropdownItem onClick={() => { close(); returnToAdministrator(); }} className="font-semibold text-brand-700">
                 <XIcon className="h-4 w-4" /> Return to Administrator
               </DropdownItem>

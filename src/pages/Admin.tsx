@@ -21,9 +21,9 @@ import { CLASS_STYLES_LIST } from '@/lib/docClassifications';
 import { WORKFLOWS } from '@/lib/workflows';
 import { PROCESS_DEFS } from '@/lib/processDefs';
 import { getToolIcon } from '@/lib/toolIcons';
+import { NAV_ITEMS, defaultSidebarModuleAccess, loadSidebarModuleAccess, saveSidebarModuleAccess, type SidebarModuleAccess } from '@/lib/nav';
 import { deleteAdminUser, fetchAdminUsers, fetchRolePermissionConfig, updateAdminUser, type AdminUser, type RolePermissionConfig, type UserRoleAssignmentInput } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
-import Governance from './Governance';
 import type { AppTool, AuditLogEntry, DepartmentId, Employee, ToolAccessLevel } from '@/lib/types';
 
 const TABS = [
@@ -231,6 +231,8 @@ export default function Admin() {
   const [templateEdit, setTemplateEdit] = useState<typeof NOTIFICATION_TEMPLATES[number] | null>(null);
   const [toolEdit, setToolEdit] = useState<AppTool | null>(null);
   const [toolSearch, setToolSearch] = useState('');
+  const [moduleSearch, setModuleSearch] = useState('');
+  const [moduleAccess, setModuleAccess] = useState<SidebarModuleAccess>(() => loadSidebarModuleAccess());
   const [quotaEdit, setQuotaEdit] = useState<Employee | null>(null);
 
   async function loadOracleUsers(cancelled?: () => boolean) {
@@ -411,6 +413,38 @@ export default function Admin() {
     ) },
   ];
 
+  const filteredSidebarModules = useMemo(() => {
+    const q = moduleSearch.trim().toLowerCase();
+    if (!q) return NAV_ITEMS;
+    return NAV_ITEMS.filter((item) => item.label.toLowerCase().includes(q) || item.to.toLowerCase().includes(q));
+  }, [moduleSearch]);
+
+  const currentDepartmentCode = user?.departmentCode as DepartmentId | undefined;
+  const currentDepartmentEnabledCount = currentDepartmentCode
+    ? NAV_ITEMS.filter((item) => !item.adminOnly && (moduleAccess[item.to] ?? []).includes(currentDepartmentCode)).length
+    : 0;
+  const standardSidebarModuleCount = NAV_ITEMS.filter((item) => !item.adminOnly).length;
+
+  function updateModuleDepartmentAccess(modulePath: string, departmentId: DepartmentId, checked: boolean) {
+    const previous = moduleAccess[modulePath] ?? [];
+    const nextDepartments = checked
+      ? Array.from(new Set([...previous, departmentId]))
+      : previous.filter((id) => id !== departmentId);
+    const nextAccess = saveSidebarModuleAccess({ ...moduleAccess, [modulePath]: nextDepartments });
+    setModuleAccess(nextAccess);
+  }
+
+  function setModuleForAllDepartments(modulePath: string, enabled: boolean) {
+    const nextAccess = saveSidebarModuleAccess({ ...moduleAccess, [modulePath]: enabled ? departments.map((d) => d.id) : [] });
+    setModuleAccess(nextAccess);
+  }
+
+  function resetSidebarModuleAccess() {
+    const nextAccess = saveSidebarModuleAccess(defaultSidebarModuleAccess());
+    setModuleAccess(nextAccess);
+    toast({ kind: 'success', title: 'Sidebar access reset', description: 'All standard sidebar modules are available to all departments again.' });
+  }
+
   const orgEvents = events.filter((e) => !e.editable);
 
   return (
@@ -523,7 +557,101 @@ export default function Admin() {
         </Card>
       )}
 
-      {tab === 'modules' && <Governance />}
+      {tab === 'modules' && (
+        <div className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-xs text-slate-500">Sidebar Items</p>
+                <p className="mt-1 text-2xl font-bold text-slate-800">{NAV_ITEMS.length}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-xs text-slate-500">Department-Controlled</p>
+                <p className="mt-1 text-2xl font-bold text-brand-600">{standardSidebarModuleCount}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-xs text-slate-500">{currentDepartmentCode ?? 'Current Dept.'} Enabled</p>
+                <p className="mt-1 text-2xl font-bold text-gold-700">{currentDepartmentEnabledCount}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader className="flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2"><LayoutGrid className="h-4 w-4" /> Sidebar Module Registry</CardTitle>
+                <p className="mt-1 text-xs text-slate-500">
+                  This registry mirrors every item in the left sidebar. Choose which departments can see each module; Administrator accounts always see everything.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={resetSidebarModuleAccess}><RotateCcw className="h-3.5 w-3.5" /> Reset Defaults</Button>
+            </CardHeader>
+            <CardContent>
+              <Toolbar search={moduleSearch} onSearchChange={setModuleSearch} placeholder="Search sidebar modules…" />
+              <div className="space-y-2">
+                {filteredSidebarModules.map((item) => {
+                  const Icon = item.icon;
+                  const enabledDepartments = moduleAccess[item.to] ?? [];
+                  return (
+                    <div key={item.to} className="rounded-lg border border-slate-100 p-3">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="flex min-w-0 items-start gap-2.5">
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><Icon className="h-4.5 w-4.5" /></span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-800">{item.label}</p>
+                            <p className="font-mono text-xs text-slate-400">{item.to}</p>
+                            <div className="mt-1 flex flex-wrap gap-1.5">
+                              {item.adminOnly ? (
+                                <Badge className="border-gold-200 bg-gold-50 text-gold-800">Administrator only</Badge>
+                              ) : (
+                                <>
+                                  <Badge className="border-brand-200 bg-brand-50 text-brand-700">{enabledDepartments.length} departments enabled</Badge>
+                                  {currentDepartmentCode && enabledDepartments.includes(currentDepartmentCode) && <Badge>{currentDepartmentCode} visible</Badge>}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {item.adminOnly ? (
+                          <div className="rounded-lg border border-gold-200 bg-gold-50 px-3 py-2 text-xs text-gold-800 lg:max-w-xs">
+                            Protected module. It is hidden from department menus and shown only to users with Administrator access.
+                          </div>
+                        ) : (
+                          <div className="min-w-0 flex-1 lg:max-w-2xl">
+                            <div className="mb-2 flex flex-wrap gap-1.5">
+                              <Button variant="ghost" size="sm" onClick={() => setModuleForAllDepartments(item.to, true)}>Enable all</Button>
+                              <Button variant="ghost" size="sm" onClick={() => setModuleForAllDepartments(item.to, false)}>Disable all</Button>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                              {departments.map((department) => (
+                                <label key={department.id} className="flex cursor-pointer items-start gap-2 rounded-md border border-slate-100 bg-slate-50 px-2.5 py-2 text-sm text-slate-700 transition hover:border-brand-200 hover:bg-brand-50">
+                                  <Checkbox
+                                    checked={enabledDepartments.includes(department.id)}
+                                    onChange={(event) => updateModuleDepartmentAccess(item.to, department.id, event.target.checked)}
+                                  />
+                                  <span className="min-w-0">
+                                    <span className="block font-medium text-slate-800">{department.shortName}</span>
+                                    <span className="block truncate text-xs text-slate-500">{department.name}</span>
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {tab === 'tools' && (
         <Card>

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "node server/index.mjs",
+    "start": "node server/index.mjs",
     "db:init": "node server/init-db.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",

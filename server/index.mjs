@@ -1,4 +1,7 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { config } from './config.mjs';
 import { initializeDatabase, withConnection } from './db.mjs';
 import { createOpaqueToken, hashPassword, hashToken, verifyPassword } from './security.mjs';
@@ -6,6 +9,43 @@ import { createOpaqueToken, hashPassword, hashToken, verifyPassword } from './se
 const json = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
   res.end(JSON.stringify(body));
+};
+const distRoot = path.resolve('dist');
+const contentTypes = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+const serveStatic = async (req, res) => {
+  if (!['GET', 'HEAD'].includes(req.method ?? '')) return json(res, 405, { error: 'Method not allowed' });
+  if (!fs.existsSync(distRoot)) return json(res, 404, { error: 'Frontend build not found. Run npm run build first.' });
+
+  const url = new URL(req.url || '/', 'http://localhost');
+  const requested = decodeURIComponent(url.pathname);
+  const safePath = path.normalize(requested).replace(/^(\.\.[\\/])+/, '');
+  let filePath = path.join(distRoot, safePath === '/' ? 'index.html' : safePath);
+  if (!filePath.startsWith(distRoot)) return json(res, 403, { error: 'Forbidden' });
+
+  try {
+    const stat = await fsp.stat(filePath);
+    if (stat.isDirectory()) filePath = path.join(filePath, 'index.html');
+  } catch {
+    filePath = path.join(distRoot, 'index.html');
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const body = await fsp.readFile(filePath);
+  res.writeHead(200, { 'content-type': contentTypes[ext] ?? 'application/octet-stream' });
+  if (req.method === 'HEAD') return res.end();
+  return res.end(body);
 };
 const readBody = async (req) => {
   let raw = '';
@@ -224,7 +264,7 @@ async function currentSessionUser(connection, token) {
 const isTaskModerator = (user) => ['Department Manager', 'Secretary', 'Administrator'].includes(user?.APP_ROLE);
 
 async function handle(req, res) {
-  if (!req.url?.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
+  if (!req.url?.startsWith('/api/')) return serveStatic(req, res);
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
     if (req.method === 'GET' && req.url === '/api/health') {
@@ -1124,4 +1164,4 @@ async function handle(req, res) {
 }
 
 await initializeDatabase();
-http.createServer(handle).listen(config.port, '127.0.0.1', () => console.log(`BES API listening on http://127.0.0.1:${config.port}`));
+http.createServer(handle).listen(config.port, config.host, () => console.log(`BES server listening on http://${config.host}:${config.port}`));
