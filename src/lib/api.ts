@@ -1,4 +1,4 @@
-import type { AppTool, CalendarEvent, Comment, PolicyDocumentType, PolicyRecord, PolicyRecordNature, Priority, RecruitmentComment, RecruitmentRecord, RecruitmentStatus, WorkItem } from '@/lib/types';
+import type { AppTool, CalendarEvent, Comment, PolicyDocumentType, PolicyRecord, PolicyRecordNature, PolicyRecordStatus, Priority, RecruitmentComment, RecruitmentRecord, RecruitmentStatus, WorkItem } from '@/lib/types';
 
 export interface ApiUser {
   id: string; employeeNo: string; username: string; email: string; firstName: string;
@@ -154,6 +154,15 @@ export interface DatabaseSchemaSyncResult {
   tables: { tableName: string; created: boolean; addedColumns: string[] }[];
 }
 
+export interface DatabaseRuntimeStatus {
+  activeDatabase: 'local' | 'server';
+  local: { user: string; connectString: string };
+  server: { user: string; connectString: string } | null;
+  database?: string;
+  container?: string;
+  schema?: string;
+}
+
 export interface CalendarTaskInput {
   calendarEventId: string;
   controlNumber?: string;
@@ -219,6 +228,7 @@ export interface PolicyRecordInput {
   contents: string;
   nature: PolicyRecordNature;
   documentType: PolicyDocumentType;
+  status: PolicyRecordStatus;
 }
 
 export type PolicyTaskStatus = 'Received' | 'Under Review' | 'For Approval' | 'Approved' | 'Issued' | 'Completed' | 'Returned';
@@ -265,6 +275,20 @@ export async function fetchDatabaseSyncLocalTables(token: string) {
     headers: { authorization: `Bearer ${token}` },
   });
   return result;
+}
+
+export async function fetchDatabaseRuntime(token: string) {
+  return apiRequest<DatabaseRuntimeStatus>('/api/admin/database-runtime', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+export async function switchDatabaseRuntime(token: string, target: 'local' | 'server', connection?: OracleConnectionInput) {
+  return apiRequest<DatabaseRuntimeStatus>('/api/admin/database-runtime', {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ target, connection }),
+  });
 }
 
 export async function testDatabaseSyncConnection(token: string, connection: OracleConnectionInput) {

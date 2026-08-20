@@ -47,6 +47,7 @@ import {
   type UserRoleAssignmentInput,
 } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { DB_SYNC_SESSION_KEY, loadSyncConnection } from '@/lib/databaseRuntime';
 import type { AppTool, AuditLogEntry, DepartmentId, Employee, ToolAccessLevel } from '@/lib/types';
 
 const TABS = [
@@ -129,34 +130,6 @@ const emptyUserEditForm: UserEditForm = {
   role: 'Employee',
   roleAssignments: [],
 };
-
-const defaultSyncConnection: OracleConnectionInput = {
-  connectionName: 'BES Server Oracle',
-  connectionType: 'Basic',
-  host: '192.168.60.1',
-  port: '1521',
-  serviceName: 'ORCL',
-  mode: 'serviceName',
-  username: 'ISD',
-  password: '',
-  savePassword: false,
-};
-
-const DB_SYNC_SESSION_KEY = 'bes.database-sync.connection';
-
-function loadSyncConnection(): OracleConnectionInput {
-  if (typeof window === 'undefined') return defaultSyncConnection;
-  try {
-    const stored = window.sessionStorage.getItem(DB_SYNC_SESSION_KEY);
-    if (!stored) return defaultSyncConnection;
-    const parsed = JSON.parse(stored) as Partial<OracleConnectionInput>;
-    if (!parsed.savePassword) return defaultSyncConnection;
-    return { ...defaultSyncConnection, ...parsed, connectionType: 'Basic', savePassword: true };
-  } catch {
-    window.sessionStorage.removeItem(DB_SYNC_SESSION_KEY);
-    return defaultSyncConnection;
-  }
-}
 
 function toUserEditForm(user: AdminUser, roleConfig: RolePermissionConfig | null): UserEditForm {
   const assignments = (roleConfig?.assignments ?? [])
@@ -1354,10 +1327,15 @@ export default function Admin() {
                       <div><Label htmlFor="sync-username">User Name</Label><Input id="sync-username" value={syncConnection.username} onChange={(e) => updateSyncConnection({ username: e.target.value })} placeholder="ISD" /></div>
                       <div><Label htmlFor="sync-password">Password</Label><Input id="sync-password" type="password" value={syncConnection.password} onChange={(e) => updateSyncConnection({ password: e.target.value })} /></div>
                     </div>
-                    <label className="flex items-center gap-2 text-sm text-slate-600">
-                      <Checkbox checked={syncConnection.savePassword} onChange={(e) => updateSyncConnection({ savePassword: e.target.checked })} />
-                      Save password for this browser session
-                    </label>
+                    <div>
+                      <label className="flex items-center gap-2 text-sm text-slate-600">
+                        <Checkbox checked={syncConnection.savePassword} onChange={(e) => updateSyncConnection({ savePassword: e.target.checked })} />
+                        Save password for this browser session
+                      </label>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Required before the localhost Administrator sidebar can switch BES to this Server database.
+                      </p>
+                    </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button variant="outline" onClick={testSyncConnection} disabled={syncTesting}><PlugZap className="h-4 w-4" /> {syncTesting ? 'Testing...' : 'Test Connection'}</Button>
                       <Button variant="outline" onClick={loadDatabaseSyncTables} disabled={syncLoadingTables}><RefreshCw className="h-4 w-4" /> {syncLoadingTables ? 'Loading...' : 'Refresh Local Tables'}</Button>

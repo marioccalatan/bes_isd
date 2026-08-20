@@ -235,6 +235,7 @@ export type PolicyRecordNature =
   | 'Operations';
 
 export type PolicyDocumentType = 'Policy' | 'Issuance' | 'Guidelines';
+export type PolicyRecordStatus = 'Effective' | 'Draft' | 'Amended' | 'Rescinded';
 
 export interface PolicyRecord {
   id: string;
@@ -245,6 +246,7 @@ export interface PolicyRecord {
   contents: string;
   nature: PolicyRecordNature;
   documentType: PolicyDocumentType;
+  status: PolicyRecordStatus;
   attachmentName?: string;
   attachmentMimeType?: string;
   attachmentSize?: number;

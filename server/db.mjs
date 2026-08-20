@@ -758,8 +758,9 @@ export async function initializeDatabase() {
       title VARCHAR2(300) NOT NULL,
       document_number VARCHAR2(120) NOT NULL,
       document_type VARCHAR2(30) DEFAULT 'Policy' NOT NULL,
+      policy_status VARCHAR2(20) DEFAULT 'Effective' NOT NULL,
       revision_number VARCHAR2(60) NOT NULL,
-      effectivity_date DATE NOT NULL,
+        effectivity_date DATE,
       contents CLOB NOT NULL,
       nature VARCHAR2(40) NOT NULL,
       attachment_name VARCHAR2(255),
@@ -773,11 +774,20 @@ export async function initializeDatabase() {
       updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT chk_bes_policy_records_nature CHECK (nature IN ('Financial','Human Resources','Legal and Compliance','Public Relations','Operations')),
       CONSTRAINT chk_bes_policy_records_type CHECK (document_type IN ('Policy','Issuance','Guidelines')),
+      CONSTRAINT chk_bes_policy_records_status CHECK (policy_status IN ('Effective','Draft','Amended','Rescinded')),
       CONSTRAINT chk_bes_policy_records_active CHECK (is_active IN ('Y','N'))
     )`);
     await addColumn(connection, `ALTER TABLE bes_policy_records ADD (attachment_size NUMBER)`);
     await addColumn(connection, `ALTER TABLE bes_policy_records ADD (attachment_blob BLOB)`);
     await addColumn(connection, `ALTER TABLE bes_policy_records ADD (document_type VARCHAR2(30) DEFAULT 'Policy' NOT NULL)`);
+  await addColumn(connection, `ALTER TABLE bes_policy_records ADD (policy_status VARCHAR2(20) DEFAULT 'Effective' NOT NULL)`);
+  await makeColumnNullable(connection, 'BES_POLICY_RECORDS', 'EFFECTIVITY_DATE');
+  await dropConstraint(connection, 'BES_POLICY_RECORDS', 'CHK_BES_POLICY_RECORDS_STATUS');
+  await runDdl(
+    connection,
+    `ALTER TABLE bes_policy_records ADD CONSTRAINT chk_bes_policy_records_status
+       CHECK (policy_status IN ('Effective', 'Draft', 'Amended', 'Rescinded'))`,
+  );
     await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_policy_document_number ON bes_policy_records (document_number)`);
     await runDdl(connection, `CREATE INDEX ix_bes_policy_records_nature ON bes_policy_records (nature, effectivity_date, is_active)`);
     await runDdl(connection, `CREATE TABLE bes_policy_task_processing (

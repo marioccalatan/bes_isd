@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Menu, X } from 'lucide-react';
+import { Database, LoaderCircle, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { emptySidebarModuleAccess, visibleNavItems, type SidebarModuleAccess } from '@/lib/nav';
-import { fetchModuleRegistry } from '@/lib/api';
+import { fetchDatabaseRuntime, fetchModuleRegistry, switchDatabaseRuntime, type DatabaseRuntimeStatus } from '@/lib/api';
+import { isLocalBrowser, loadSyncConnection } from '@/lib/databaseRuntime';
 import { useRolePreview } from '@/context/RolePreviewContext';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
+import { useToast } from '@/context/ToastContext';
 import { CURRENT_EMPLOYEE } from '@/lib/mockData';
 import benecoLogo from '@/assets/brand/beneco-logo.png';
 
@@ -22,6 +24,102 @@ function Logo({ collapsed }: { collapsed?: boolean }) {
           <p className="truncate text-[11px] font-medium text-ondark-subtle">Enterprise System</p>
         </div>
       )}
+    </div>
+  );
+}
+
+function DatabaseRuntimeToggle({ collapsed }: { collapsed?: boolean }) {
+  const { token, user } = useAuth();
+  const { toast } = useToast();
+  const [runtime, setRuntime] = useState<DatabaseRuntimeStatus | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const administrator = user?.role === 'Administrator' || user?.roles?.includes('Administrator');
+  const available = administrator && isLocalBrowser();
+
+  useEffect(() => {
+    if (!available || !token) return;
+    let cancelled = false;
+    fetchDatabaseRuntime(token)
+      .then((status) => { if (!cancelled) setRuntime(status); })
+      .catch((error) => {
+        if (!cancelled) console.warn('Unable to load database runtime status.', error);
+      });
+    return () => { cancelled = true; };
+  }, [available, token]);
+
+  if (!available) return null;
+  const usingServer = runtime?.activeDatabase === 'server';
+
+  async function toggleDatabase() {
+    if (!token || switching) return;
+    const target = usingServer ? 'local' : 'server';
+    const connection = target === 'server' ? loadSyncConnection() : undefined;
+    if (target === 'server' && (!connection?.savePassword || !connection.password)) {
+      toast({
+        kind: 'warning',
+        title: 'Save the server credentials first',
+        description: 'Open Administration → Database Sync, enter the Server Oracle credentials, and enable “Save password for this browser session.”',
+      });
+      return;
+    }
+    setSwitching(true);
+    try {
+      const next = await switchDatabaseRuntime(token, target, connection);
+      setRuntime(next);
+      toast({
+        kind: 'success',
+        title: `${target === 'server' ? 'Server' : 'Local'} database selected`,
+        description: 'Reloading BES so every screen uses the selected Oracle database.',
+      });
+      window.setTimeout(() => window.location.reload(), 450);
+    } catch (error) {
+      toast({
+        kind: 'error',
+        title: 'Database switch failed',
+        description: error instanceof Error ? error.message : 'Unable to change the active Oracle database.',
+      });
+      setSwitching(false);
+    }
+  }
+
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={usingServer}
+        aria-label={`Using ${usingServer ? 'Server' : 'Local'} Oracle database`}
+        title={`Database: ${usingServer ? 'Server' : 'Local'}`}
+        onClick={toggleDatabase}
+        disabled={!runtime || switching}
+        className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-lg border border-white/15 text-ondark transition-colors hover:bg-white/10 disabled:opacity-50"
+      >
+        {switching ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-2 rounded-lg border border-white/15 bg-black/10 p-2.5 text-ondark">
+      <div className="mb-2 flex items-center justify-between gap-2 text-[11px]">
+        <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wide"><Database className="h-3.5 w-3.5" /> Database</span>
+        <span className={cn('rounded-full px-2 py-0.5 font-semibold', usingServer ? 'bg-blue-500/20 text-blue-200' : 'bg-emerald-500/20 text-emerald-200')}>
+          {runtime ? (usingServer ? 'Server' : 'Local') : 'Checking'}
+        </span>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={usingServer}
+        onClick={toggleDatabase}
+        disabled={!runtime || switching}
+        className="flex w-full items-center justify-between rounded-md border border-white/15 bg-white/5 px-2 py-1.5 text-xs transition-colors hover:bg-white/10 disabled:opacity-50"
+      >
+        <span>{switching ? 'Switching…' : usingServer ? 'Use Local' : 'Use Server'}</span>
+        <span className={cn('relative h-5 w-9 rounded-full transition-colors', usingServer ? 'bg-blue-500' : 'bg-emerald-500')}>
+          <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform', usingServer ? 'translate-x-[18px]' : 'translate-x-0.5')} />
+        </span>
+      </button>
     </div>
   );
 }
@@ -107,6 +205,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
         </button>
       </div>
       <NavList collapsed={collapsed} />
+      <DatabaseRuntimeToggle collapsed={collapsed} />
     </aside>
   );
 }

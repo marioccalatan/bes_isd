@@ -216,6 +216,7 @@ const policyRecord = (row) => ({
   contents: row.CONTENTS,
   nature: row.NATURE,
   documentType: row.DOCUMENT_TYPE || 'Policy',
+  status: row.POLICY_STATUS || 'Effective',
   attachmentName: row.ATTACHMENT_NAME || undefined,
   attachmentMimeType: row.ATTACHMENT_MIME_TYPE || undefined,
   attachmentSize: row.ATTACHMENT_SIZE == null ? undefined : Number(row.ATTACHMENT_SIZE),
@@ -1221,10 +1222,35 @@ async function handle(req, res) {
         })),
       });
     }
+    if (req.url === '/api/admin/database-runtime' && ['GET', 'PUT'].includes(req.method)) {
+      if (!isLocalDevelopmentRequest(req)) return json(res, 404, { error: 'Database switching is available only on localhost.' });
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to switch databases.' });
+      if (req.method === 'GET') return json(res, 200, getDatabaseRuntimeStatus());
+
+      const body = await readBody(req);
+      const target = normalize(body.target).toLowerCase();
+      if (target === 'local') {
+        useLocalDatabase();
+        return json(res, 200, getDatabaseRuntimeStatus());
+      }
+      if (target !== 'server') return json(res, 400, { error: 'Database target must be Local or Server.' });
+
+      const databaseConfig = oracleTargetConfig(body.connection ?? {});
+      const identity = await prepareServerDatabase(databaseConfig, admin, token);
+      useServerDatabase(databaseConfig);
+      return json(res, 200, {
+        ...getDatabaseRuntimeStatus(),
+        database: identity.DB_NAME,
+        container: identity.CONTAINER_NAME,
+        schema: identity.SCHEMA_NAME,
+      });
+    }
     if (req.method === 'GET' && req.url === '/api/admin/database-sync/local-tables') {
       const admin = await requireAdministrator(bearerToken(req));
       if (!admin) return json(res, 403, { error: 'Administrator access is required for database sync.' });
-      const tables = await withConnection((c) => listSyncTables(c));
+      const tables = await withLocalConnection((c) => listSyncTables(c));
       return json(res, 200, {
         tables,
         excludedTables: [
@@ -1697,10 +1723,12 @@ async function handle(req, res) {
       const contents = normalize(body.contents);
       const nature = normalize(body.nature);
       const documentType = normalize(body.documentType);
+      const policyStatus = normalize(body.status) || 'Effective';
       const allowedNatures = new Set(['Financial', 'Human Resources', 'Legal and Compliance', 'Public Relations', 'Operations']);
       const allowedDocumentTypes = new Set(['Policy', 'Issuance', 'Guidelines']);
-      if (!title || !documentNumber || !revisionNumber || !contents || !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType)) {
-        return json(res, 400, { error: 'Title, document number, document type, revision number, effectivity date, contents, and a valid nature are required.' });
+      const allowedPolicyStatuses = new Set(['Effective', 'Draft', 'Amended', 'Rescinded']);
+      if (!title || !documentNumber || !revisionNumber || !contents || (effectivityDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate)) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType) || !allowedPolicyStatuses.has(policyStatus)) {
+        return json(res, 400, { error: 'Title, document number, document type, revision number, contents, nature, and policy status are required.' });
       }
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
@@ -1709,17 +1737,18 @@ async function handle(req, res) {
         if (duplicate.rows[0]) throw Object.assign(new Error('A policy record with that document number already exists.'), { statusCode: 409 });
         const recordUid = `POL-${new Date().getFullYear()}-${Date.now()}`;
         await c.execute(`INSERT INTO bes_policy_records
-          (record_uid, title, document_number, document_type, revision_number, effectivity_date, contents, nature,
+          (record_uid, title, document_number, document_type, policy_status, revision_number, effectivity_date, contents, nature,
            created_by_user_id, is_active)
           VALUES
-          (:recordUid, :title, :documentNumber, :documentType, :revisionNumber, TO_DATE(:effectivityDate, 'YYYY-MM-DD'), :contents, :nature,
+          (:recordUid, :title, :documentNumber, :documentType, :policyStatus, :revisionNumber, CASE WHEN :effectivityDate IS NULL THEN NULL ELSE TO_DATE(:effectivityDate, 'YYYY-MM-DD') END, :contents, :nature,
            :createdByUserId, 'Y')`, {
           recordUid,
           title,
           documentNumber,
           documentType,
+          policyStatus,
           revisionNumber,
-          effectivityDate,
+          effectivityDate: effectivityDate || null,
           contents: { val: contents, type: oracledb.CLOB },
           nature,
           createdByUserId: user.USER_ID,
@@ -1818,10 +1847,12 @@ async function handle(req, res) {
       const contents = normalize(body.contents);
       const nature = normalize(body.nature);
       const documentType = normalize(body.documentType);
+      const policyStatus = normalize(body.status) || 'Effective';
       const allowedNatures = new Set(['Financial', 'Human Resources', 'Legal and Compliance', 'Public Relations', 'Operations']);
       const allowedDocumentTypes = new Set(['Policy', 'Issuance', 'Guidelines']);
-      if (!title || !documentNumber || !revisionNumber || !contents || !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType)) {
-        return json(res, 400, { error: 'Title, document number, document type, revision number, effectivity date, contents, and a valid nature are required.' });
+      const allowedPolicyStatuses = new Set(['Effective', 'Draft', 'Amended', 'Rescinded']);
+      if (!title || !documentNumber || !revisionNumber || !contents || (effectivityDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate)) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType) || !allowedPolicyStatuses.has(policyStatus)) {
+        return json(res, 400, { error: 'Title, document number, document type, revision number, contents, nature, and policy status are required.' });
       }
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
@@ -1833,8 +1864,9 @@ async function handle(req, res) {
             title = :title,
             document_number = :documentNumber,
             document_type = :documentType,
+            policy_status = :policyStatus,
             revision_number = :revisionNumber,
-            effectivity_date = TO_DATE(:effectivityDate, 'YYYY-MM-DD'),
+            effectivity_date = CASE WHEN :effectivityDate IS NULL THEN NULL ELSE TO_DATE(:effectivityDate, 'YYYY-MM-DD') END,
             contents = :contents,
             nature = :nature,
             updated_at = SYSTIMESTAMP
@@ -1842,8 +1874,9 @@ async function handle(req, res) {
           title,
           documentNumber,
           documentType,
+          policyStatus,
           revisionNumber,
-          effectivityDate,
+          effectivityDate: effectivityDate || null,
           contents: { val: contents, type: oracledb.CLOB },
           nature,
           recordUid,

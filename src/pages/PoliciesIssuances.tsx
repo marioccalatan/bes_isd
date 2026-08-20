@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { Download, FileText, MessageSquarePlus, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Toolbar } from '@/components/shared/Toolbar';
@@ -26,7 +26,7 @@ import {
   type PolicyTaskStatus,
   type PolicyRecordInput,
 } from '@/lib/api';
-import type { Comment, PolicyDocumentType, PolicyRecord, PolicyRecordNature, WorkItem } from '@/lib/types';
+import type { Comment, PolicyDocumentType, PolicyRecord, PolicyRecordNature, PolicyRecordStatus, WorkItem } from '@/lib/types';
 import type { WorkspaceModuleDef } from '@/lib/workspace';
 import { exportToCsv } from '@/hooks/useTableControls';
 import { formatDate, formatDateTime } from '@/lib/utils';
@@ -39,6 +39,7 @@ const NATURES: PolicyRecordNature[] = [
   'Operations',
 ];
 const DOCUMENT_TYPES: PolicyDocumentType[] = ['Policy', 'Issuance', 'Guidelines'];
+const POLICY_STATUSES: PolicyRecordStatus[] = ['Effective', 'Draft', 'Amended', 'Rescinded'];
 const POLICY_TASK_STATUSES: PolicyTaskStatus[] = ['Received', 'Under Review', 'For Approval', 'Approved', 'Issued', 'Completed', 'Returned'];
 
 const EMPTY_FORM: PolicyRecordInput = {
@@ -49,6 +50,7 @@ const EMPTY_FORM: PolicyRecordInput = {
   contents: '',
   nature: 'Human Resources',
   documentType: 'Policy',
+  status: 'Effective',
 };
 
 export default function PoliciesIssuances({ module }: { module: WorkspaceModuleDef }) {
@@ -65,6 +67,7 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<PolicyRecordInput>(EMPTY_FORM);
   const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachmentDragging, setAttachmentDragging] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<PolicyRecord | null>(null);
   const [processingRecords, setProcessingRecords] = useState<PolicyTaskProcessing[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -109,7 +112,7 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
   const visibleRecords = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return records;
-    return records.filter((record) => [record.title, record.documentNumber, record.revisionNumber, record.documentType, record.nature, record.contents]
+    return records.filter((record) => [record.title, record.documentNumber, record.revisionNumber, record.documentType, record.status, record.nature, record.contents]
       .some((value) => String(value ?? '').toLowerCase().includes(query)));
   }, [records, search]);
 
@@ -170,14 +173,39 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
     { key: 'title', header: 'Title', render: (record) => <span className="font-medium text-slate-800">{record.title}</span> },
     { key: 'documentNumber', header: 'Document No.', render: (record) => <span className="font-mono text-xs">{record.documentNumber}</span> },
     { key: 'documentType', header: 'Document Type', render: (record) => <Badge>{record.documentType}</Badge> },
+    { key: 'policyStatus', header: 'Status', render: (record) => <Badge>{record.status}</Badge> },
     { key: 'revisionNumber', header: 'Revision', render: (record) => record.revisionNumber },
-    { key: 'effectivityDate', header: 'Effectivity Date', render: (record) => formatDate(record.effectivityDate) },
+    { key: 'effectivityDate', header: 'Effectivity Date', render: (record) => record.effectivityDate ? formatDate(record.effectivityDate) : '—' },
     { key: 'nature', header: 'Nature', render: (record) => <Badge>{record.nature}</Badge> },
     { key: 'attachmentName', header: 'Attachment', render: (record) => record.attachmentName ? <span className="text-brand-700">{record.attachmentName}</span> : '—' },
   ];
 
   function updateForm<K extends keyof PolicyRecordInput>(key: K, value: PolicyRecordInput[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function chooseAttachment(files: FileList | File[]) {
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length !== 1) {
+      toast({ kind: 'error', title: 'One DOCX file only', description: 'Each policy record can contain exactly one attachment. Drop or choose a single DOCX file.' });
+      return;
+    }
+    const file = selectedFiles[0];
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+      toast({ kind: 'error', title: 'DOCX required', description: 'Only Microsoft Word .docx files can be stored in the policy library.' });
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      toast({ kind: 'error', title: 'Attachment is too large', description: 'Select a DOCX file that is 25 MB or smaller.' });
+      return;
+    }
+    setAttachment(file);
+  }
+
+  function dropAttachment(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setAttachmentDragging(false);
+    if (event.dataTransfer.files.length) chooseAttachment(event.dataTransfer.files);
   }
 
   function openCreate() {
@@ -197,6 +225,7 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
       contents: record.contents,
       nature: record.nature,
       documentType: record.documentType,
+      status: record.status,
     });
     setAttachment(null);
     setCreateOpen(true);
@@ -211,7 +240,7 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
   }
 
   async function saveRecord() {
-    if (!form.title.trim() || !form.documentNumber.trim() || !form.revisionNumber.trim() || !form.effectivityDate || !form.contents.trim()) {
+    if (!form.title.trim() || !form.documentNumber.trim() || !form.revisionNumber.trim() || !form.contents.trim()) {
       toast({ kind: 'error', title: 'Complete the policy record', description: 'All fields except the attachment are required.' });
       return;
     }
@@ -338,7 +367,7 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
               search={search}
               onSearchChange={setSearch}
               placeholder="Search title, document number, type, nature…"
-              onExport={() => exportToCsv('policy-records.csv', ['Title', 'Document Number', 'Document Type', 'Revision Number', 'Effectivity Date', 'Nature', 'Attachment'], records.map((record) => [record.title, record.documentNumber, record.documentType, record.revisionNumber, record.effectivityDate, record.nature, record.attachmentName ?? '']))}
+              onExport={() => exportToCsv('policy-records.csv', ['Title', 'Document Number', 'Document Type', 'Status', 'Revision Number', 'Effectivity Date', 'Nature', 'Attachment'], records.map((record) => [record.title, record.documentNumber, record.documentType, record.status, record.revisionNumber, record.effectivityDate, record.nature, record.attachmentName ?? '']))}
               onPrint={() => window.print()}
             />
             <DataTable
@@ -366,17 +395,24 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
           <div className="sm:col-span-2"><Label required>Title</Label><Input value={form.title} onChange={(event) => updateForm('title', event.target.value)} /></div>
           <div><Label required>Document Number</Label><Input value={form.documentNumber} onChange={(event) => updateForm('documentNumber', event.target.value)} placeholder="e.g. HR-POL-2026-001" /></div>
           <div><Label required>Document Type</Label><Select value={form.documentType} onChange={(event) => updateForm('documentType', event.target.value as PolicyDocumentType)}>{DOCUMENT_TYPES.map((documentType) => <option key={documentType}>{documentType}</option>)}</Select></div>
+          <div><Label required>Status</Label><Select value={form.status} onChange={(event) => updateForm('status', event.target.value as PolicyRecordStatus)}>{POLICY_STATUSES.map((status) => <option key={status}>{status}</option>)}</Select></div>
           <div><Label required>Revision Number</Label><Input value={form.revisionNumber} onChange={(event) => updateForm('revisionNumber', event.target.value)} placeholder="e.g. 1 or Rev. A" /></div>
-          <div><Label required>Effectivity Date</Label><Input type="date" value={form.effectivityDate} onChange={(event) => updateForm('effectivityDate', event.target.value)} /></div>
+          <div><Label>Effectivity Date</Label><Input type="date" value={form.effectivityDate} onChange={(event) => updateForm('effectivityDate', event.target.value)} /></div>
           <div><Label required>Nature</Label><Select value={form.nature} onChange={(event) => updateForm('nature', event.target.value as PolicyRecordNature)}>{NATURES.map((nature) => <option key={nature}>{nature}</option>)}</Select></div>
           <div className="sm:col-span-2"><Label required>Contents</Label><Textarea className="min-h-36" value={form.contents} onChange={(event) => updateForm('contents', event.target.value)} placeholder="Enter the policy summary, scope, provisions, or controlled contents." /></div>
           <div className="sm:col-span-2">
             <Label>Attachment File</Label>
-            <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/40 px-4 py-6 text-center hover:border-brand-400 hover:bg-brand-50/30">
+            <label
+              onDragEnter={(event) => { event.preventDefault(); setAttachmentDragging(true); }}
+              onDragOver={(event) => { event.preventDefault(); setAttachmentDragging(true); }}
+              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setAttachmentDragging(false); }}
+              onDrop={dropAttachment}
+              className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${attachmentDragging ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/20' : 'border-slate-300 bg-slate-50/40 hover:border-brand-400 hover:bg-brand-50/30'}`}
+            >
               <FileText className="mb-2 h-6 w-6 text-slate-400" />
               <span className="text-sm font-medium text-slate-700">{attachment ? attachment.name : editingRecord?.attachmentName ? `Current: ${editingRecord.attachmentName}` : 'Choose a DOCX policy document'}</span>
-              <span className="mt-1 text-xs text-slate-500">The original DOCX is stored as an Oracle BLOB. Maximum 25 MB.</span>
-              <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only" onChange={(event) => setAttachment(event.target.files?.[0] ?? null)} />
+              <span className="mt-1 text-xs text-slate-500">Drag and drop one DOCX here, or click to choose. Stored as an Oracle BLOB. Maximum 25 MB.</span>
+              <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only" onChange={(event) => { if (event.target.files?.length) chooseAttachment(event.target.files); event.target.value = ''; }} />
             </label>
           </div>
         </div>
@@ -385,11 +421,11 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
       <Drawer open={!!selectedRecord} onClose={() => setSelectedRecord(null)} title={selectedRecord?.title ?? ''}>
         {selectedRecord && (
           <div className="space-y-5 text-sm">
-            <div className="flex flex-wrap gap-2"><Badge>{selectedRecord.documentType}</Badge><Badge>{selectedRecord.nature}</Badge><Badge>Revision {selectedRecord.revisionNumber}</Badge></div>
+            <div className="flex flex-wrap gap-2"><Badge>{selectedRecord.documentType}</Badge><Badge>{selectedRecord.status}</Badge><Badge>{selectedRecord.nature}</Badge><Badge>Revision {selectedRecord.revisionNumber}</Badge></div>
             <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div><dt className="text-xs text-slate-500">Document Number</dt><dd className="mt-0.5 font-mono font-medium text-slate-800">{selectedRecord.documentNumber}</dd></div>
               <div><dt className="text-xs text-slate-500">Document Type</dt><dd className="mt-0.5 font-medium text-slate-800">{selectedRecord.documentType}</dd></div>
-              <div><dt className="text-xs text-slate-500">Effectivity Date</dt><dd className="mt-0.5 font-medium text-slate-800">{formatDate(selectedRecord.effectivityDate)}</dd></div>
+              <div><dt className="text-xs text-slate-500">Effectivity Date</dt><dd className="mt-0.5 font-medium text-slate-800">{selectedRecord.effectivityDate ? formatDate(selectedRecord.effectivityDate) : 'Not set'}</dd></div>
               <div><dt className="text-xs text-slate-500">Created By</dt><dd className="mt-0.5 font-medium text-slate-800">{selectedRecord.createdBy ?? 'System baseline'}</dd></div>
               <div><dt className="text-xs text-slate-500">Last Updated</dt><dd className="mt-0.5 font-medium text-slate-800">{formatDate(selectedRecord.updatedAt)}</dd></div>
             </dl>
