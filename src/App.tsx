@@ -14,6 +14,7 @@ import Leave from '@/pages/Leave';
 import Workspace from '@/pages/Workspace';
 import WorkspaceModule from '@/pages/WorkspaceModule';
 import WorkspacePreview from '@/pages/WorkspacePreview';
+import ToolDetail from '@/pages/ToolDetail';
 import Workflows from '@/pages/Workflows';
 import CalendarPage from '@/pages/CalendarPage';
 import News from '@/pages/News';
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="/services/leave" element={<Leave />} />
         <Route path="/workspace" element={<Workspace />} />
         <Route path="/workspace/preview/:deptId" element={<WorkspacePreview />} />
+        <Route path="/workspace/preview/:deptId/tools/:toolCode" element={<ToolDetail />} />
         <Route path="/workspace/:moduleId" element={<WorkspaceModule />} />
         <Route path="/workflows" element={<Workflows />} />
         <Route path="/calendar" element={<CalendarPage />} />

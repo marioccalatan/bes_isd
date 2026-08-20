@@ -593,7 +593,13 @@ function EventForm({
 
 type CalendarSize = 'compact' | 'default' | 'large';
 
-export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { size?: CalendarSize; autoOpenNew?: boolean }) {
+type EnterpriseCalendarProps = {
+  size?: CalendarSize;
+  autoOpenNew?: boolean;
+  departmentScopeIds?: string[];
+};
+
+export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, departmentScopeIds }: EnterpriseCalendarProps) {
   const compact = size === 'compact';
   const large = size === 'large';
   const { events, departments, addPersonalEvent, updatePersonalEvent, deletePersonalEvent, toggleEventDone, createTaskFromCalendarEvent } = useData();
@@ -664,14 +670,23 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
     return () => { cancelled = true; };
   }, [taskSource, token]);
 
+  const departmentScope = useMemo(() => departmentScopeIds ? new Set(departmentScopeIds) : null, [departmentScopeIds?.join('|')]);
   const departmentFilterOptions = useMemo(() => [
     { id: UNASSIGNED_DEPARTMENT, name: 'No department / enterprise-wide' },
-    ...departments.map((department) => ({ id: department.id, name: department.name })),
-  ], [departments]);
+    ...departments
+      .filter((department) => !departmentScope || departmentScope.has(department.id))
+      .map((department) => ({ id: department.id, name: department.name })),
+  ], [departmentScope, departments]);
 
-  const activeDepartmentCount = activeDepartmentIds ? activeDepartmentIds.size : departmentFilterOptions.length;
+  const availableDepartmentIds = useMemo(() => new Set(departmentFilterOptions.map((option) => option.id)), [departmentFilterOptions]);
+  const scopedActiveDepartmentIds = useMemo(() => {
+    if (activeDepartmentIds === null) return null;
+    return new Set([...activeDepartmentIds].filter((id) => availableDepartmentIds.has(id)));
+  }, [activeDepartmentIds, availableDepartmentIds]);
+
+  const activeDepartmentCount = scopedActiveDepartmentIds ? scopedActiveDepartmentIds.size : departmentFilterOptions.length;
   const activeOfficeCount = activeOfficeAssignments ? activeOfficeAssignments.size : 0;
-  const departmentFilterLabel = activeDepartmentIds === null
+  const departmentFilterLabel = scopedActiveDepartmentIds === null
     ? activeOfficeCount
       ? `${activeOfficeCount} office${activeOfficeCount === 1 ? '' : 's'}`
       : 'All departments'
@@ -688,11 +703,14 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
     if (!activeLayers.has(e.layer)) return false;
     if (e.visibility === 'Me' && !activeCalendarScopes.has('my')) return false;
     if (e.visibility === 'Specific people' && !activeCalendarScopes.has('our')) return false;
-    if (activeDepartmentIds) {
-      const ids = eventDepartmentIds(e);
+    const ids = eventDepartmentIds(e);
+    if (departmentScope) {
+      if (ids.length > 0 && !ids.some((id) => departmentScope.has(id))) return false;
+    }
+    if (scopedActiveDepartmentIds) {
       if (ids.length === 0) {
-        if (!activeDepartmentIds.has(UNASSIGNED_DEPARTMENT)) return false;
-      } else if (!ids.some((id) => activeDepartmentIds.has(id))) {
+        if (!scopedActiveDepartmentIds.has(UNASSIGNED_DEPARTMENT)) return false;
+      } else if (!ids.some((id) => scopedActiveDepartmentIds.has(id))) {
         return false;
       }
     }
@@ -701,7 +719,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
       if (offices.length === 0 || !offices.some((office) => activeOfficeAssignments.has(office))) return false;
     }
     return true;
-  }), [events, activeLayers, activeCalendarScopes, activeDepartmentIds, activeOfficeAssignments]);
+  }), [events, activeLayers, activeCalendarScopes, activeOfficeAssignments, departmentScope, scopedActiveDepartmentIds]);
 
   function addLayer(layerName: string, color: string) {
     const nextLayer = layerName.trim();
@@ -725,7 +743,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
 
   function toggleDepartmentFilter(id: string) {
     setActiveDepartmentIds((current) => {
-      const next = new Set(current ?? departmentFilterOptions.map((option) => option.id));
+      const next = new Set(current ? [...current].filter((item) => availableDepartmentIds.has(item)) : departmentFilterOptions.map((option) => option.id));
       if (next.has(id)) next.delete(id); else next.add(id);
       if (id === 'ISD' && !next.has('ISD')) setActiveOfficeAssignments(null);
       return next.size === departmentFilterOptions.length ? null : next;
@@ -938,7 +956,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false }: { 
               </div>
               <div className="max-h-64 overflow-y-auto pr-1">
                 {departmentFilterOptions.map((department) => {
-                  const checked = activeDepartmentIds ? activeDepartmentIds.has(department.id) : true;
+                  const checked = scopedActiveDepartmentIds ? scopedActiveDepartmentIds.has(department.id) : true;
                   return (
                     <div key={department.id}>
                       <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-50">

@@ -11,6 +11,13 @@ import { findModule, type WorkspaceRecord } from '@/lib/workspace';
 import { formatDate } from '@/lib/utils';
 import Governance from './Governance';
 import NotFound from './NotFound';
+import PoliciesIssuances from './PoliciesIssuances';
+import RecruitmentOnboarding from './RecruitmentOnboarding';
+import HumanResources from './HumanResources';
+import { useData } from '@/context/DataContext';
+import { useAuth } from '@/context/AuthContext';
+import { useRolePreview } from '@/context/RolePreviewContext';
+import { canAccessTool } from '@/lib/toolAccess';
 
 const STATUS_STYLES: Record<WorkspaceRecord['status'], string> = {
   Active: 'border-brand-200 bg-brand-50 text-brand-700',
@@ -22,9 +29,15 @@ const STATUS_STYLES: Record<WorkspaceRecord['status'], string> = {
 
 export default function WorkspaceModule() {
   const { moduleId } = useParams<{ moduleId: string }>();
+  const { tools } = useData();
+  const { user } = useAuth();
+  const { effectiveRole, isPreviewing, previewDepartmentId, previewOffice, previewPosition } = useRolePreview();
   const [selected, setSelected] = useState<WorkspaceRecord | null>(null);
+  const mod = findModule(moduleId ?? '');
+  const { search, setSearch, pageRows } = useTableControls(mod?.records ?? [], (r, q) => r.title.toLowerCase().includes(q) || r.subtitle.toLowerCase().includes(q), 20);
 
   if (moduleId === 'governance') {
+    if (effectiveRole !== 'Administrator') return <NotFound />;
     return (
       <div>
         <PageHeader title="BES Governance and Adoption" description="Oversight of the BES module registry, adoption metrics, and digital readiness across departments." crumbs={[{ label: 'My Workspace', to: '/workspace' }, { label: 'BES Governance and Adoption' }]} />
@@ -33,10 +46,21 @@ export default function WorkspaceModule() {
     );
   }
 
-  const mod = findModule(moduleId ?? '');
   if (!mod) return <NotFound />;
-
-  const { search, setSearch, pageRows } = useTableControls(mod.records, (r, q) => r.title.toLowerCase().includes(q) || r.subtitle.toLowerCase().includes(q), 20);
+  const tool = tools.find((item) => item.code === mod.name);
+  if (!tool || tool.status !== 'ENABLED' || !canAccessTool(tool, {
+    role: effectiveRole,
+    departmentCode: previewDepartmentId ?? user?.departmentCode,
+    officeName: isPreviewing ? previewOffice : user?.unitName,
+    positionTitle: isPreviewing ? previewPosition : user?.position,
+  })) return <NotFound />;
+  if (moduleId === 'policies-issuances') return <PoliciesIssuances module={mod} />;
+  if (moduleId === 'recruitment') return <RecruitmentOnboarding module={mod} />;
+  if (moduleId === 'human-resources') return <HumanResources module={mod} taskSubject="Human Resource" />;
+  if (moduleId === 'employee-relations') return <HumanResources module={mod} taskSubject="Employee Relations" />;
+  if (['learning-development', 'performance-management', 'institutional-communications', 'member-programs', 'records-management', 'events-management'].includes(moduleId ?? '')) {
+    return <HumanResources module={mod} taskSubject={mod.name} />;
+  }
 
   const columns: Column<WorkspaceRecord>[] = [
     { key: 'title', header: 'Title', render: (r) => <span className="font-medium text-slate-800">{r.title}</span> },

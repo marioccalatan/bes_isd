@@ -4,7 +4,6 @@ import {
 } from 'lucide-react';
 import type { AppRole, DepartmentId } from './types';
 import { canSeeAdministration } from './permissions';
-import { loadState, saveState } from './storage';
 
 export interface NavItem {
   label: string;
@@ -30,8 +29,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Help and Support', to: '/help', icon: LifeBuoy },
   { label: 'Administration', to: '/admin', icon: ShieldCheck, adminOnly: true },
 ];
-
-export const SIDEBAR_MODULE_ACCESS_STORAGE_KEY = 'sidebar-module-access';
 
 export const SIDEBAR_DEPARTMENT_IDS: DepartmentId[] = ['ISD', 'NSD', 'NNSD', 'AUD', 'CPD', 'PGD'];
 
@@ -62,24 +59,13 @@ function normalizeSidebarModuleAccess(access: unknown): SidebarModuleAccess {
   ) as SidebarModuleAccess;
 }
 
-export function loadSidebarModuleAccess(): SidebarModuleAccess {
-  return normalizeSidebarModuleAccess(loadState(SIDEBAR_MODULE_ACCESS_STORAGE_KEY, defaultSidebarModuleAccess));
-}
-
-export function saveSidebarModuleAccess(access: SidebarModuleAccess): SidebarModuleAccess {
-  const normalized = normalizeSidebarModuleAccess(access);
-  saveState(SIDEBAR_MODULE_ACCESS_STORAGE_KEY, normalized);
-  window.dispatchEvent(new Event('bes-sidebar-access-changed'));
-  return normalized;
-}
-
-export function isSidebarModuleEnabledForDepartment(item: NavItem, departmentId?: string | null, access = loadSidebarModuleAccess()): boolean {
+export function isSidebarModuleEnabledForDepartment(item: NavItem, departmentId?: string | null, access = defaultSidebarModuleAccess()): boolean {
   if (item.adminOnly) return false;
   if (!departmentId) return true;
   return (access[item.to] ?? SIDEBAR_DEPARTMENT_IDS).includes(departmentId as DepartmentId);
 }
 
-export function visibleNavItems(role: AppRole, departmentId?: string | null, access = loadSidebarModuleAccess()): NavItem[] {
+export function visibleNavItems(role: AppRole, departmentId?: string | null, access = defaultSidebarModuleAccess()): NavItem[] {
   if (canSeeAdministration(role)) return NAV_ITEMS;
   return NAV_ITEMS.filter((item) => isSidebarModuleEnabledForDepartment(item, departmentId, access));
 }

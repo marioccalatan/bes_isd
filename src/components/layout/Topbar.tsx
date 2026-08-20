@@ -212,7 +212,7 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
                   return (
                     <DropdownItem
                       key={opt.id}
-                      onClick={() => { close(); setPreviewPersona(opt.role, opt.departmentId, `${opt.role} — ${opt.office}`); }}
+                      onClick={() => { close(); setPreviewPersona(opt.role, opt.departmentId, `${opt.role} — ${opt.office}`, opt.office, opt.position); }}
                       className={cn('pl-6', active ? 'bg-brand-50 text-brand-700' : '')}
                     >
                       <Eye className="h-4 w-4 text-slate-400" />

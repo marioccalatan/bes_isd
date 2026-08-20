@@ -227,6 +227,85 @@ export interface WorkItem {
   isTeamItem?: boolean; // visible under "Assigned to My Team" for managers
 }
 
+export type PolicyRecordNature =
+  | 'Financial'
+  | 'Human Resources'
+  | 'Legal and Compliance'
+  | 'Public Relations'
+  | 'Operations';
+
+export type PolicyDocumentType = 'Policy' | 'Issuance' | 'Guidelines';
+
+export interface PolicyRecord {
+  id: string;
+  title: string;
+  documentNumber: string;
+  revisionNumber: string;
+  effectivityDate: string;
+  contents: string;
+  nature: PolicyRecordNature;
+  documentType: PolicyDocumentType;
+  attachmentName?: string;
+  attachmentMimeType?: string;
+  attachmentSize?: number;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RecruitmentStatus =
+  | 'Received'
+  | 'For Screening'
+  | 'For Interview'
+  | 'Qualified'
+  | 'Not Qualified'
+  | 'Applicant Pool'
+  | 'Hired'
+  | 'Withdrawn';
+
+export interface RecruitmentComment {
+  id: string;
+  author: string;
+  authorId: string;
+  message: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecruitmentRecord {
+  id: string;
+  sourceTaskId: string;
+  title: string;
+  controlNumber?: string;
+  applicantName: string;
+  lastName: string;
+  firstName: string;
+  middleName: string;
+  suffix: string;
+  birthDate: string;
+  sex: string;
+  civilStatus: string;
+  email: string;
+  mobileNo: string;
+  municipality: string;
+  barangay: string;
+  address: string;
+  highestEducation: string;
+  schoolName: string;
+  yearGraduated: string;
+  applicationSource: string;
+  createdBy: string;
+  assignedTo: string;
+  dateSubmitted: string;
+  status: RecruitmentStatus;
+  actionTaken?: string;
+  positionApplying?: string;
+  remarks: string;
+  comments: RecruitmentComment[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AttendanceRecord {
   id: string;
   date: string;
@@ -326,6 +405,8 @@ export type ToolAccessLevel = 'ADMIN' | 'NEW' | 'VIEW' | 'EDIT' | 'OPEN' | 'SOON
 export interface ToolAccessGrant {
   departmentId: DepartmentId;
   level: ToolAccessLevel;
+  unit?: string; // office within the department; omitted means department-wide access
+  position?: string; // optional organizational position within the department/office scope
   note?: string; // optional department-specific override of the tile description
 }
 
@@ -336,6 +417,9 @@ export interface AppTool {
   iconKey: string; // maps to a Lucide icon in lib/toolIcons.ts
   ownerDepartmentId: DepartmentId;
   access: ToolAccessGrant[];
+  taskSubjects?: string[]; // My Work task Subjects routed to this tool's Task tab
+  recordsTable?: string; // Explicit Oracle BES_ISD_XXXXX table backing this tool's Records tab
+  status?: 'SOON' | 'ENABLED' | 'DISABLED';
 }
 
 // Personal file storage — each employee gets a folder tree, capped by an
@@ -491,6 +575,8 @@ export interface SupportTicket {
 export type AppRole =
   | 'Employee'
   | 'Secretary'
+  | 'Office Secretary'
+  | 'Department Secretary'
   | 'Supervisor'
   | 'Department Manager'
   | 'General Manager'

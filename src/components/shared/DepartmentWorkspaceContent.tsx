@@ -1,13 +1,16 @@
 import { Lock } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useData } from '@/context/DataContext';
 import { useRolePreview } from '@/context/RolePreviewContext';
-import { useToast } from '@/context/ToastContext';
 import { findDeptPreview } from '@/lib/deptPreviews';
 import { getToolIcon } from '@/lib/toolIcons';
 import { cn, formatDate } from '@/lib/utils';
 import type { AppTool, DepartmentId, ToolAccessLevel } from '@/lib/types';
+import { useAuth } from '@/context/AuthContext';
+import { canAccessTool } from '@/lib/toolAccess';
+import { useToast } from '@/context/ToastContext';
 
 const STATUS_STYLES: Record<string, string> = {
   Active: 'border-brand-200 bg-brand-50 text-brand-700',
@@ -32,6 +35,7 @@ const SYSTEM_BADGE_LABELS: Partial<Record<ToolAccessLevel, string>> = {
 };
 
 export function SystemsPortal({ deptShortName, tools, deptId }: { deptShortName: string; tools: AppTool[]; deptId: DepartmentId }) {
+  const navigate = useNavigate();
   const { toast } = useToast();
 
   return (
@@ -45,21 +49,23 @@ export function SystemsPortal({ deptShortName, tools, deptId }: { deptShortName:
           {tools.map((t) => {
             const grant = t.access.find((a) => a.departmentId === deptId);
             if (!grant) return null;
-            const disabled = grant.level === 'SOON' || grant.level === 'EXISTING';
+            const status = t.status ?? 'ENABLED';
+            const disabled = status === 'SOON' || grant.level === 'EXISTING';
             const Icon = getToolIcon(t.iconKey);
             const description = grant.note ?? t.name;
             return (
               <button
                 key={t.code}
                 disabled={disabled}
-                onClick={() => toast({ kind: 'info', title: `Opening ${t.code}`, description: grant.note ?? `${t.name} — prototype placeholder. This system would launch here in production.` })}
+                title={status === 'SOON' ? t.description : undefined}
+                onClick={() => status === 'DISABLED' ? toast({ kind: 'warning', title: 'Temporarily Disabled', description: t.description }) : navigate(`/workspace/preview/${deptId}/tools/${encodeURIComponent(t.code)}`)}
                 className={cn(
                   'group relative flex flex-col items-start gap-2 overflow-hidden rounded-xl border border-white/10 bg-gradient-to-br from-[#0f6b3d] to-[#04331a] p-3.5 text-left shadow-sm transition-transform',
                   disabled ? 'cursor-not-allowed opacity-60' : 'hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400'
                 )}
               >
                 <span className={cn('rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide', SYSTEM_BADGE_STYLES[grant.level])}>
-                  {SYSTEM_BADGE_LABELS[grant.level] ?? grant.level}
+                  {status === 'SOON' ? 'SOON' : SYSTEM_BADGE_LABELS[grant.level] ?? grant.level}
                 </span>
                 <Icon className="h-6 w-6 text-white/90" aria-hidden="true" />
                 <span>
@@ -79,13 +85,19 @@ export function SystemsPortal({ deptShortName, tools, deptId }: { deptShortName:
 }
 
 export function DepartmentWorkspaceContent({ deptId }: { deptId: DepartmentId }) {
-  const { effectiveRole } = useRolePreview();
+  const { user } = useAuth();
+  const { effectiveRole, isPreviewing, previewDepartmentId, previewOffice, previewPosition } = useRolePreview();
   const { tools } = useData();
   const preview = findDeptPreview(deptId);
   if (!preview) return null;
 
   const canSeeRestricted = effectiveRole === 'Auditor' || effectiveRole === 'Board Member';
-  const deptTools = tools.filter((t) => t.access.some((a) => a.departmentId === deptId));
+  const deptTools = tools.filter((tool) => tool.access.some((grant) => grant.departmentId === deptId) && canAccessTool(tool, {
+    role: effectiveRole,
+    departmentCode: previewDepartmentId ?? user?.departmentCode,
+    officeName: isPreviewing ? previewOffice : user?.unitName,
+    positionTitle: isPreviewing ? previewPosition : user?.position,
+  }));
 
   return (
     <div>

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { loadSidebarModuleAccess, visibleNavItems } from '@/lib/nav';
+import { defaultSidebarModuleAccess, visibleNavItems, type SidebarModuleAccess } from '@/lib/nav';
+import { fetchModuleRegistry } from '@/lib/api';
 import { useRolePreview } from '@/context/RolePreviewContext';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
@@ -26,24 +27,29 @@ function Logo({ collapsed }: { collapsed?: boolean }) {
 }
 
 function NavList({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
-  const { effectiveRole, previewDepartmentId } = useRolePreview();
-  const { user } = useAuth();
+  const { effectiveRole, isPreviewing, previewDepartmentId } = useRolePreview();
+  const { token, user } = useAuth();
   const { emails, chatMessages } = useData();
-  const [moduleAccess, setModuleAccess] = useState(() => loadSidebarModuleAccess());
-  const items = visibleNavItems(effectiveRole, previewDepartmentId ?? user?.departmentCode, moduleAccess);
+  const [moduleAccess, setModuleAccess] = useState(() => defaultSidebarModuleAccess());
+  const departmentItems = visibleNavItems(effectiveRole, previewDepartmentId ?? user?.departmentCode, moduleAccess);
+  const previewNavigation = new Set(['/home', '/my-work', '/workspace', '/calendar']);
+  const items = isPreviewing
+    ? departmentItems.filter((item) => previewNavigation.has(item.to))
+    : departmentItems;
   const unreadMail = emails.filter((m) => m.folder === 'inbox' && !m.read).length;
   const unreadChat = chatMessages.filter((m) => m.senderId !== CURRENT_EMPLOYEE.id && !m.read).length;
   const inboxUnread = unreadMail + unreadChat;
 
   useEffect(() => {
-    const refresh = () => setModuleAccess(loadSidebarModuleAccess());
-    window.addEventListener('storage', refresh);
-    window.addEventListener('bes-sidebar-access-changed', refresh);
-    return () => {
-      window.removeEventListener('storage', refresh);
-      window.removeEventListener('bes-sidebar-access-changed', refresh);
-    };
-  }, []);
+    if (!token) return;
+    let cancelled = false;
+    fetchModuleRegistry(token)
+      .then((rows) => {
+        if (!cancelled) setModuleAccess(Object.fromEntries(rows.map((row) => [row.path, row.departmentIds])) as SidebarModuleAccess);
+      })
+      .catch((error) => console.warn('Unable to load Oracle module access.', error));
+    return () => { cancelled = true; };
+  }, [token]);
 
   return (
     <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 py-3 scrollbar-thin" aria-label="Primary">

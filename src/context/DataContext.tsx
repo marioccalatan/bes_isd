@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { loadState, saveState, clearAllBesData } from '@/lib/storage';
 import { randomRef } from '@/lib/utils';
-import { createCalendarEvent, createCalendarTask, createWorkComment, deleteCalendarEvent as deleteOracleCalendarEvent, deleteWorkComment, fetchCalendarEvents, fetchWorkTasks, setCalendarEventDone, updateCalendarEvent, updateWorkComment, type CalendarTaskInput } from '@/lib/api';
+import { createCalendarEvent, createCalendarTask, createWorkComment, deleteCalendarEvent as deleteOracleCalendarEvent, deleteWorkComment, fetchCalendarEvents, fetchToolRegistry, fetchWorkTasks, setCalendarEventDone, updateCalendarEvent, updateWorkComment, type CalendarTaskInput } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import {
   DEPARTMENTS, EMPLOYEES, CURRENT_EMPLOYEE,
@@ -189,7 +189,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [projects] = useSeeded('projects', seed);
   const [notifications, setNotifications] = useSeeded('notifications', seed);
   const [modules, setModules] = useSeeded('modules', seed);
-  const [tools, setTools] = useSeeded('tools', seed);
+  const [tools, setTools] = useState<AppTool[]>(() => buildTools());
   const [storageItems, setStorageItems] = useSeeded('storageItems', seed);
   const [storageQuotas, setStorageQuotas] = useSeeded('storageQuotas', seed);
   const [qmsDocuments, setQmsDocuments] = useSeeded('qmsDocuments', seed);
@@ -203,6 +203,44 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [chatMessages, setChatMessages] = useSeeded('chatMessages', seed);
   const [clock, setClock] = useSeeded('clock', seed);
 
+  // Preserve configured access on existing tools while making newly seeded
+  // department tools available to browsers with older persisted data.
+  useEffect(() => {
+    setTools((current) => {
+      const defaults = buildTools();
+      const defaultByCode = new Map(defaults.map((tool) => [tool.code, tool]));
+      let changed = current.some((tool) => tool.code === 'HR Office');
+      const enriched = current.filter((tool) => tool.code !== 'HR Office').map((tool) => {
+        const renamedTool = tool.code === 'Motorpool' ? {
+          ...tool,
+          code: 'General Services Office',
+          name: 'General Services Office System',
+          description: 'General services, vehicle dispatch, maintenance, and facilities support.',
+        } : tool;
+        const toolWithRenamedOffices = {
+          ...renamedTool,
+          access: renamedTool.access.map((grant) => grant.unit === 'Motorpool' ? { ...grant, unit: 'General Services Office' } : grant),
+        };
+        const seededTool = defaultByCode.get(toolWithRenamedOffices.code);
+        if (!toolWithRenamedOffices.status) {
+          changed = true;
+          toolWithRenamedOffices.status = seededTool?.status ?? 'ENABLED';
+        }
+        if (toolWithRenamedOffices.taskSubjects === undefined && seededTool?.taskSubjects) {
+          changed = true;
+          return { ...toolWithRenamedOffices, taskSubjects: seededTool.taskSubjects };
+        }
+        if (toolWithRenamedOffices !== tool) changed = true;
+        return toolWithRenamedOffices;
+      });
+      const uniqueTools = enriched.filter((tool, index, allTools) => allTools.findIndex((candidate) => candidate.code === tool.code) === index);
+      if (uniqueTools.length !== enriched.length) changed = true;
+      const existingCodes = new Set(uniqueTools.map((tool) => tool.code));
+      const missingTools = defaults.filter((tool) => !existingCodes.has(tool.code));
+      return changed || missingTools.length > 0 ? [...uniqueTools, ...missingTools] : current;
+    });
+  }, [setTools]);
+
   useEffect(() => {
     let cancelled = false;
     fetchCalendarEvents(token)
@@ -214,6 +252,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
       });
     return () => { cancelled = true; };
   }, [setEvents, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const refreshToolsFromOracle = () => fetchToolRegistry(token)
+      .then((oracleTools) => {
+        if (cancelled) return;
+        const oracleByCode = new Map(oracleTools.map((tool) => [tool.code, tool]));
+        setTools(buildTools().map((tool) => {
+          const configured = oracleByCode.get(tool.code);
+          return configured ? { ...tool, ...configured } : tool;
+        }));
+      })
+      .catch((error) => console.warn('Unable to load Oracle tool access; keeping the local fallback.', error));
+    void refreshToolsFromOracle();
+    const interval = window.setInterval(refreshToolsFromOracle, 10_000);
+    window.addEventListener('focus', refreshToolsFromOracle);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshToolsFromOracle);
+    };
+  }, [setTools, token]);
 
   useEffect(() => {
     if (!token) return;

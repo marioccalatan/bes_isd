@@ -50,8 +50,18 @@ const serveStatic = async (req, res) => {
 };
 const readBody = async (req) => {
   let raw = '';
-  for await (const chunk of req) { raw += chunk; if (raw.length > 2_000_000) throw new Error('Request too large'); }
+  for await (const chunk of req) { raw += chunk; if (raw.length > 8_000_000) throw Object.assign(new Error('Request body exceeds the 8 MB limit.'), { statusCode: 413 }); }
   return raw ? JSON.parse(raw) : {};
+};
+const readBinaryBody = async (req, maxBytes = 25 * 1024 * 1024) => {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw Object.assign(new Error('DOCX file exceeds the 25 MB limit.'), { statusCode: 413 });
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, size);
 };
 const normalize = (value) => String(value ?? '').trim();
 const nullableNormalize = (value) => {
@@ -68,6 +78,12 @@ const localIso = (value) => {
   if (!(value instanceof Date)) return String(value).replace(' ', 'T');
   const pad = (n) => String(n).padStart(2, '0');
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
+};
+const localDateOnly = (value) => {
+  if (!value) return '';
+  if (!(value instanceof Date)) return String(value).slice(0, 10);
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
 };
 const bearerToken = (req) => {
   const value = req.headers.authorization || '';
@@ -106,6 +122,12 @@ const attachmentList = (value) => {
   }
 };
 const safeFileName = (value) => normalize(value).replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '_') || 'attachment';
+const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const isDocxBuffer = (file) => file.length >= 4
+  && file[0] === 0x50 && file[1] === 0x4b
+  && [0x03, 0x05, 0x07].includes(file[2]) && [0x04, 0x06, 0x08].includes(file[3])
+  && file.includes(Buffer.from('[Content_Types].xml'))
+  && file.includes(Buffer.from('word/document.xml'));
 const workTaskAttachmentPaths = (taskUid, files) => Array.isArray(files)
   ? files
     .map((file, index) => {
@@ -158,6 +180,80 @@ const publicUser = (row) => ({
   accountStatus: row.ACCOUNT_STATUS, dateHired: row.DATE_HIRED, workLocation: row.WORK_LOCATION,
   profilePhoto: row.PROFILE_PHOTO_DATA_URL,
   roles: row.ROLE_ASSIGNMENTS ? String(row.ROLE_ASSIGNMENTS).split('|').filter(Boolean) : [row.APP_ROLE],
+});
+const policyRecord = (row) => ({
+  id: row.RECORD_UID,
+  title: row.TITLE,
+  documentNumber: row.DOCUMENT_NUMBER,
+  revisionNumber: row.REVISION_NUMBER,
+  effectivityDate: localDateOnly(row.EFFECTIVITY_DATE),
+  contents: row.CONTENTS,
+  nature: row.NATURE,
+  documentType: row.DOCUMENT_TYPE || 'Policy',
+  attachmentName: row.ATTACHMENT_NAME || undefined,
+  attachmentMimeType: row.ATTACHMENT_MIME_TYPE || undefined,
+  attachmentSize: row.ATTACHMENT_SIZE == null ? undefined : Number(row.ATTACHMENT_SIZE),
+  createdBy: [row.CREATED_BY_FIRST_NAME, row.CREATED_BY_LAST_NAME].filter(Boolean).join(' ') || row.CREATED_BY_USERNAME || undefined,
+  createdAt: localIso(row.CREATED_AT),
+  updatedAt: localIso(row.UPDATED_AT),
+});
+const policyTaskProcessing = (row) => ({
+  taskId: row.SOURCE_TASK_UID,
+  status: row.WORKFLOW_STATUS,
+  actionTaken: row.ACTION_TAKEN || '',
+  updatedAt: localIso(row.UPDATED_AT),
+});
+const HRO_TOOL_TASK_CONFIG = {
+  recruitment: { table: 'BES_HRO_REC_TASK_PROCESSING', subject: 'application letter' },
+  'human-resources': { table: 'BES_HRO_HR_TASK_PROCESSING', subject: 'human resource' },
+  'learning-development': { table: 'BES_HRO_LD_TASK_PROCESSING', subject: 'learning and development' },
+  'performance-management': { table: 'BES_HRO_PM_TASK_PROCESSING', subject: 'performance management' },
+  'employee-relations': { table: 'BES_HRO_ER_TASK_PROCESSING', subject: 'employee relations' },
+  'institutional-communications': { table: 'BES_HRO_IC_TASK_PROCESSING', subject: 'institutional communications' },
+  'member-programs': { table: 'BES_HRO_MCP_TASK_PROCESSING', subject: 'member-consumer and community programs' },
+  'records-management': { table: 'BES_HRO_RM_TASK_PROCESSING', subject: 'records management' },
+  'events-management': { table: 'BES_HRO_EM_TASK_PROCESSING', subject: 'events management' },
+};
+const recruitmentComment = (row) => ({
+  id: row.COMMENT_UID,
+  author: [row.AUTHOR_FIRST_NAME, row.AUTHOR_LAST_NAME].filter(Boolean).join(' ') || row.AUTHOR_USERNAME || 'Unknown',
+  authorId: row.AUTHOR_USERNAME || String(row.AUTHOR_USER_ID || ''),
+  message: row.MESSAGE,
+  createdAt: localIso(row.CREATED_AT),
+  updatedAt: localIso(row.UPDATED_AT),
+});
+const recruitmentRecord = (row, comments = []) => ({
+  id: row.RECRUITMENT_UID,
+  sourceTaskId: row.SOURCE_TASK_UID,
+  title: row.TITLE,
+  controlNumber: row.CONTROL_NUMBER || undefined,
+  applicantName: [row.FIRST_NAME, row.MIDDLE_NAME, row.LAST_NAME, row.SUFFIX].filter(Boolean).join(' ') || row.TITLE?.replace(/^Application Letter (?:of|for)\s+/i, '') || row.TITLE,
+  lastName: row.LAST_NAME || '',
+  firstName: row.FIRST_NAME || '',
+  middleName: row.MIDDLE_NAME || '',
+  suffix: row.SUFFIX || '',
+  birthDate: localDateOnly(row.BIRTH_DATE) || '',
+  sex: row.SEX || '',
+  civilStatus: row.CIVIL_STATUS || '',
+  email: row.EMAIL || '',
+  mobileNo: row.MOBILE_NO || '',
+  municipality: row.MUNICIPALITY || '',
+  barangay: row.BARANGAY || '',
+  address: row.ADDRESS || '',
+  highestEducation: row.HIGHEST_EDUCATION || '',
+  schoolName: row.SCHOOL_NAME || '',
+  yearGraduated: row.YEAR_GRADUATED || '',
+  applicationSource: row.APPLICATION_SOURCE || '',
+  createdBy: [row.CREATED_BY_FIRST_NAME, row.CREATED_BY_LAST_NAME].filter(Boolean).join(' ') || row.CREATED_BY_USERNAME || 'Unknown',
+  assignedTo: [row.ASSIGNED_TO_FIRST_NAME, row.ASSIGNED_TO_LAST_NAME].filter(Boolean).join(' ') || row.ASSIGNED_TO_USERNAME || 'Unassigned',
+  dateSubmitted: localDateOnly(row.TASK_CREATED_AT),
+  status: row.WORKFLOW_STATUS,
+  actionTaken: row.ACTION_TAKEN || undefined,
+  positionApplying: row.POSITION_APPLYING || undefined,
+  remarks: row.REMARKS || '',
+  comments,
+  createdAt: localIso(row.CREATED_AT),
+  updatedAt: localIso(row.UPDATED_AT),
 });
 const commentFromRow = (row) => ({
   id: row.COMMENT_UID,
@@ -262,7 +358,7 @@ async function currentSessionUser(connection, token) {
   return found.rows[0] ?? null;
 }
 
-const isTaskModerator = (user) => ['Department Manager', 'Secretary', 'Administrator'].includes(user?.APP_ROLE);
+const isTaskModerator = (user) => ['Department Manager', 'Department Secretary', 'Office Secretary', 'Administrator'].includes(user?.APP_ROLE);
 
 const DB_SYNC_TABLES = [
   'BES_USERS',
@@ -270,16 +366,58 @@ const DB_SYNC_TABLES = [
   'BES_PERMISSIONS',
   'BES_ROLE_PERMISSIONS',
   'BES_USER_ROLES',
+  'BES_DEPARTMENTS',
+  'BES_OFFICES',
+  'BES_POSITIONS',
+  'BES_TOOL_ACCESS',
+  'BES_TASK_SUBJECTS',
+  'BES_MODULE_REGISTRY',
+  'BES_MODULE_ACCESS',
   'BES_CALENDAR_EVENTS',
   'BES_WORK_TASKS',
   'BES_WORK_COMMENTS',
+  'BES_HRO_RECRUITMENT_AND_ONBOARDING',
+  'BES_HRO_RECRUITMENT_COMMENTS',
+  'BES_HRO_RECRUITMENT_POSITIONS',
+  'BES_POLICY_RECORDS',
+  'BES_POLICY_TASK_PROCESSING',
+  'BES_HRO_REC_TASK_PROCESSING',
+  'BES_HRO_HR_TASK_PROCESSING',
+  'BES_HRO_LD_TASK_PROCESSING',
+  'BES_HRO_PM_TASK_PROCESSING',
+  'BES_HRO_ER_TASK_PROCESSING',
+  'BES_HRO_IC_TASK_PROCESSING',
+  'BES_HRO_MCP_TASK_PROCESSING',
+  'BES_HRO_RM_TASK_PROCESSING',
+  'BES_HRO_EM_TASK_PROCESSING',
 ];
 const DB_SYNC_DELETE_ORDER = [
+  'BES_HRO_REC_TASK_PROCESSING',
+  'BES_HRO_HR_TASK_PROCESSING',
+  'BES_HRO_LD_TASK_PROCESSING',
+  'BES_HRO_PM_TASK_PROCESSING',
+  'BES_HRO_ER_TASK_PROCESSING',
+  'BES_HRO_IC_TASK_PROCESSING',
+  'BES_HRO_MCP_TASK_PROCESSING',
+  'BES_HRO_RM_TASK_PROCESSING',
+  'BES_HRO_EM_TASK_PROCESSING',
+  'BES_POLICY_TASK_PROCESSING',
+  'BES_HRO_RECRUITMENT_COMMENTS',
+  'BES_HRO_RECRUITMENT_POSITIONS',
+  'BES_HRO_RECRUITMENT_AND_ONBOARDING',
   'BES_WORK_COMMENTS',
   'BES_WORK_TASKS',
   'BES_CALENDAR_EVENTS',
+  'BES_POLICY_RECORDS',
   'BES_USER_ROLES',
   'BES_ROLE_PERMISSIONS',
+  'BES_POSITIONS',
+  'BES_OFFICES',
+  'BES_DEPARTMENTS',
+  'BES_TOOL_ACCESS',
+  'BES_TASK_SUBJECTS',
+  'BES_MODULE_ACCESS',
+  'BES_MODULE_REGISTRY',
   'BES_USERS',
   'BES_ROLES',
   'BES_PERMISSIONS',
@@ -290,9 +428,30 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_PERMISSIONS',
   'BES_ROLE_PERMISSIONS',
   'BES_USER_ROLES',
+  'BES_DEPARTMENTS',
+  'BES_OFFICES',
+  'BES_POSITIONS',
+  'BES_TOOL_ACCESS',
+  'BES_TASK_SUBJECTS',
+  'BES_MODULE_REGISTRY',
+  'BES_MODULE_ACCESS',
   'BES_CALENDAR_EVENTS',
   'BES_WORK_TASKS',
   'BES_WORK_COMMENTS',
+  'BES_HRO_RECRUITMENT_AND_ONBOARDING',
+  'BES_HRO_RECRUITMENT_COMMENTS',
+  'BES_HRO_RECRUITMENT_POSITIONS',
+  'BES_POLICY_RECORDS',
+  'BES_POLICY_TASK_PROCESSING',
+  'BES_HRO_REC_TASK_PROCESSING',
+  'BES_HRO_HR_TASK_PROCESSING',
+  'BES_HRO_LD_TASK_PROCESSING',
+  'BES_HRO_PM_TASK_PROCESSING',
+  'BES_HRO_ER_TASK_PROCESSING',
+  'BES_HRO_IC_TASK_PROCESSING',
+  'BES_HRO_MCP_TASK_PROCESSING',
+  'BES_HRO_RM_TASK_PROCESSING',
+  'BES_HRO_EM_TASK_PROCESSING',
 ];
 const DB_SYNC_ALLOWED = new Set(DB_SYNC_TABLES);
 
@@ -352,51 +511,122 @@ async function tableColumns(connection, tableName) {
   return result.rows.map((row) => row.COLUMN_NAME);
 }
 
-async function syncOracleTables(targetDetails, requestedTables) {
+async function tableColumnMetadata(connection, tableName) {
+  if (!DB_SYNC_ALLOWED.has(tableName)) throw Object.assign(new Error(`Table ${tableName} is not allowed for sync.`), { statusCode: 400 });
+  const result = await connection.execute(`SELECT column_name, data_type, data_length, char_length, char_used, data_precision, data_scale
+    FROM user_tab_columns WHERE table_name=:tableName ORDER BY column_id`, { tableName });
+  return result.rows;
+}
+
+function syncColumnType(column) {
+  if (['VARCHAR2', 'CHAR'].includes(column.DATA_TYPE)) {
+    const length = column.CHAR_USED === 'C' ? column.CHAR_LENGTH : column.DATA_LENGTH;
+    return `${column.DATA_TYPE}(${length}${column.CHAR_USED === 'C' ? ' CHAR' : ''})`;
+  }
+  if (['NVARCHAR2', 'NCHAR'].includes(column.DATA_TYPE)) return `${column.DATA_TYPE}(${column.CHAR_LENGTH})`;
+  if (column.DATA_TYPE === 'NUMBER' && column.DATA_PRECISION != null) {
+    return `NUMBER(${column.DATA_PRECISION}${column.DATA_SCALE != null ? `,${column.DATA_SCALE}` : ''})`;
+  }
+  return column.DATA_TYPE;
+}
+
+async function alignDestinationColumns(source, destination, table) {
+  const sourceColumns = await tableColumnMetadata(source, table);
+  const destinationNames = new Set(await tableColumns(destination, table));
+  const added = [];
+  for (const column of sourceColumns.filter((item) => !destinationNames.has(item.COLUMN_NAME))) {
+    await destination.execute(`ALTER TABLE ${table} ADD (${column.COLUMN_NAME} ${syncColumnType(column)})`);
+    added.push(column.COLUMN_NAME);
+  }
+  return added;
+}
+
+async function oracleValueText(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value.getData === 'function') return String(await value.getData());
+  return String(value);
+}
+
+async function pushOracleSchema(targetDetails, requestedTables) {
+  const selected = Array.isArray(requestedTables)
+    ? [...new Set(requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)))]
+    : [];
+  if (selected.length === 0) throw Object.assign(new Error('Select at least one BES table for schema push.'), { statusCode: 400 });
+  const target = await oracledb.getConnection(oracleTargetConfig(targetDetails));
+  try {
+    return await withConnection(async (source) => {
+      const sourceTables = new Set((await listSyncTables(source)).map((table) => table.tableName));
+      const missingSource = selected.filter((table) => !sourceTables.has(table));
+      if (missingSource.length) throw Object.assign(new Error(`Local schema is missing: ${missingSource.join(', ')}`), { statusCode: 400 });
+      let targetTables = new Set((await listSyncTables(target)).map((table) => table.tableName));
+      const report = [];
+      for (const table of DB_SYNC_INSERT_ORDER.filter((item) => selected.includes(item))) {
+        if (!targetTables.has(table)) {
+          await source.execute(`BEGIN
+            DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'STORAGE', false);
+            DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'SEGMENT_ATTRIBUTES', false);
+            DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'SQLTERMINATOR', false);
+          END;`);
+          const ddlResult = await source.execute(`SELECT DBMS_METADATA.GET_DDL('TABLE', :tableName, USER) ddl FROM dual`, { tableName: table });
+          let ddl = await oracleValueText(ddlResult.rows[0]?.DDL);
+          const ownerResult = await source.execute(`SELECT USER owner_name FROM dual`);
+          const owner = ownerResult.rows[0]?.OWNER_NAME;
+          if (owner) ddl = ddl.replaceAll(`"${owner}".`, '');
+          await target.execute(ddl);
+          targetTables.add(table);
+          report.push({ tableName: table, created: true, addedColumns: [] });
+        } else {
+          const addedColumns = await alignDestinationColumns(source, target, table);
+          report.push({ tableName: table, created: false, addedColumns });
+        }
+      }
+      return report;
+    });
+  } finally {
+    await target.close();
+  }
+}
+
+async function copyOracleTables(source, destination, selected, direction) {
+  const sourceTables = new Set((await listSyncTables(source)).map((table) => table.tableName));
+  const destinationTables = new Set((await listSyncTables(destination)).map((table) => table.tableName));
+  const missing = selected.filter((table) => !sourceTables.has(table) || !destinationTables.has(table));
+  if (missing.length) throw Object.assign(new Error(`Server schema is missing: ${missing.join(', ')}. Run Push Schema Tables for the selected tables, then run data sync again.`), { statusCode: 400 });
+
+  const addedColumns = new Map();
+  for (const table of selected) addedColumns.set(table, await alignDestinationColumns(source, destination, table));
+  for (const table of DB_SYNC_DELETE_ORDER.filter((table) => selected.includes(table))) await destination.execute(`DELETE FROM ${table}`);
+
+  const report = [];
+  for (const table of DB_SYNC_INSERT_ORDER.filter((table) => selected.includes(table))) {
+    const columns = await tableColumns(source, table);
+    const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
+    if (sourceResult.rows.length > 0) await destination.executeMany(
+      `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map((column) => `:${column}`).join(', ')})`,
+      sourceResult.rows, { autoCommit: false }
+    );
+    report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length, addedColumns: addedColumns.get(table), direction });
+  }
+  await destination.commit();
+  return report;
+}
+
+async function syncOracleTables(targetDetails, requestedTables, requestedDirection = 'push') {
   const selected = Array.isArray(requestedTables)
     ? [...new Set(requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)))]
     : [];
   if (selected.length === 0) throw Object.assign(new Error('Select at least one BES table to sync.'), { statusCode: 400 });
 
+  const direction = ['push', 'pull', 'both'].includes(normalize(requestedDirection).toLowerCase()) ? normalize(requestedDirection).toLowerCase() : 'push';
   const target = await oracledb.getConnection(oracleTargetConfig(targetDetails));
   try {
     return await withConnection(async (source) => {
-      const sourceTables = new Set((await listSyncTables(source)).map((table) => table.tableName));
-      const targetTables = new Set((await listSyncTables(target)).map((table) => table.tableName));
-      const missing = selected.filter((table) => !sourceTables.has(table) || !targetTables.has(table));
-      if (missing.length) {
-        const error = new Error(`These selected tables are missing in either source or target Oracle schema: ${missing.join(', ')}`);
-        error.statusCode = 400;
-        throw error;
-      }
-
-      const report = [];
-      for (const table of DB_SYNC_DELETE_ORDER.filter((table) => selected.includes(table))) {
-        await target.execute(`DELETE FROM ${table}`);
-      }
-
-      for (const table of DB_SYNC_INSERT_ORDER.filter((table) => selected.includes(table))) {
-        const sourceColumns = await tableColumns(source, table);
-        const targetColumns = await tableColumns(target, table);
-        const targetColumnSet = new Set(targetColumns);
-        const columns = sourceColumns.filter((column) => targetColumnSet.has(column));
-        if (columns.length === 0) {
-          report.push({ tableName: table, rowCount: 0, columns: 0, note: 'No matching columns.' });
-          continue;
-        }
-
-        const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
-        if (sourceResult.rows.length > 0) {
-          await target.executeMany(
-            `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map((column) => `:${column}`).join(', ')})`,
-            sourceResult.rows,
-            { autoCommit: false }
-          );
-        }
-        report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length });
-      }
-      await target.commit();
-      return report;
+      if (direction === 'push') return copyOracleTables(source, target, selected, 'Local → Server');
+      if (direction === 'pull') return copyOracleTables(target, source, selected, 'Server → Local');
+      const pushed = await copyOracleTables(source, target, selected, 'Local → Server');
+      const pulled = await copyOracleTables(target, source, selected, 'Server → Local');
+      return [...pushed, ...pulled];
     });
   } catch (error) {
     try { await target.rollback(); } catch {}
@@ -404,6 +634,45 @@ async function syncOracleTables(targetDetails, requestedTables) {
   } finally {
     await target.close();
   }
+}
+
+async function ensureRecruitmentRecords(connection) {
+  await connection.execute(`INSERT INTO bes_hro_recruitment_and_onboarding
+      (recruitment_uid, source_task_uid, workflow_status)
+    SELECT 'HRO-APP-' || TO_CHAR(t.task_id), t.task_uid, 'Received'
+    FROM bes_work_tasks t
+    WHERE t.is_active = 'Y'
+      AND LOWER(TRIM(t.task_subject)) = 'application letter'
+      AND NOT EXISTS (
+        SELECT 1 FROM bes_hro_recruitment_and_onboarding r WHERE r.source_task_uid = t.task_uid
+      )`);
+  await connection.commit();
+}
+
+async function loadRecruitmentRecords(connection) {
+  const records = await connection.execute(`SELECT r.*,
+      t.title, t.control_number, t.created_at task_created_at,
+      creator.username created_by_username, creator.first_name created_by_first_name, creator.last_name created_by_last_name,
+      assignee.username assigned_to_username, assignee.first_name assigned_to_first_name, assignee.last_name assigned_to_last_name
+    FROM bes_hro_recruitment_and_onboarding r
+    JOIN bes_work_tasks t ON t.task_uid = r.source_task_uid
+    LEFT JOIN bes_users creator ON creator.user_id = t.created_by_user_id
+    LEFT JOIN bes_users assignee ON assignee.user_id = t.assigned_to_user_id
+    WHERE t.is_active = 'Y'
+      AND r.is_active = 'Y'
+    ORDER BY r.updated_at DESC, t.created_at DESC`);
+  const commentRows = await connection.execute(`SELECT c.*,
+      u.username author_username, u.first_name author_first_name, u.last_name author_last_name
+    FROM bes_hro_recruitment_comments c
+    LEFT JOIN bes_users u ON u.user_id = c.author_user_id
+    ORDER BY c.created_at`);
+  const commentsByRecord = new Map();
+  for (const row of commentRows.rows) {
+    const comments = commentsByRecord.get(row.RECRUITMENT_UID) ?? [];
+    comments.push(recruitmentComment(row));
+    commentsByRecord.set(row.RECRUITMENT_UID, comments);
+  }
+  return records.rows.map((row) => recruitmentRecord(row, commentsByRecord.get(row.RECRUITMENT_UID) ?? []));
 }
 
 async function handle(req, res) {
@@ -428,6 +697,193 @@ async function handle(req, res) {
         WHERE NVL(u.account_status, 'ACTIVE') <> 'DISABLED'
         ORDER BY last_name, first_name, employee_no`));
       return json(res, 200, { users: result.rows.map(adminUser) });
+    }
+    if (req.method === 'GET' && req.url === '/api/tools') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const tools = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const access = await c.execute(`SELECT tool_code, tool_name, department_code, office_name, position_name,
+            access_level, tool_status, owner_department_code, access_note
+          FROM bes_tool_access WHERE is_active='Y'
+          ORDER BY tool_code, department_code, office_name, position_name`);
+        const subjects = await c.execute(`SELECT tool_code, task_subject FROM bes_task_subjects
+          WHERE is_active='Y' ORDER BY tool_code, task_subject`);
+        const subjectsByTool = new Map();
+        for (const row of subjects.rows) {
+          const list = subjectsByTool.get(row.TOOL_CODE) ?? [];
+          list.push(row.TASK_SUBJECT);
+          subjectsByTool.set(row.TOOL_CODE, list);
+        }
+        const byCode = new Map();
+        for (const row of access.rows) {
+          if (!byCode.has(row.TOOL_CODE)) byCode.set(row.TOOL_CODE, {
+            code: row.TOOL_CODE,
+            name: row.TOOL_NAME,
+            ownerDepartmentId: row.OWNER_DEPARTMENT_CODE,
+            status: row.TOOL_STATUS || 'ENABLED',
+            taskSubjects: subjectsByTool.get(row.TOOL_CODE) ?? [],
+            access: [],
+          });
+          byCode.get(row.TOOL_CODE).access.push({
+            departmentId: row.DEPARTMENT_CODE,
+            level: row.ACCESS_LEVEL,
+            ...(row.OFFICE_NAME ? { unit: row.OFFICE_NAME } : {}),
+            ...(row.POSITION_NAME ? { position: row.POSITION_NAME } : {}),
+            ...(row.ACCESS_NOTE ? { note: row.ACCESS_NOTE } : {}),
+          });
+        }
+        return [...byCode.values()];
+      });
+      if (!tools) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { tools });
+    }
+    if (req.method === 'GET' && req.url === '/api/modules') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const modules = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const result = await c.execute(`SELECT m.module_path, m.module_label, m.admin_only, a.department_code, a.is_enabled
+          FROM bes_module_registry m LEFT JOIN bes_module_access a ON a.module_path=m.module_path
+          WHERE m.is_active='Y' ORDER BY m.module_path, a.department_code`);
+        const byPath = new Map();
+        for (const row of result.rows) {
+          if (!byPath.has(row.MODULE_PATH)) byPath.set(row.MODULE_PATH, { path: row.MODULE_PATH, label: row.MODULE_LABEL, adminOnly: row.ADMIN_ONLY === 'Y', departmentIds: [] });
+          if (row.DEPARTMENT_CODE && row.IS_ENABLED === 'Y') byPath.get(row.MODULE_PATH).departmentIds.push(row.DEPARTMENT_CODE);
+        }
+        return [...byPath.values()];
+      });
+      if (!modules) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { modules });
+    }
+    if (req.method === 'PUT' && req.url === '/api/admin/modules') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const body = await readBody(req);
+      const access = body.access && typeof body.access === 'object' ? body.access : {};
+      await withConnection(async (c) => {
+        for (const [modulePath, departmentIds] of Object.entries(access)) {
+          const enabled = new Set(Array.isArray(departmentIds) ? departmentIds.map((id) => normalize(id).toUpperCase()) : []);
+          const departments = await c.execute(`SELECT department_code FROM bes_departments WHERE is_active='Y'`);
+          for (const row of departments.rows) await c.execute(`MERGE INTO bes_module_access a
+            USING (SELECT :modulePath module_path,:departmentCode department_code FROM dual) src
+            ON (a.module_path=src.module_path AND a.department_code=src.department_code)
+            WHEN MATCHED THEN UPDATE SET is_enabled=:isEnabled,updated_at=SYSTIMESTAMP
+            WHEN NOT MATCHED THEN INSERT (module_path,department_code,is_enabled) VALUES (:modulePath,:departmentCode,:isEnabled)`, {
+            modulePath, departmentCode: row.DEPARTMENT_CODE, isEnabled: enabled.has(row.DEPARTMENT_CODE) ? 'Y' : 'N',
+          });
+        }
+        await c.commit();
+      });
+      return json(res, 200, { ok: true });
+    }
+    const toolRegistryMatch = url.pathname.match(/^\/api\/admin\/tools\/([^/]+)$/);
+    if (req.method === 'PUT' && toolRegistryMatch) {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const toolCode = decodeURIComponent(toolRegistryMatch[1]);
+      const body = await readBody(req);
+      const toolName = normalize(body.name);
+      const ownerDepartmentId = normalize(body.ownerDepartmentId).toUpperCase();
+      const status = normalize(body.status || 'ENABLED').toUpperCase();
+      const access = Array.isArray(body.access) ? body.access : [];
+      const taskSubjects = Array.isArray(body.taskSubjects) ? body.taskSubjects.map(normalize).filter(Boolean) : [];
+      if (!toolCode || !toolName || !ownerDepartmentId || !['SOON', 'ENABLED', 'DISABLED'].includes(status)) {
+        return json(res, 400, { error: 'Valid tool name, owner department, and status are required.' });
+      }
+      await withConnection(async (c) => {
+        await c.execute(`DELETE FROM bes_tool_access WHERE tool_code=:toolCode`, { toolCode });
+        for (const grant of access) {
+          const departmentCode = normalize(grant.departmentId).toUpperCase();
+          const level = normalize(grant.level).toUpperCase();
+          if (!departmentCode || !['ADMIN','NEW','VIEW','EDIT','OPEN','SOON','EXISTING'].includes(level)) continue;
+          await c.execute(`INSERT INTO bes_tool_access
+              (tool_code,tool_name,department_code,office_name,position_name,access_level,tool_status,owner_department_code,access_note,is_active)
+            VALUES (:toolCode,:toolName,:departmentCode,:officeName,:positionName,:accessLevel,:toolStatus,:ownerDepartmentCode,:accessNote,'Y')`, {
+            toolCode, toolName, departmentCode,
+            officeName: nullableNormalize(grant.unit), positionName: nullableNormalize(grant.position),
+            accessLevel: level, toolStatus: status, ownerDepartmentCode: ownerDepartmentId,
+            accessNote: nullableNormalize(grant.note),
+          });
+        }
+        await c.execute(`DELETE FROM bes_task_subjects WHERE tool_code=:toolCode`, { toolCode });
+        for (const taskSubject of [...new Set(taskSubjects)]) {
+          await c.execute(`INSERT INTO bes_task_subjects (tool_code,task_subject,is_active) VALUES (:toolCode,:taskSubject,'Y')`, { toolCode, taskSubject });
+        }
+        await c.commit();
+      });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && req.url === '/api/admin/org-structure') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const structure = await withConnection(async (c) => {
+        const departments = await c.execute(`SELECT department_id, department_code, department_name FROM bes_departments WHERE is_active='Y' ORDER BY department_name`);
+        const offices = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name FROM bes_offices WHERE is_active='Y' ORDER BY office_name`);
+        const positions = await c.execute(`SELECT position_id, department_id, office_id, position_title, employee_class FROM bes_positions WHERE is_active='Y' ORDER BY position_title`);
+        return departments.rows.map((department) => ({
+          id: String(department.DEPARTMENT_ID), code: department.DEPARTMENT_CODE, name: department.DEPARTMENT_NAME,
+          positions: positions.rows.filter((position) => position.DEPARTMENT_ID === department.DEPARTMENT_ID && !position.OFFICE_ID).map((position) => ({
+            id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS,
+          })),
+          offices: offices.rows.filter((office) => office.DEPARTMENT_ID === department.DEPARTMENT_ID).map((office) => ({
+            id: String(office.OFFICE_ID), name: office.OFFICE_NAME, parentOfficeId: office.PARENT_OFFICE_ID ? String(office.PARENT_OFFICE_ID) : null,
+            positions: positions.rows.filter((position) => position.OFFICE_ID === office.OFFICE_ID).map((position) => ({
+              id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS,
+            })),
+          })),
+        }));
+      });
+      return json(res, 200, { departments: structure });
+    }
+    if (['POST', 'PUT'].includes(req.method ?? '') && req.url === '/api/admin/org-structure') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const body = await readBody(req);
+      const entity = normalize(body.entity).toLowerCase();
+      const id = Number(body.id || 0);
+      await withConnection(async (c) => {
+        if (entity === 'department') {
+          const code = normalize(body.code).toUpperCase();
+          const name = normalize(body.name);
+          if (!code || !name) throw Object.assign(new Error('Department name and initials are required.'), { statusCode: 400 });
+          if (id) {
+            const previous = await c.execute(`SELECT department_code FROM bes_departments WHERE department_id=:id`, { id });
+            const oldCode = previous.rows[0]?.DEPARTMENT_CODE;
+            await c.execute(`UPDATE bes_departments SET department_code=:code, department_name=:name, updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id, code, name });
+            if (oldCode && oldCode !== code) {
+              await c.execute(`UPDATE bes_tool_access SET department_code=:code, updated_at=SYSTIMESTAMP WHERE department_code=:oldCode`, { code, oldCode });
+              await c.execute(`UPDATE bes_tool_access SET owner_department_code=:code, updated_at=SYSTIMESTAMP WHERE owner_department_code=:oldCode`, { code, oldCode });
+            }
+          } else await c.execute(`INSERT INTO bes_departments (department_code, department_name) VALUES (:code,:name)`, { code, name });
+        } else if (entity === 'office') {
+          const name = normalize(body.name);
+          const departmentId = Number(body.departmentId);
+          const parentOfficeId = body.parentOfficeId ? Number(body.parentOfficeId) : null;
+          if (!name || !departmentId) throw Object.assign(new Error('Office name and department are required.'), { statusCode: 400 });
+          if (id) {
+            const previous = await c.execute(`SELECT office_name FROM bes_offices WHERE office_id=:id`, { id });
+            const oldName = previous.rows[0]?.OFFICE_NAME;
+            await c.execute(`UPDATE bes_offices SET department_id=:departmentId, parent_office_id=:parentOfficeId, office_name=:name, updated_at=SYSTIMESTAMP WHERE office_id=:id`, { id, departmentId, parentOfficeId, name });
+            if (oldName && oldName !== name) await c.execute(`UPDATE bes_tool_access SET office_name=:name, updated_at=SYSTIMESTAMP WHERE office_name=:oldName`, { name, oldName });
+          } else await c.execute(`INSERT INTO bes_offices (department_id,parent_office_id,office_name) VALUES (:departmentId,:parentOfficeId,:name)`, { departmentId, parentOfficeId, name });
+        } else if (entity === 'position') {
+          const title = normalize(body.title);
+          const officeId = body.officeId ? Number(body.officeId) : null;
+          const departmentId = body.departmentId ? Number(body.departmentId) : null;
+          const employeeClass = normalize(body.employeeClass).toUpperCase();
+          const departmentRoles = ['DEPARTMENT_MANAGER', 'DEPARTMENT_SECRETARY'];
+          const officeRoles = ['OFFICE_SECRETARY', 'SUPERVISOR', 'RAF'];
+          const validScope = departmentRoles.includes(employeeClass) ? !!departmentId && !officeId : officeRoles.includes(employeeClass) && !!officeId && !departmentId;
+          if (!title || !validScope) throw Object.assign(new Error('Select a valid role and its corresponding department or office.'), { statusCode: 400 });
+          if (id) await c.execute(`UPDATE bes_positions SET department_id=:departmentId, office_id=:officeId, position_title=:title, employee_class=:employeeClass, updated_at=SYSTIMESTAMP WHERE position_id=:id`, { id, departmentId, officeId, title, employeeClass });
+          else await c.execute(`INSERT INTO bes_positions (department_id,office_id,position_title,employee_class) VALUES (:departmentId,:officeId,:title,:employeeClass)`, { departmentId, officeId, title, employeeClass });
+        } else throw Object.assign(new Error('Entity must be department, office, or position.'), { statusCode: 400 });
+        await c.commit();
+      });
+      return json(res, 200, { ok: true });
     }
     if (req.method === 'GET' && req.url === '/api/users/directory') {
       const token = bearerToken(req);
@@ -671,8 +1127,625 @@ async function handle(req, res) {
       if (!admin) return json(res, 403, { error: 'Administrator access is required for database sync.' });
       const body = await readBody(req);
       const startedAt = new Date().toISOString();
-      const tables = await syncOracleTables(body.connection ?? body.target ?? {}, body.tables);
+      const direction = normalize(body.direction || 'push').toLowerCase();
+      const tables = await syncOracleTables(body.connection ?? body.target ?? {}, body.tables, direction);
       return json(res, 200, { ok: true, startedAt, finishedAt: new Date().toISOString(), tables });
+    }
+    if (req.method === 'POST' && req.url === '/api/admin/database-sync/push-schema') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 403, { error: 'Administrator access is required for database schema sync.' });
+      const body = await readBody(req);
+      const startedAt = new Date().toISOString();
+      const tables = await pushOracleSchema(body.connection ?? body.target ?? {}, body.tables);
+      return json(res, 200, { ok: true, startedAt, finishedAt: new Date().toISOString(), tables });
+    }
+    if (req.method === 'GET' && req.url === '/api/hro/recruitment') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        return loadRecruitmentRecords(c);
+      });
+      return result ? json(res, 200, { records: result }) : json(res, 401, { error: 'Session expired.' });
+    }
+    if (req.method === 'GET' && req.url === '/api/hro/recruitment-positions') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        return c.execute(`SELECT position_name
+          FROM bes_hro_recruitment_positions
+          WHERE is_active = 'Y'
+          ORDER BY UPPER(position_name)`);
+      });
+      return result ? json(res, 200, { positions: result.rows.map((row) => row.POSITION_NAME) }) : json(res, 401, { error: 'Session expired.' });
+    }
+    if (req.method === 'POST' && req.url === '/api/hro/recruitment-positions') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req);
+      const positionName = normalize(body.positionName);
+      if (!positionName) return json(res, 400, { error: 'Enter a position name.' });
+      if (positionName.length > 200) return json(res, 400, { error: 'Position name must be 200 characters or fewer.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const existing = await c.execute(`SELECT position_name FROM bes_hro_recruitment_positions
+          WHERE UPPER(position_name) = UPPER(:positionName) AND is_active = 'Y'`, { positionName });
+        if (existing.rows[0]) return { positionName: existing.rows[0].POSITION_NAME, created: false };
+        await c.execute(`INSERT INTO bes_hro_recruitment_positions (position_name, created_by_user_id)
+          VALUES (:positionName, :createdByUserId)`, { positionName, createdByUserId: user.USER_ID });
+        await c.commit();
+        return { positionName, created: true };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, result.created ? 201 : 200, { positionName: result.positionName });
+    }
+    if (req.method === 'POST' && req.url === '/api/hro/recruitment/archive') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req);
+      const sourceTaskUid = normalize(body.sourceTaskId);
+      const status = normalize(body.status) || 'Received';
+      const allowedStatuses = new Set(['Received', 'For Screening', 'For Interview', 'Qualified', 'Not Qualified', 'Applicant Pool', 'Hired', 'Withdrawn']);
+      if (!sourceTaskUid) return json(res, 400, { error: 'Source task is required.' });
+      if (!allowedStatuses.has(status)) return json(res, 400, { error: 'Select a valid recruitment status.' });
+      const positionApplying = nullableNormalize(body.positionApplying);
+      const remarks = normalize(body.remarks);
+      const lastName = normalize(body.lastName);
+      const firstName = normalize(body.firstName);
+      const middleName = nullableNormalize(body.middleName);
+      const suffix = nullableNormalize(body.suffix);
+      const birthDate = nullableNormalize(body.birthDate);
+      const sex = nullableNormalize(body.sex);
+      const civilStatus = nullableNormalize(body.civilStatus);
+      const email = nullableNormalize(body.email);
+      const mobileNo = nullableNormalize(body.mobileNo);
+      const municipality = nullableNormalize(body.municipality);
+      const barangay = nullableNormalize(body.barangay);
+      const address = nullableNormalize(body.address);
+      const highestEducation = nullableNormalize(body.highestEducation);
+      const schoolName = nullableNormalize(body.schoolName);
+      const yearGraduated = nullableNormalize(body.yearGraduated);
+      const applicationSource = nullableNormalize(body.applicationSource);
+      if (!lastName || !firstName) return json(res, 400, { error: 'Applicant first name and last name are required.' });
+      if (birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) return json(res, 400, { error: 'Select a valid birth date.' });
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error: 'Enter a valid applicant email address.' });
+      if (yearGraduated && !/^\d{4}$/.test(yearGraduated)) return json(res, 400, { error: 'Year graduated must contain four digits.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const task = await c.execute(`SELECT task_id, task_uid
+          FROM bes_work_tasks
+          WHERE task_uid = :sourceTaskUid
+            AND is_active = 'Y'
+            AND LOWER(TRIM(task_subject)) = 'application letter'`, { sourceTaskUid });
+        if (!task.rows[0]) return false;
+        const existing = await c.execute(`SELECT recruitment_uid
+          FROM bes_hro_recruitment_and_onboarding
+          WHERE source_task_uid = :sourceTaskUid`, { sourceTaskUid });
+        const recruitmentUid = existing.rows[0]?.RECRUITMENT_UID ?? `HRO-APP-${task.rows[0].TASK_ID}`;
+        const binds = {
+          recruitmentUid, status, positionApplying,
+          remarks: remarks ? { val: remarks, type: oracledb.CLOB } : null,
+          lastName, firstName, middleName, suffix, birthDate, sex, civilStatus, email, mobileNo,
+          municipality, barangay, address, highestEducation, schoolName, yearGraduated, applicationSource,
+          updatedByUserId: user.USER_ID,
+        };
+        if (existing.rows[0]) {
+          await c.execute(`UPDATE bes_hro_recruitment_and_onboarding SET
+              workflow_status = :status, action_taken = 'Archived from Recruitment Task',
+              position_applying = :positionApplying, remarks = :remarks,
+              last_name = :lastName, first_name = :firstName, middle_name = :middleName, suffix = :suffix,
+              birth_date = CASE WHEN :birthDate IS NULL THEN NULL ELSE TO_DATE(:birthDate, 'YYYY-MM-DD') END,
+              sex = :sex, civil_status = :civilStatus, email = :email, mobile_no = :mobileNo,
+              municipality = :municipality, barangay = :barangay, address = :address,
+              highest_education = :highestEducation, school_name = :schoolName,
+              year_graduated = :yearGraduated, application_source = :applicationSource,
+              is_active = 'Y', updated_by_user_id = :updatedByUserId, updated_at = SYSTIMESTAMP
+            WHERE recruitment_uid = :recruitmentUid`, binds);
+        } else {
+          await c.execute(`INSERT INTO bes_hro_recruitment_and_onboarding
+              (recruitment_uid, source_task_uid, workflow_status, action_taken, position_applying, remarks,
+               last_name, first_name, middle_name, suffix, birth_date, sex, civil_status, email, mobile_no,
+               municipality, barangay, address, highest_education, school_name, year_graduated,
+               application_source, updated_by_user_id, is_active)
+            VALUES
+              (:recruitmentUid, :sourceTaskUid, :status, 'Archived from Recruitment Task', :positionApplying, :remarks,
+               :lastName, :firstName, :middleName, :suffix,
+               CASE WHEN :birthDate IS NULL THEN NULL ELSE TO_DATE(:birthDate, 'YYYY-MM-DD') END,
+               :sex, :civilStatus, :email, :mobileNo, :municipality, :barangay, :address,
+               :highestEducation, :schoolName, :yearGraduated, :applicationSource, :updatedByUserId, 'Y')`, { ...binds, sourceTaskUid });
+        }
+        await c.commit();
+        return (await loadRecruitmentRecords(c)).find((record) => record.id === recruitmentUid);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Application Letter task not found.' });
+      return json(res, 201, { record: result });
+    }
+    const recruitmentCommentMatch = url.pathname.match(/^\/api\/hro\/recruitment\/([^/]+)\/comments$/);
+    if (req.method === 'POST' && recruitmentCommentMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recruitmentUid = decodeURIComponent(recruitmentCommentMatch[1]);
+      const body = await readBody(req);
+      const message = normalize(body.message);
+      if (!message) return json(res, 400, { error: 'Enter a comment.' });
+      if (message.length > 10000) return json(res, 400, { error: 'Comment must be 10,000 characters or fewer.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT recruitment_uid FROM bes_hro_recruitment_and_onboarding WHERE recruitment_uid = :recruitmentUid`, { recruitmentUid });
+        if (!found.rows[0]) return false;
+        const commentUid = `HRO-CMT-${Date.now()}`;
+        await c.execute(`INSERT INTO bes_hro_recruitment_comments
+          (comment_uid, recruitment_uid, author_user_id, message)
+          VALUES (:commentUid, :recruitmentUid, :authorUserId, :message)`, {
+          commentUid,
+          recruitmentUid,
+          authorUserId: user.USER_ID,
+          message: { val: message, type: oracledb.CLOB },
+        });
+        await c.execute(`UPDATE bes_hro_recruitment_and_onboarding SET updated_at = SYSTIMESTAMP WHERE recruitment_uid = :recruitmentUid`, { recruitmentUid });
+        await c.commit();
+        const created = await c.execute(`SELECT c.*,
+            u.username author_username, u.first_name author_first_name, u.last_name author_last_name
+          FROM bes_hro_recruitment_comments c
+          LEFT JOIN bes_users u ON u.user_id = c.author_user_id
+          WHERE c.comment_uid = :commentUid`, { commentUid });
+        return recruitmentComment(created.rows[0]);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Recruitment record not found.' });
+      return json(res, 201, { comment: result });
+    }
+    const recruitmentMatch = url.pathname.match(/^\/api\/hro\/recruitment\/([^/]+)$/);
+    if (req.method === 'DELETE' && recruitmentMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recruitmentUid = decodeURIComponent(recruitmentMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const removed = await c.execute(`UPDATE bes_hro_recruitment_and_onboarding SET
+            is_active = 'N',
+            updated_by_user_id = :updatedByUserId,
+            updated_at = SYSTIMESTAMP
+          WHERE recruitment_uid = :recruitmentUid
+            AND is_active = 'Y'`, {
+          updatedByUserId: user.USER_ID,
+          recruitmentUid,
+        });
+        if (!removed.rowsAffected) return false;
+        await c.commit();
+        return true;
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Recruitment record not found.' });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'PATCH' && recruitmentMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recruitmentUid = decodeURIComponent(recruitmentMatch[1]);
+      const body = await readBody(req);
+      const status = normalize(body.status);
+      const allowedStatuses = new Set(['Received', 'For Screening', 'For Interview', 'Qualified', 'Not Qualified', 'Applicant Pool', 'Hired', 'Withdrawn']);
+      if (!allowedStatuses.has(status)) return json(res, 400, { error: 'Select a valid recruitment status.' });
+      const actionTaken = nullableNormalize(body.actionTaken);
+      const positionApplying = nullableNormalize(body.positionApplying);
+      const remarks = normalize(body.remarks);
+      const lastName = normalize(body.lastName);
+      const firstName = normalize(body.firstName);
+      const middleName = nullableNormalize(body.middleName);
+      const suffix = nullableNormalize(body.suffix);
+      const birthDate = nullableNormalize(body.birthDate);
+      const sex = nullableNormalize(body.sex);
+      const civilStatus = nullableNormalize(body.civilStatus);
+      const email = nullableNormalize(body.email);
+      const mobileNo = nullableNormalize(body.mobileNo);
+      const municipality = nullableNormalize(body.municipality);
+      const barangay = nullableNormalize(body.barangay);
+      const address = nullableNormalize(body.address);
+      const highestEducation = nullableNormalize(body.highestEducation);
+      const schoolName = nullableNormalize(body.schoolName);
+      const yearGraduated = nullableNormalize(body.yearGraduated);
+      const applicationSource = nullableNormalize(body.applicationSource);
+      if (!lastName || !firstName) return json(res, 400, { error: 'Applicant first name and last name are required.' });
+      if (birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) return json(res, 400, { error: 'Select a valid birth date.' });
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error: 'Enter a valid applicant email address.' });
+      if (yearGraduated && !/^\d{4}$/.test(yearGraduated)) return json(res, 400, { error: 'Year graduated must contain four digits.' });
+      if (actionTaken === 'Archive to Pool of Applicants' && !positionApplying) {
+        return json(res, 400, { error: 'Position Applying is required when archiving an applicant to the pool.' });
+      }
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const updated = await c.execute(`UPDATE bes_hro_recruitment_and_onboarding SET
+            workflow_status = :status,
+            action_taken = :actionTaken,
+            position_applying = :positionApplying,
+            remarks = :remarks,
+            last_name = :lastName,
+            first_name = :firstName,
+            middle_name = :middleName,
+            suffix = :suffix,
+            birth_date = CASE WHEN :birthDate IS NULL THEN NULL ELSE TO_DATE(:birthDate, 'YYYY-MM-DD') END,
+            sex = :sex,
+            civil_status = :civilStatus,
+            email = :email,
+            mobile_no = :mobileNo,
+            municipality = :municipality,
+            barangay = :barangay,
+            address = :address,
+            highest_education = :highestEducation,
+            school_name = :schoolName,
+            year_graduated = :yearGraduated,
+            application_source = :applicationSource,
+            updated_by_user_id = :updatedByUserId,
+            updated_at = SYSTIMESTAMP
+          WHERE recruitment_uid = :recruitmentUid`, {
+          status,
+          actionTaken,
+          positionApplying,
+          remarks: remarks ? { val: remarks, type: oracledb.CLOB } : null,
+          lastName,
+          firstName,
+          middleName,
+          suffix,
+          birthDate,
+          sex,
+          civilStatus,
+          email,
+          mobileNo,
+          municipality,
+          barangay,
+          address,
+          highestEducation,
+          schoolName,
+          yearGraduated,
+          applicationSource,
+          updatedByUserId: user.USER_ID,
+          recruitmentUid,
+        });
+        if (!updated.rowsAffected) return false;
+        await c.commit();
+        return (await loadRecruitmentRecords(c)).find((record) => record.id === recruitmentUid);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Recruitment record not found.' });
+      return json(res, 200, { record: result });
+    }
+    const hroToolTaskCollectionMatch = url.pathname.match(/^\/api\/hro\/tool-task-processing\/([^/]+)$/);
+    if (req.method === 'GET' && hroToolTaskCollectionMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const moduleId = decodeURIComponent(hroToolTaskCollectionMatch[1]);
+      const config = HRO_TOOL_TASK_CONFIG[moduleId];
+      if (!config) return json(res, 404, { error: 'Human Resource Office tool not found.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        await c.execute(`INSERT INTO ${config.table} (source_task_uid, workflow_status)
+          SELECT t.task_uid, 'Received'
+          FROM bes_work_tasks t
+          WHERE t.is_active = 'Y'
+            AND LOWER(TRIM(t.task_subject)) = :subject
+            AND NOT EXISTS (SELECT 1 FROM ${config.table} p WHERE p.source_task_uid = t.task_uid)`, { subject: config.subject });
+        await c.commit();
+        return c.execute(`SELECT source_task_uid, workflow_status, action_taken, updated_at
+          FROM ${config.table}
+          ORDER BY updated_at DESC`);
+      });
+      return result ? json(res, 200, { records: result.rows.map(policyTaskProcessing) }) : json(res, 401, { error: 'Session expired.' });
+    }
+    const hroToolTaskItemMatch = url.pathname.match(/^\/api\/hro\/tool-task-processing\/([^/]+)\/([^/]+)$/);
+    if (req.method === 'PATCH' && hroToolTaskItemMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const moduleId = decodeURIComponent(hroToolTaskItemMatch[1]);
+      const taskUid = decodeURIComponent(hroToolTaskItemMatch[2]);
+      const config = HRO_TOOL_TASK_CONFIG[moduleId];
+      if (!config) return json(res, 404, { error: 'Human Resource Office tool not found.' });
+      const body = await readBody(req);
+      const status = normalize(body.status);
+      const actionTaken = normalize(body.actionTaken);
+      const allowedStatuses = new Set(['Received', 'Under Review', 'For Approval', 'Approved', 'Issued', 'Completed', 'Returned']);
+      if (!allowedStatuses.has(status)) return json(res, 400, { error: 'Select a valid processing status.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT task_uid FROM bes_work_tasks
+          WHERE task_uid = :taskUid AND is_active = 'Y' AND LOWER(TRIM(task_subject)) = :subject`, { taskUid, subject: config.subject });
+        if (!found.rows[0]) return false;
+        await c.execute(`MERGE INTO ${config.table} p
+          USING (SELECT :taskUid source_task_uid FROM dual) src
+          ON (p.source_task_uid = src.source_task_uid)
+          WHEN MATCHED THEN UPDATE SET p.workflow_status = :status, p.action_taken = :actionTaken,
+            p.updated_by_user_id = :updatedByUserId, p.updated_at = SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (source_task_uid, workflow_status, action_taken, updated_by_user_id)
+            VALUES (:taskUid, :status, :actionTaken, :updatedByUserId)`, {
+          taskUid,
+          status,
+          actionTaken: actionTaken ? { val: actionTaken, type: oracledb.CLOB } : null,
+          updatedByUserId: user.USER_ID,
+        });
+        await c.commit();
+        const updated = await c.execute(`SELECT source_task_uid, workflow_status, action_taken, updated_at
+          FROM ${config.table} WHERE source_task_uid = :taskUid`, { taskUid });
+        return updated.rows[0];
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Task not found for this Human Resource Office tool.' });
+      return json(res, 200, { record: policyTaskProcessing(result) });
+    }
+    if (req.method === 'GET' && req.url === '/api/policy-task-processing') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        await c.execute(`INSERT INTO bes_policy_task_processing (source_task_uid, workflow_status)
+          SELECT t.task_uid, 'Received'
+          FROM bes_work_tasks t
+          WHERE t.is_active = 'Y'
+            AND LOWER(TRIM(t.task_subject)) = 'policy related'
+            AND NOT EXISTS (SELECT 1 FROM bes_policy_task_processing p WHERE p.source_task_uid = t.task_uid)`);
+        await c.commit();
+        return c.execute(`SELECT source_task_uid, workflow_status, action_taken, updated_at
+          FROM bes_policy_task_processing
+          ORDER BY updated_at DESC`);
+      });
+      return result ? json(res, 200, { records: result.rows.map(policyTaskProcessing) }) : json(res, 401, { error: 'Session expired.' });
+    }
+    const policyTaskProcessingMatch = url.pathname.match(/^\/api\/policy-task-processing\/([^/]+)$/);
+    if (req.method === 'PATCH' && policyTaskProcessingMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const taskUid = decodeURIComponent(policyTaskProcessingMatch[1]);
+      const body = await readBody(req);
+      const status = normalize(body.status);
+      const actionTaken = normalize(body.actionTaken);
+      const allowedStatuses = new Set(['Received', 'Under Review', 'For Approval', 'Approved', 'Issued', 'Completed', 'Returned']);
+      if (!allowedStatuses.has(status)) return json(res, 400, { error: 'Select a valid policy-processing status.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT task_uid FROM bes_work_tasks
+          WHERE task_uid = :taskUid AND is_active = 'Y' AND LOWER(TRIM(task_subject)) = 'policy related'`, { taskUid });
+        if (!found.rows[0]) return false;
+        await c.execute(`MERGE INTO bes_policy_task_processing p
+          USING (SELECT :taskUid source_task_uid FROM dual) src
+          ON (p.source_task_uid = src.source_task_uid)
+          WHEN MATCHED THEN UPDATE SET p.workflow_status = :status, p.action_taken = :actionTaken,
+            p.updated_by_user_id = :updatedByUserId, p.updated_at = SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (source_task_uid, workflow_status, action_taken, updated_by_user_id)
+            VALUES (:taskUid, :status, :actionTaken, :updatedByUserId)`, {
+          taskUid,
+          status,
+          actionTaken: actionTaken ? { val: actionTaken, type: oracledb.CLOB } : null,
+          updatedByUserId: user.USER_ID,
+        });
+        await c.commit();
+        const updated = await c.execute(`SELECT source_task_uid, workflow_status, action_taken, updated_at
+          FROM bes_policy_task_processing WHERE source_task_uid = :taskUid`, { taskUid });
+        return updated.rows[0];
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Policy task not found.' });
+      return json(res, 200, { record: policyTaskProcessing(result) });
+    }
+    if (req.method === 'GET' && req.url === '/api/policy-records') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        return c.execute(`SELECT p.*,
+            u.username created_by_username, u.first_name created_by_first_name, u.last_name created_by_last_name
+          FROM bes_policy_records p
+          LEFT JOIN bes_users u ON u.user_id = p.created_by_user_id
+          WHERE p.is_active = 'Y'
+          ORDER BY p.effectivity_date DESC, p.title`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { records: result.rows.map(policyRecord) });
+    }
+    if (req.method === 'POST' && req.url === '/api/policy-records') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req);
+      const title = normalize(body.title);
+      const documentNumber = normalize(body.documentNumber);
+      const revisionNumber = normalize(body.revisionNumber);
+      const effectivityDate = normalize(body.effectivityDate);
+      const contents = normalize(body.contents);
+      const nature = normalize(body.nature);
+      const documentType = normalize(body.documentType);
+      const allowedNatures = new Set(['Financial', 'Human Resources', 'Legal and Compliance', 'Public Relations', 'Operations']);
+      const allowedDocumentTypes = new Set(['Policy', 'Issuance', 'Guidelines']);
+      if (!title || !documentNumber || !revisionNumber || !contents || !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType)) {
+        return json(res, 400, { error: 'Title, document number, document type, revision number, effectivity date, contents, and a valid nature are required.' });
+      }
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const duplicate = await c.execute(`SELECT record_uid FROM bes_policy_records WHERE UPPER(document_number) = UPPER(:documentNumber) AND is_active = 'Y'`, { documentNumber });
+        if (duplicate.rows[0]) throw Object.assign(new Error('A policy record with that document number already exists.'), { statusCode: 409 });
+        const recordUid = `POL-${new Date().getFullYear()}-${Date.now()}`;
+        await c.execute(`INSERT INTO bes_policy_records
+          (record_uid, title, document_number, document_type, revision_number, effectivity_date, contents, nature,
+           created_by_user_id, is_active)
+          VALUES
+          (:recordUid, :title, :documentNumber, :documentType, :revisionNumber, TO_DATE(:effectivityDate, 'YYYY-MM-DD'), :contents, :nature,
+           :createdByUserId, 'Y')`, {
+          recordUid,
+          title,
+          documentNumber,
+          documentType,
+          revisionNumber,
+          effectivityDate,
+          contents: { val: contents, type: oracledb.CLOB },
+          nature,
+          createdByUserId: user.USER_ID,
+        });
+        await c.commit();
+        const created = await c.execute(`SELECT p.*,
+            u.username created_by_username, u.first_name created_by_first_name, u.last_name created_by_last_name
+          FROM bes_policy_records p
+          LEFT JOIN bes_users u ON u.user_id = p.created_by_user_id
+          WHERE p.record_uid = :recordUid`, { recordUid });
+        return created.rows[0];
+      });
+      return result ? json(res, 201, { record: policyRecord(result) }) : json(res, 401, { error: 'Session expired.' });
+    }
+    const policyAttachmentMatch = url.pathname.match(/^\/api\/policy-records\/([^/]+)\/attachment$/);
+    if (req.method === 'PUT' && policyAttachmentMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recordUid = decodeURIComponent(policyAttachmentMatch[1]);
+      let originalName = '';
+      try { originalName = decodeURIComponent(normalize(req.headers['x-file-name'])); } catch { return json(res, 400, { error: 'The DOCX filename is invalid.' }); }
+      const attachmentName = safeFileName(originalName);
+      if (!originalName.toLowerCase().endsWith('.docx')) return json(res, 400, { error: 'Only Microsoft Word .docx files can be uploaded to policy records.' });
+      const file = await readBinaryBody(req);
+      if (!file.length || !isDocxBuffer(file)) return json(res, 400, { error: 'The selected file is not a valid DOCX document.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const updated = await c.execute(`UPDATE bes_policy_records
+          SET attachment_name = :attachmentName,
+              attachment_mime_type = :attachmentMimeType,
+              attachment_size = :attachmentSize,
+              attachment_blob = :attachmentBlob,
+              attachment_data = NULL,
+              updated_at = SYSTIMESTAMP
+          WHERE record_uid = :recordUid AND is_active = 'Y'`, {
+          attachmentName,
+          attachmentMimeType: DOCX_MIME_TYPE,
+          attachmentSize: file.length,
+          attachmentBlob: { val: file, type: oracledb.BLOB },
+          recordUid,
+        });
+        if (!updated.rowsAffected) return false;
+        await c.commit();
+        return true;
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Policy record not found.' });
+      return json(res, 200, { ok: true, attachmentName, attachmentMimeType: DOCX_MIME_TYPE, attachmentSize: file.length });
+    }
+    if (req.method === 'GET' && policyAttachmentMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recordUid = decodeURIComponent(policyAttachmentMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT attachment_name, attachment_mime_type, attachment_size, attachment_blob, attachment_data
+          FROM bes_policy_records
+          WHERE record_uid = :recordUid AND is_active = 'Y'`, { recordUid });
+        const row = found.rows[0];
+        if (!row) return false;
+        if (Buffer.isBuffer(row.ATTACHMENT_BLOB)) row.ATTACHMENT_BUFFER = row.ATTACHMENT_BLOB;
+        else if (row.ATTACHMENT_BLOB) row.ATTACHMENT_BUFFER = await row.ATTACHMENT_BLOB.getData();
+        return row;
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result || (!result.ATTACHMENT_BUFFER && !result.ATTACHMENT_DATA)) return json(res, 404, { error: 'This policy record has no attachment.' });
+      const fileName = safeFileName(result.ATTACHMENT_NAME || 'policy-attachment');
+      let file = result.ATTACHMENT_BUFFER;
+      let legacyMimeType = '';
+      if (!file) {
+        const match = String(result.ATTACHMENT_DATA).match(/^data:([^;,]+);base64,(.+)$/s);
+        if (!match) return json(res, 500, { error: 'The stored attachment is invalid.' });
+        legacyMimeType = match[1];
+        file = Buffer.from(match[2], 'base64');
+      }
+      res.writeHead(200, {
+        'content-type': result.ATTACHMENT_MIME_TYPE || legacyMimeType || 'application/octet-stream',
+        'content-length': String(file.length),
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+        'cache-control': 'private, no-store',
+      });
+      return res.end(file);
+    }
+    const policyRecordMatch = url.pathname.match(/^\/api\/policy-records\/([^/]+)$/);
+    if (req.method === 'PATCH' && policyRecordMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recordUid = decodeURIComponent(policyRecordMatch[1]);
+      const body = await readBody(req);
+      const title = normalize(body.title);
+      const documentNumber = normalize(body.documentNumber);
+      const revisionNumber = normalize(body.revisionNumber);
+      const effectivityDate = normalize(body.effectivityDate);
+      const contents = normalize(body.contents);
+      const nature = normalize(body.nature);
+      const documentType = normalize(body.documentType);
+      const allowedNatures = new Set(['Financial', 'Human Resources', 'Legal and Compliance', 'Public Relations', 'Operations']);
+      const allowedDocumentTypes = new Set(['Policy', 'Issuance', 'Guidelines']);
+      if (!title || !documentNumber || !revisionNumber || !contents || !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType)) {
+        return json(res, 400, { error: 'Title, document number, document type, revision number, effectivity date, contents, and a valid nature are required.' });
+      }
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const duplicate = await c.execute(`SELECT record_uid FROM bes_policy_records
+          WHERE UPPER(document_number) = UPPER(:documentNumber) AND record_uid <> :recordUid AND is_active = 'Y'`, { documentNumber, recordUid });
+        if (duplicate.rows[0]) throw Object.assign(new Error('Another policy record already uses that document number.'), { statusCode: 409 });
+        const updated = await c.execute(`UPDATE bes_policy_records SET
+            title = :title,
+            document_number = :documentNumber,
+            document_type = :documentType,
+            revision_number = :revisionNumber,
+            effectivity_date = TO_DATE(:effectivityDate, 'YYYY-MM-DD'),
+            contents = :contents,
+            nature = :nature,
+            updated_at = SYSTIMESTAMP
+          WHERE record_uid = :recordUid AND is_active = 'Y'`, {
+          title,
+          documentNumber,
+          documentType,
+          revisionNumber,
+          effectivityDate,
+          contents: { val: contents, type: oracledb.CLOB },
+          nature,
+          recordUid,
+        });
+        if (!updated.rowsAffected) return false;
+        await c.commit();
+        const found = await c.execute(`SELECT p.*,
+            u.username created_by_username, u.first_name created_by_first_name, u.last_name created_by_last_name
+          FROM bes_policy_records p
+          LEFT JOIN bes_users u ON u.user_id = p.created_by_user_id
+          WHERE p.record_uid = :recordUid`, { recordUid });
+        return found.rows[0];
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Policy record not found.' });
+      return json(res, 200, { record: policyRecord(result) });
+    }
+    if (req.method === 'DELETE' && policyRecordMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recordUid = decodeURIComponent(policyRecordMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const deleted = await c.execute(`UPDATE bes_policy_records
+          SET is_active = 'N', updated_at = SYSTIMESTAMP
+          WHERE record_uid = :recordUid AND is_active = 'Y'`, { recordUid });
+        if (!deleted.rowsAffected) return false;
+        await c.commit();
+        return true;
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Policy record not found.' });
+      return json(res, 200, { ok: true });
     }
     if (req.method === 'GET' && req.url === '/api/calendar/events') {
       const token = bearerToken(req);

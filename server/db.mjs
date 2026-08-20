@@ -10,16 +10,34 @@ export async function withConnection(work) {
 }
 
 async function runDdl(connection, sql) {
-  try { await connection.execute(sql); } catch (error) { if (error.errorNum !== 955) throw error; }
+  try { await connection.execute(sql); } catch (error) { if (![955, 1408].includes(error.errorNum)) throw error; }
 }
 
 async function addColumn(connection, sql) {
   try { await connection.execute(sql); } catch (error) { if (error.errorNum !== 1430) throw error; }
 }
 
+async function renameTable(connection, oldName, newName) {
+  try { await connection.execute(`ALTER TABLE ${oldName} RENAME TO ${newName}`); } catch (error) { if (![942, 955].includes(error.errorNum)) throw error; }
+}
+
+async function dropConstraint(connection, tableName, constraintName) {
+  try { await connection.execute(`ALTER TABLE ${tableName} DROP CONSTRAINT ${constraintName}`); } catch (error) { if (error.errorNum !== 2443) throw error; }
+}
+
+async function makeColumnNullable(connection, tableName, columnName) {
+  try { await connection.execute(`ALTER TABLE ${tableName} MODIFY (${columnName} NULL)`); } catch (error) { if (error.errorNum !== 1451) throw error; }
+}
+
+async function dropIndex(connection, indexName) {
+  try { await connection.execute(`DROP INDEX ${indexName}`); } catch (error) { if (error.errorNum !== 1418) throw error; }
+}
+
 const ROLES = [
   ['Employee', 'Employee', 10],
   ['Supervisor', 'Supervisor', 20],
+  ['Office Secretary', 'Office Secretary', 25],
+  ['Department Secretary', 'Department Secretary', 27],
   ['Department Manager', 'Department Manager', 30],
   ['General Manager', 'General Manager', 40],
   ['Board Member', 'Board Member', 50],
@@ -42,6 +60,8 @@ const PERMISSIONS = [
 const ROLE_PERMISSIONS = {
   Employee: ['file_personal_requests'],
   Supervisor: ['file_personal_requests', 'approve_team_requests'],
+  'Office Secretary': ['file_personal_requests'],
+  'Department Secretary': ['file_personal_requests', 'approve_team_requests'],
   'Department Manager': ['file_personal_requests', 'approve_team_requests', 'view_department_reports', 'manage_technical_admin'],
   'General Manager': ['file_personal_requests', 'approve_team_requests', 'view_department_reports', 'view_enterprise_reports', 'access_board_documents', 'manage_technical_admin'],
   'Board Member': ['file_personal_requests', 'view_department_reports', 'view_enterprise_reports', 'access_board_documents'],
@@ -49,6 +69,134 @@ const ROLE_PERMISSIONS = {
   Auditor: ['file_personal_requests', 'view_department_reports', 'view_enterprise_reports', 'access_audit_records'],
   Administrator: ['file_personal_requests', 'approve_team_requests', 'view_department_reports', 'view_enterprise_reports', 'publish_news_memos', 'manage_technical_admin'],
 };
+
+const NSD_TOOLS = [
+  ['GIS', 'Geographic Information System'], ['NMS', 'Network Management System'], ['CRS', 'Compliance Reporting System'],
+  ['TDR', 'Technical Data Repository'], ['MRMS', 'Meter Replacement Management System'], ['MIMS', 'Meter Installation Management System'],
+  ['MIIS', 'Meter Inventory and Issuance System'], ['TMS', 'Transformer Management System'], ['CMS', 'Calibration Management System'],
+  ['CRM', 'Customer Request Monitoring'], ['MDMS', 'Meter Data Management System'], ['MDMSG', 'MDMS for GeoP Customers and Man-Asok Power Plant'],
+  ['ISO', 'ISO Management System'], ['DMS', 'Distribution Management System'], ['NRC', 'Network Reference Center'],
+  ['OMS', 'Outage Management System'], ['Quick Slides', 'Presentation Builder'], ['Settings', 'Administrative Settings'],
+];
+
+const ISD_TOOLS = [
+  ['Community Relations', 'Community Relations Office System'], ['General Services Office', 'General Services Office System'],
+  ['Human Resources', 'Human Resources Module'], ['Recruitment and Onboarding', 'Recruitment and Onboarding Module'],
+  ['Learning and Development', 'Learning and Development Module'], ['Performance Management', 'Performance Management Module'],
+  ['Employee Relations', 'Employee Relations Module'], ['Institutional Communications', 'Institutional Communications Module'],
+  ['Member-Consumer and Community Programs', 'Member-Consumer and Community Programs Module'], ['Records Management', 'Records Management Module'],
+  ['Policies and Issuances', 'Policies and Issuances Module'], ['Events Management', 'Events Management Module'],
+  ['Building and Facilities Management System', 'Building and Facilities Management System'],
+];
+
+const BASELINE_TOOL_ACCESS = [
+  ...NSD_TOOLS.map(([code, name]) => [code, name, 'NSD', null, code === 'TDR' || code === 'NRC' ? 'VIEW' : code === 'MRMS' || code === 'MDMSG' || code === 'ISO' ? 'SOON' : code === 'MIIS' || code === 'DMS' ? 'NEW' : code === 'CRM' || code === 'OMS' ? 'EDIT' : code === 'Quick Slides' ? 'OPEN' : 'ADMIN', 'NSD']),
+  ['WIS', 'Warehouse Inventory System', 'NSD', null, 'ADMIN', 'NSD'],
+  ['WIS', 'Warehouse Inventory System', 'AUD', null, 'VIEW', 'NSD'],
+  ['WIS', 'Warehouse Inventory System', 'ISD', null, 'EXISTING', 'NSD'],
+  ...ISD_TOOLS.map(([code, name]) => [code, name, 'ISD', null, 'ADMIN', 'ISD']),
+];
+
+const BASELINE_TOOL_SUBJECTS = [
+  ['Human Resources', 'Human Resource'], ['Recruitment and Onboarding', 'Application Letter'],
+  ['Learning and Development', 'Learning and Development'], ['Performance Management', 'Performance Management'],
+  ['Employee Relations', 'Employee Relations'], ['Institutional Communications', 'Institutional Communications'],
+  ['Member-Consumer and Community Programs', 'Member-Consumer and Community Programs'], ['Records Management', 'Records Management'],
+  ['Policies and Issuances', 'Policy Related'], ['Events Management', 'Events Management'],
+  ['Building and Facilities Management System', 'Building and Facilities Management System'],
+];
+
+const BASELINE_DEPARTMENTS = [
+  ['ISD', 'Institutional Services Department'], ['NSD', 'Network Services Department'],
+  ['NNSD', 'Non-Network Services Department'], ['AUD', 'Audit Department'],
+  ['CPD', 'Corporate Planning Department'], ['PGD', 'Power Generation Department'],
+];
+
+const BASELINE_OFFICES = {
+  ISD: ['Human Resource Office', 'Community Relations Office', 'General Services Office', 'Material Equipment Management Office'],
+  NSD: ['Network Operations', 'Line Maintenance', 'Outage Management', 'Crew Deployment', 'Substation & Line Records', 'Technical Projects'],
+  NNSD: ['Finance & Accounting', 'Budget', 'Billing & Collection', 'Treasury', 'Procurement', 'Warehousing & Inventory', 'Property & Assets', 'Fleet Management', 'General Services'],
+  AUD: ['Internal Audit', 'Risk-Based Audit', 'Compliance Review'],
+  CPD: ['Strategic Planning', 'Corporate Performance Monitoring', 'Project Management', 'Risk Management', 'Regulatory Affairs', 'Research & Policy Studies'],
+  PGD: ['Generation Operations', 'Production Monitoring', 'Plant Maintenance', 'Equipment Records', 'Safety & Environmental Compliance', 'Generation Projects'],
+};
+
+const BASELINE_POSITIONS = [
+  ['ISD', null, 'Institutional Services Department Manager', 'DEPARTMENT_MANAGER'], ['ISD', null, 'Secretary', 'DEPARTMENT_SECRETARY'],
+  ['ISD', 'General Services Office', 'General Services Officer', 'SUPERVISOR'], ['ISD', 'General Services Office', 'Mechanic', 'RAF'], ['ISD', 'General Services Office', 'Courier', 'RAF'], ['ISD', 'General Services Office', 'Utility', 'RAF'], ['ISD', 'General Services Office', 'Building and Ground Maintenance', 'RAF'], ['ISD', 'General Services Office', 'On-call Drivers', 'RAF'],
+  ['ISD', 'Material Equipment Management Office', 'Materials and Equipment Management Officer', 'SUPERVISOR'], ['ISD', 'Material Equipment Management Office', 'Materials Inventory Associate', 'RAF'],
+  ['ISD', 'Community Relations Office', 'Community Relations Officer', 'SUPERVISOR'], ['ISD', 'Community Relations Office', 'Community Relations Associate', 'RAF'],
+  ['ISD', 'Human Resource Office', 'Human Resource Officer', 'SUPERVISOR'], ['ISD', 'Human Resource Office', 'HR Associate', 'RAF'],
+  ['NSD', null, 'Network Services Department Manager', 'DEPARTMENT_MANAGER'], ['NSD', 'Network Operations', 'Executive and Consumer Associate', 'RAF'],
+  ['NSD', 'Technical Projects', 'System Planning and Design Officer', 'SUPERVISOR'], ['NSD', 'Technical Projects', 'System Planning and Design Engineer', 'RAF'], ['NSD', 'Technical Projects', 'Engineering Associate', 'RAF'],
+  ['NSD', 'Line Maintenance', 'Construction and Maintenance Officer', 'SUPERVISOR'], ['NSD', 'Line Maintenance', 'Lineman', 'RAF'], ['NSD', 'Line Maintenance', 'Construction and Light Maintenance', 'RAF'],
+  ['NSD', 'Network Operations', 'System Control and Protection Officer', 'SUPERVISOR'], ['NSD', 'Network Operations', 'System Control and Protection Engineer', 'RAF'],
+  ['NSD', 'Substation & Line Records', 'Special Equipment and Metering Officer', 'SUPERVISOR'], ['NSD', 'Substation & Line Records', 'Special Equipment and Metering Engineer', 'RAF'], ['NSD', 'Substation & Line Records', 'Special Equipment and Metering Associate', 'RAF'], ['NSD', 'Substation & Line Records', 'Meter Installation', 'RAF'],
+  ['NNSD', null, 'Non-Network Services Department Manager', 'DEPARTMENT_MANAGER'], ['NNSD', null, 'Secretary', 'DEPARTMENT_SECRETARY'],
+  ['NNSD', 'Finance & Accounting', 'Accounting Officer', 'SUPERVISOR'], ['NNSD', 'Finance & Accounting', 'Accounting Associate', 'RAF'], ['NNSD', 'Finance & Accounting', 'Rate Analyst', 'RAF'], ['NNSD', 'Procurement', 'Procurement Associate', 'RAF'],
+  ['NNSD', 'Billing & Collection', 'Collection Officer', 'SUPERVISOR'], ['NNSD', 'Billing & Collection', 'Collection Associate', 'RAF'], ['NNSD', 'Billing & Collection', 'Collecting Agents', 'RAF'], ['NNSD', 'General Services', 'Consumer Welfare Officer', 'SUPERVISOR'], ['NNSD', 'General Services', 'Consumer Welfare and Call Center Associate', 'RAF'],
+  ['NNSD', 'Billing & Collection', 'Meter Reading, Billing, and Disconnection Officer', 'SUPERVISOR'], ['NNSD', 'Billing & Collection', 'Meter Reader', 'RAF'], ['NNSD', 'Billing & Collection', 'Meter Reading', 'RAF'], ['NNSD', 'Billing & Collection', 'Disconnection', 'RAF'],
+  ['AUD', null, 'Internal Auditor', 'DEPARTMENT_MANAGER'], ['AUD', 'Internal Audit', 'Internal Audit Supervisor', 'SUPERVISOR'], ['AUD', 'Internal Audit', 'Operations Auditor', 'RAF'], ['AUD', 'Internal Audit', 'Technical Auditor', 'RAF'], ['AUD', 'Internal Audit', 'Seasonal Inventory', 'RAF'],
+  ['PGD', null, 'Power Generation Department Manager', 'DEPARTMENT_MANAGER'], ['PGD', 'Equipment Records', 'Compliance and Records Officer', 'SUPERVISOR'], ['PGD', 'Safety & Environmental Compliance', 'Forrester, Pollution Control and Safety Officer', 'SUPERVISOR'], ['PGD', 'Generation Operations', 'Hydro-electric Power Plant Operations Superintendent', 'SUPERVISOR'], ['PGD', 'Generation Operations', 'Power Plant Shift Engineer', 'RAF'], ['PGD', 'Plant Maintenance', 'Power Plant Facilities Maintenance Associate', 'RAF'],
+  ['CPD', null, 'Corporate Planning Department Manager', 'DEPARTMENT_MANAGER'], ['CPD', null, 'Secretary', 'DEPARTMENT_SECRETARY'], ['CPD', 'Strategic Planning', 'Power Supply and Energy Trading Officer', 'SUPERVISOR'], ['CPD', 'Strategic Planning', 'Power Supply and Energy Trading Associate', 'RAF'], ['CPD', 'Regulatory Affairs', 'Business Development & Regulatory Compliance Officer', 'SUPERVISOR'], ['CPD', 'Regulatory Affairs', 'Business Development & Regulatory Compliance Associate', 'RAF'],
+];
+
+async function seedOrganizationalStructure(connection) {
+  for (const [departmentCode, departmentName] of BASELINE_DEPARTMENTS) {
+    await connection.execute(`MERGE INTO bes_departments d USING (SELECT :departmentCode department_code FROM dual) src
+      ON (d.department_code = src.department_code)
+      WHEN MATCHED THEN UPDATE SET department_name = :departmentName, is_active = 'Y', updated_at = SYSTIMESTAMP
+      WHEN NOT MATCHED THEN INSERT (department_code, department_name, is_active) VALUES (:departmentCode, :departmentName, 'Y')`, { departmentCode, departmentName });
+    for (const officeName of BASELINE_OFFICES[departmentCode] ?? []) {
+      await connection.execute(`MERGE INTO bes_offices o
+        USING (SELECT d.department_id, :officeName office_name FROM bes_departments d WHERE d.department_code = :departmentCode) src
+        ON (o.department_id = src.department_id AND UPPER(o.office_name) = UPPER(src.office_name))
+        WHEN MATCHED THEN UPDATE SET is_active = 'Y', updated_at = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (department_id, office_name, is_active) VALUES (src.department_id, src.office_name, 'Y')`, { departmentCode, officeName });
+    }
+  }
+  for (const [departmentCode, officeName, positionTitle, employeeClass] of BASELINE_POSITIONS) {
+    if (officeName) {
+      await connection.execute(`MERGE INTO bes_positions p USING (
+          SELECT o.office_id, :positionTitle position_title FROM bes_offices o JOIN bes_departments d ON d.department_id=o.department_id
+          WHERE d.department_code=:departmentCode AND UPPER(o.office_name)=UPPER(:officeName)
+        ) src ON (p.office_id=src.office_id AND UPPER(p.position_title)=UPPER(src.position_title))
+        WHEN MATCHED THEN UPDATE SET employee_class=:employeeClass, department_id=NULL, is_active='Y', updated_at=SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (office_id,position_title,employee_class,is_active) VALUES (src.office_id,src.position_title,:employeeClass,'Y')`, { departmentCode, officeName, positionTitle, employeeClass });
+    } else {
+      await connection.execute(`MERGE INTO bes_positions p USING (
+          SELECT d.department_id, :positionTitle position_title FROM bes_departments d WHERE d.department_code=:departmentCode
+        ) src ON (p.department_id=src.department_id AND p.office_id IS NULL AND UPPER(p.position_title)=UPPER(src.position_title))
+        WHEN MATCHED THEN UPDATE SET employee_class=:employeeClass, is_active='Y', updated_at=SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (department_id,position_title,employee_class,is_active) VALUES (src.department_id,src.position_title,:employeeClass,'Y')`, { departmentCode, positionTitle, employeeClass });
+    }
+  }
+}
+
+async function seedToolRegistry(connection) {
+  await connection.execute(`DELETE FROM bes_task_subjects WHERE tool_code = 'HR Office'`);
+  await connection.execute(`DELETE FROM bes_tool_access WHERE tool_code = 'HR Office'`);
+  await connection.execute(`UPDATE bes_task_subjects SET tool_code = 'General Services Office', updated_at = SYSTIMESTAMP WHERE tool_code = 'Motorpool'`);
+  await connection.execute(`DELETE FROM bes_tool_access WHERE tool_code = 'Motorpool'`);
+  await connection.execute(`UPDATE bes_tool_access SET office_name = 'General Services Office', updated_at = SYSTIMESTAMP WHERE office_name = 'Motorpool'`);
+  const accessCount = await connection.execute(`SELECT COUNT(*) row_count FROM bes_tool_access`);
+  if (Number(accessCount.rows[0]?.ROW_COUNT ?? 0) === 0) {
+    for (const [toolCode, toolName, departmentCode, officeName, accessLevel, ownerDepartmentCode] of BASELINE_TOOL_ACCESS) {
+      const toolStatus = accessLevel === 'SOON' ? 'SOON' : 'ENABLED';
+      await connection.execute(`INSERT INTO bes_tool_access
+          (tool_code,tool_name,department_code,office_name,access_level,owner_department_code,tool_status,is_active)
+        VALUES (:toolCode,:toolName,:departmentCode,:officeName,:accessLevel,:ownerDepartmentCode,:toolStatus,'Y')`, {
+        toolCode, toolName, departmentCode, officeName, accessLevel, ownerDepartmentCode, toolStatus,
+      });
+    }
+  }
+  const subjectCount = await connection.execute(`SELECT COUNT(*) row_count FROM bes_task_subjects`);
+  if (Number(subjectCount.rows[0]?.ROW_COUNT ?? 0) === 0) {
+    for (const [toolCode, taskSubject] of BASELINE_TOOL_SUBJECTS) {
+      await connection.execute(`INSERT INTO bes_task_subjects (tool_code,task_subject,is_active) VALUES (:toolCode,:taskSubject,'Y')`, { toolCode, taskSubject });
+    }
+  }
+}
 
 const CALENDAR_LAYER_COLOR = {
   'Enterprise-wide': '#1a4fd6',
@@ -163,6 +311,55 @@ async function seedAccessControl(connection) {
     WHEN NOT MATCHED THEN INSERT (user_id, role_code, scope_department_code, is_active, assignment_note)
       VALUES (src.user_id, src.role_code, src.department_code, 'Y', src.assignment_note)`);
   await connection.execute(`UPDATE bes_users SET app_role = 'Administrator', department_code = 'ISD', position_title = COALESCE(position_title, 'OIC- ISD Manager'), updated_at = SYSTIMESTAMP WHERE LOWER(username) = 'mario.calatan'`);
+}
+
+const BASELINE_POLICY_RECORDS = [
+  ['POL-REC-001', 'Revised Employee Handbook 2026', 'HR-MAN-2026-001', 'Policy', '3', '2026-08-12', 'Consolidated employee handbook covering employment policies, benefits, conduct, and workplace procedures.', 'Human Resources'],
+  ['POL-REC-002', 'Flexible Work Arrangement Guidelines', 'HR-POL-2026-014', 'Guidelines', '1', '2026-08-13', 'Guidelines for requesting, approving, monitoring, and reviewing flexible work arrangements.', 'Human Resources'],
+  ['POL-REC-003', 'Data Privacy Manual — Annual Review', 'DPO-MAN-2026-003', 'Policy', '2', '2026-09-15', 'Annual review of the cooperative data privacy manual and personal-information handling controls.', 'Legal and Compliance'],
+];
+
+const HRO_TOOL_TASK_TABLES = [
+  'bes_hro_rec_task_processing',
+  'bes_hro_hr_task_processing',
+  'bes_hro_ld_task_processing',
+  'bes_hro_pm_task_processing',
+  'bes_hro_er_task_processing',
+  'bes_hro_ic_task_processing',
+  'bes_hro_mcp_task_processing',
+  'bes_hro_rm_task_processing',
+  'bes_hro_em_task_processing',
+];
+
+async function createHroToolTaskTables(connection) {
+  for (const tableName of HRO_TOOL_TASK_TABLES) {
+    await runDdl(connection, `CREATE TABLE ${tableName} (
+      processing_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      source_task_uid VARCHAR2(80) NOT NULL UNIQUE REFERENCES bes_work_tasks(task_uid) ON DELETE CASCADE,
+      workflow_status VARCHAR2(40) DEFAULT 'Received' NOT NULL,
+      action_taken CLOB,
+      updated_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_${tableName}_status CHECK (workflow_status IN ('Received','Under Review','For Approval','Approved','Issued','Completed','Returned'))
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_${tableName}_status ON ${tableName} (workflow_status, updated_at)`);
+  }
+}
+
+async function seedPolicyRecords(connection) {
+  for (const [recordUid, title, documentNumber, documentType, revisionNumber, effectivityDate, contents, nature] of BASELINE_POLICY_RECORDS) {
+    await connection.execute(`MERGE INTO bes_policy_records p
+      USING (SELECT :recordUid record_uid FROM dual) src
+      ON (p.record_uid = src.record_uid)
+      WHEN MATCHED THEN UPDATE SET p.document_type = :documentType
+      WHEN NOT MATCHED THEN INSERT
+        (record_uid, title, document_number, document_type, revision_number, effectivity_date, contents, nature, is_active)
+        VALUES
+        (:recordUid, :title, :documentNumber, :documentType, :revisionNumber, TO_DATE(:effectivityDate, 'YYYY-MM-DD'), :contents, :nature, 'Y')`, {
+      recordUid, title, documentNumber, documentType, revisionNumber, effectivityDate, contents, nature,
+    });
+  }
 }
 
 export async function initializeDatabase() {
@@ -339,8 +536,223 @@ export async function initializeDatabase() {
       CONSTRAINT chk_bes_work_comments_deleted CHECK (is_deleted IN ('Y','N'))
     )`);
     await runDdl(connection, `CREATE INDEX ix_bes_work_comments_task ON bes_work_comments (task_uid, created_at)`);
+    await runDdl(connection, `CREATE TABLE bes_hro_recruitment_and_onboarding (
+      recruitment_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      recruitment_uid VARCHAR2(80) NOT NULL UNIQUE,
+      source_task_uid VARCHAR2(80) NOT NULL UNIQUE REFERENCES bes_work_tasks(task_uid) ON DELETE CASCADE,
+      workflow_status VARCHAR2(40) DEFAULT 'Received' NOT NULL,
+      action_taken VARCHAR2(100),
+      position_applying VARCHAR2(200),
+      remarks CLOB,
+      updated_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
+    )`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (last_name VARCHAR2(120))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (first_name VARCHAR2(120))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (middle_name VARCHAR2(120))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (suffix VARCHAR2(30))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (birth_date DATE)`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (sex VARCHAR2(20))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (civil_status VARCHAR2(30))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (email VARCHAR2(254))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (mobile_no VARCHAR2(40))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (municipality VARCHAR2(120))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (barangay VARCHAR2(180))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (address VARCHAR2(500))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (highest_education VARCHAR2(200))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (school_name VARCHAR2(250))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (year_graduated VARCHAR2(10))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (application_source VARCHAR2(100))`);
+    await addColumn(connection, `ALTER TABLE bes_hro_recruitment_and_onboarding ADD (is_active CHAR(1) DEFAULT 'Y' NOT NULL)`);
+    await runDdl(connection, `CREATE TABLE bes_departments (
+      department_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      department_code VARCHAR2(30) NOT NULL UNIQUE,
+      department_name VARCHAR2(180) NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_departments_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_department_name ON bes_departments (UPPER(department_name))`);
+    await runDdl(connection, `CREATE TABLE bes_offices (
+      office_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      department_id NUMBER NOT NULL REFERENCES bes_departments(department_id),
+      parent_office_id NUMBER REFERENCES bes_offices(office_id),
+      office_name VARCHAR2(180) NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_offices_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_office_dept_name ON bes_offices (department_id, UPPER(office_name))`);
+    await runDdl(connection, `CREATE TABLE bes_positions (
+      position_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      department_id NUMBER REFERENCES bes_departments(department_id),
+      office_id NUMBER REFERENCES bes_offices(office_id),
+      position_title VARCHAR2(180) NOT NULL,
+      employee_class VARCHAR2(20) DEFAULT 'RAF' NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_position_class CHECK (employee_class IN ('DEPARTMENT_MANAGER','DEPARTMENT_SECRETARY','OFFICE_SECRETARY','SUPERVISOR','RAF')),
+      CONSTRAINT chk_bes_position_scope CHECK ((department_id IS NOT NULL AND office_id IS NULL) OR (department_id IS NULL AND office_id IS NOT NULL)),
+      CONSTRAINT chk_bes_positions_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await addColumn(connection, `ALTER TABLE bes_positions ADD (department_id NUMBER REFERENCES bes_departments(department_id))`);
+    await makeColumnNullable(connection, 'BES_POSITIONS', 'OFFICE_ID');
+    await dropConstraint(connection, 'BES_POSITIONS', 'CHK_BES_POSITION_CLASS');
+    await runDdl(connection, `ALTER TABLE bes_positions ADD CONSTRAINT chk_bes_position_class CHECK (employee_class IN ('DEPARTMENT_MANAGER','DEPARTMENT_SECRETARY','OFFICE_SECRETARY','SUPERVISOR','RAF'))`);
+    await dropConstraint(connection, 'BES_POSITIONS', 'CHK_BES_POSITION_SCOPE');
+    await runDdl(connection, `ALTER TABLE bes_positions ADD CONSTRAINT chk_bes_position_scope CHECK ((department_id IS NOT NULL AND office_id IS NULL) OR (department_id IS NULL AND office_id IS NOT NULL))`);
+    await dropIndex(connection, 'UX_BES_POSITION_OFFICE');
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_position_scope ON bes_positions (NVL(department_id, -1), NVL(office_id, -1), UPPER(position_title))`);
+    await renameTable(connection, 'BES_ISD_TOOL_ACCESS', 'BES_TOOL_ACCESS');
+    await renameTable(connection, 'BES_ISD_TASK_SUBJECTS', 'BES_TASK_SUBJECTS');
+    await runDdl(connection, `CREATE TABLE bes_tool_access (
+      tool_access_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      tool_code VARCHAR2(120) NOT NULL,
+      tool_name VARCHAR2(200) NOT NULL,
+      department_code VARCHAR2(30) NOT NULL,
+      office_name VARCHAR2(150),
+      position_name VARCHAR2(180),
+      access_level VARCHAR2(20) DEFAULT 'VIEW' NOT NULL,
+      tool_status VARCHAR2(20) DEFAULT 'ENABLED' NOT NULL,
+      owner_department_code VARCHAR2(30) NOT NULL,
+      access_note VARCHAR2(500),
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_isd_tool_level CHECK (access_level IN ('ADMIN','NEW','VIEW','EDIT','OPEN','SOON','EXISTING')),
+      CONSTRAINT chk_bes_tool_status CHECK (tool_status IN ('SOON','ENABLED','DISABLED')),
+      CONSTRAINT chk_bes_isd_tool_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await addColumn(connection, `ALTER TABLE bes_tool_access ADD (position_name VARCHAR2(180))`);
+    await addColumn(connection, `ALTER TABLE bes_tool_access ADD (tool_status VARCHAR2(20) DEFAULT 'ENABLED' NOT NULL)`);
+    await dropConstraint(connection, 'BES_TOOL_ACCESS', 'CHK_BES_TOOL_STATUS');
+    await runDdl(connection, `ALTER TABLE bes_tool_access ADD CONSTRAINT chk_bes_tool_status CHECK (tool_status IN ('SOON','ENABLED','DISABLED'))`);
+    await dropIndex(connection, 'UX_BES_TOOL_ACCESS');
+    await dropIndex(connection, 'UX_BES_ISD_TOOL_ACCESS');
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_tool_access_scope ON bes_tool_access (tool_code, department_code, NVL(office_name, '-'), NVL(position_name, '-'))`);
+    await runDdl(connection, `CREATE INDEX ix_bes_tool_dept ON bes_tool_access (department_code, office_name, is_active)`);
+    await runDdl(connection, `CREATE TABLE bes_task_subjects (
+      tool_subject_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      tool_code VARCHAR2(120) NOT NULL,
+      task_subject VARCHAR2(180) NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_isd_subject_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_tool_subject ON bes_task_subjects (tool_code, UPPER(task_subject))`);
+    await runDdl(connection, `CREATE INDEX ix_bes_subject_lookup ON bes_task_subjects (UPPER(task_subject), is_active)`);
+    await runDdl(connection, `CREATE TABLE bes_module_registry (
+      module_path VARCHAR2(180) PRIMARY KEY,
+      module_label VARCHAR2(180) NOT NULL,
+      admin_only CHAR(1) DEFAULT 'N' NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_module_admin CHECK (admin_only IN ('Y','N')),
+      CONSTRAINT chk_bes_module_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE TABLE bes_module_access (
+      module_path VARCHAR2(180) NOT NULL REFERENCES bes_module_registry(module_path) ON DELETE CASCADE,
+      department_code VARCHAR2(30) NOT NULL,
+      is_enabled CHAR(1) DEFAULT 'Y' NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_bes_module_access PRIMARY KEY (module_path, department_code),
+      CONSTRAINT chk_bes_module_enabled CHECK (is_enabled IN ('Y','N'))
+    )`);
+    const sidebarModules = [
+      ['/home','Enterprise Home','N'],['/inbox','Inbox','N'],['/my-work','My Work','N'],['/services','Employee Services','N'],
+      ['/workspace','My Workspace','N'],['/workflows','Shared Workflows','N'],['/calendar','Calendar','N'],['/news','News and Memos','N'],
+      ['/documents','Documents and Policies','N'],['/storage','My Storage','N'],['/iso','ISO / QMS','N'],['/organization','Organization','N'],
+      ['/reports','Reports and Analytics','N'],['/help','Help and Support','N'],['/admin','Administration','Y'],
+    ];
+    for (const [modulePath, moduleLabel, adminOnly] of sidebarModules) {
+      await connection.execute(`MERGE INTO bes_module_registry m USING (SELECT :modulePath module_path FROM dual) src ON (m.module_path=src.module_path)
+        WHEN NOT MATCHED THEN INSERT (module_path,module_label,admin_only) VALUES (:modulePath,:moduleLabel,:adminOnly)`, { modulePath, moduleLabel, adminOnly });
+      if (adminOnly === 'N') for (const departmentCode of ['ISD','NSD','NNSD','AUD','CPD','PGD']) {
+        await connection.execute(`MERGE INTO bes_module_access a USING (SELECT :modulePath module_path,:departmentCode department_code FROM dual) src
+          ON (a.module_path=src.module_path AND a.department_code=src.department_code)
+          WHEN NOT MATCHED THEN INSERT (module_path,department_code,is_enabled) VALUES (:modulePath,:departmentCode,'Y')`, { modulePath, departmentCode });
+      }
+    }
+    await runDdl(connection, `CREATE INDEX ix_bes_hro_recruitment_status ON bes_hro_recruitment_and_onboarding (workflow_status, updated_at)`);
+    await runDdl(connection, `CREATE TABLE bes_hro_recruitment_positions (
+      position_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      position_name VARCHAR2(200) NOT NULL,
+      created_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_hro_positions_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_hro_position_name ON bes_hro_recruitment_positions (UPPER(position_name))`);
+    await runDdl(connection, `INSERT INTO bes_hro_recruitment_positions (position_name)
+      SELECT DISTINCT position_applying
+      FROM bes_hro_recruitment_and_onboarding
+      WHERE position_applying IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM bes_hro_recruitment_positions p
+          WHERE UPPER(p.position_name) = UPPER(bes_hro_recruitment_and_onboarding.position_applying)
+        )`);
+    await runDdl(connection, `CREATE TABLE bes_hro_recruitment_comments (
+      comment_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      comment_uid VARCHAR2(80) NOT NULL UNIQUE,
+      recruitment_uid VARCHAR2(80) NOT NULL REFERENCES bes_hro_recruitment_and_onboarding(recruitment_uid) ON DELETE CASCADE,
+      author_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      message CLOB NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_hro_recruitment_comments ON bes_hro_recruitment_comments (recruitment_uid, created_at)`);
+    await runDdl(connection, `CREATE TABLE bes_policy_records (
+      policy_record_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      record_uid VARCHAR2(80) NOT NULL UNIQUE,
+      title VARCHAR2(300) NOT NULL,
+      document_number VARCHAR2(120) NOT NULL,
+      document_type VARCHAR2(30) DEFAULT 'Policy' NOT NULL,
+      revision_number VARCHAR2(60) NOT NULL,
+      effectivity_date DATE NOT NULL,
+      contents CLOB NOT NULL,
+      nature VARCHAR2(40) NOT NULL,
+      attachment_name VARCHAR2(255),
+      attachment_mime_type VARCHAR2(150),
+      attachment_size NUMBER,
+      attachment_blob BLOB,
+      attachment_data CLOB,
+      created_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_policy_records_nature CHECK (nature IN ('Financial','Human Resources','Legal and Compliance','Public Relations','Operations')),
+      CONSTRAINT chk_bes_policy_records_type CHECK (document_type IN ('Policy','Issuance','Guidelines')),
+      CONSTRAINT chk_bes_policy_records_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await addColumn(connection, `ALTER TABLE bes_policy_records ADD (attachment_size NUMBER)`);
+    await addColumn(connection, `ALTER TABLE bes_policy_records ADD (attachment_blob BLOB)`);
+    await addColumn(connection, `ALTER TABLE bes_policy_records ADD (document_type VARCHAR2(30) DEFAULT 'Policy' NOT NULL)`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_policy_document_number ON bes_policy_records (document_number)`);
+    await runDdl(connection, `CREATE INDEX ix_bes_policy_records_nature ON bes_policy_records (nature, effectivity_date, is_active)`);
+    await runDdl(connection, `CREATE TABLE bes_policy_task_processing (
+      processing_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      source_task_uid VARCHAR2(80) NOT NULL UNIQUE REFERENCES bes_work_tasks(task_uid) ON DELETE CASCADE,
+      workflow_status VARCHAR2(40) DEFAULT 'Received' NOT NULL,
+      action_taken CLOB,
+      updated_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_policy_task_status CHECK (workflow_status IN ('Received','Under Review','For Approval','Approved','Issued','Completed','Returned'))
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_policy_task_status ON bes_policy_task_processing (workflow_status, updated_at)`);
+    await createHroToolTaskTables(connection);
     await seedAccessControl(connection);
+    await seedOrganizationalStructure(connection);
+    await seedToolRegistry(connection);
     await seedCalendarEvents(connection);
+    await seedPolicyRecords(connection);
     await connection.commit();
   });
 }

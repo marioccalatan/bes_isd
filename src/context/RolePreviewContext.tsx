@@ -5,6 +5,8 @@ import { DEPARTMENTS, DEPT_MAP, EMPLOYEE_MAP } from '@/lib/mockData';
 export const PREVIEWABLE_ROLES: AppRole[] = [
   'Employee',
   'Secretary',
+  'Office Secretary',
+  'Department Secretary',
   'Supervisor',
   'Department Manager',
   'General Manager',
@@ -33,12 +35,12 @@ export const ISD_PREVIEW_OPTIONS: {
     role: 'Department Manager',
     departmentId: 'ISD',
     name: 'Mario Calatan',
-    position: 'OIC - ISD Manager',
+    position: 'Institutional Services Department Manager',
     office: 'Office of the Department Manager',
   },
   {
     id: 'isd-secretary',
-    role: 'Secretary',
+    role: 'Department Secretary',
     departmentId: 'ISD',
     name: 'ISD Secretary',
     position: 'Secretary',
@@ -49,7 +51,7 @@ export const ISD_PREVIEW_OPTIONS: {
     role: 'Supervisor',
     departmentId: 'ISD',
     name: 'General Services Officer',
-    position: 'Officer',
+    position: 'General Services Officer',
     office: 'General Services Office',
   },
   {
@@ -57,7 +59,7 @@ export const ISD_PREVIEW_OPTIONS: {
     role: 'Supervisor',
     departmentId: 'ISD',
     name: 'Materials and Equipment Management Officer',
-    position: 'Officer',
+    position: 'Materials and Equipment Management Officer',
     office: 'Materials and Equipment Management Office',
   },
   {
@@ -65,7 +67,7 @@ export const ISD_PREVIEW_OPTIONS: {
     role: 'Supervisor',
     departmentId: 'ISD',
     name: 'Community Relations Officer',
-    position: 'Officer',
+    position: 'Community Relations Officer',
     office: 'Community Relations Office',
   },
   {
@@ -73,7 +75,7 @@ export const ISD_PREVIEW_OPTIONS: {
     role: 'Supervisor',
     departmentId: 'ISD',
     name: 'Human Resource Officer',
-    position: 'Officer',
+    position: 'Human Resource Officer',
     office: 'Human Resource Office',
   },
   {
@@ -91,9 +93,11 @@ interface RolePreviewContextValue {
   isPreviewing: boolean;
   previewDepartmentId: DepartmentId | null;
   previewLabel: string;
+  previewOffice: string | null;
+  previewPosition: string | null;
   setPreviewRole: (role: AppRole | null) => void;
   setPreviewDepartmentManager: (departmentId: DepartmentId) => void;
-  setPreviewPersona: (role: AppRole, departmentId: DepartmentId, label: string) => void;
+  setPreviewPersona: (role: AppRole, departmentId: DepartmentId, label: string, office?: string, position?: string) => void;
   returnToAdministrator: () => void;
 }
 
@@ -103,6 +107,8 @@ export function RolePreviewProvider({ children }: { children: ReactNode }) {
   const [previewRole, setPreviewRoleState] = useState<AppRole | null>(null);
   const [previewDepartmentId, setPreviewDepartmentId] = useState<DepartmentId | null>(null);
   const [previewLabelOverride, setPreviewLabelOverride] = useState<string | null>(null);
+  const [previewOffice, setPreviewOffice] = useState<string | null>(null);
+  const [previewPosition, setPreviewPosition] = useState<string | null>(null);
 
   const effectiveRole = previewRole ?? 'Administrator';
 
@@ -118,9 +124,13 @@ export function RolePreviewProvider({ children }: { children: ReactNode }) {
         isPreviewing: previewRole !== null,
         previewDepartmentId,
         previewLabel,
+        previewOffice,
+        previewPosition,
         setPreviewRole: (role) => {
           setPreviewRoleState(role);
           setPreviewLabelOverride(null);
+          setPreviewOffice(null);
+          setPreviewPosition(null);
           if (role !== 'Department Manager') setPreviewDepartmentId(null);
         },
         setPreviewDepartmentManager: (departmentId) => {
@@ -128,15 +138,21 @@ export function RolePreviewProvider({ children }: { children: ReactNode }) {
           setPreviewDepartmentId(departmentId);
           setPreviewLabelOverride(null);
         },
-        setPreviewPersona: (role, departmentId, label) => {
+        setPreviewPersona: (role, departmentId, label, office, position) => {
           setPreviewRoleState(role);
           setPreviewDepartmentId(departmentId);
           setPreviewLabelOverride(label);
+          setPreviewOffice(office ?? null);
+          setPreviewPosition(position ?? null);
         },
         returnToAdministrator: () => {
           setPreviewRoleState(null);
           setPreviewDepartmentId(null);
           setPreviewLabelOverride(null);
+          setPreviewOffice(null);
+          setPreviewPosition(null);
+          setPreviewOffice(null);
+          setPreviewPosition(null);
         },
       }}
     >

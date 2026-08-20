@@ -1,7 +1,7 @@
 import type { AppRole, DocumentClassification } from './types';
 
 const MANAGER_TIER: AppRole[] = ['Department Manager', 'General Manager', 'Administrator'];
-const APPROVER_TIER: AppRole[] = ['Supervisor', 'Department Manager', 'General Manager', 'Administrator'];
+const APPROVER_TIER: AppRole[] = ['Supervisor', 'Department Secretary', 'Department Manager', 'General Manager', 'Administrator'];
 
 export function canSeeAdministration(role: AppRole): boolean {
   return MANAGER_TIER.includes(role);
@@ -55,6 +55,8 @@ export function roleDescription(role: AppRole): string {
   const map: Record<AppRole, string> = {
     Employee: 'Standard employee access — personal tasks, requests, and services only.',
     Secretary: 'Employee access plus document intake — routes correspondence and monitors department-restricted records.',
+    'Office Secretary': 'Employee access plus document intake and coordination for the assigned office.',
+    'Department Secretary': 'Department-level document intake, coordination, and delegated task moderation.',
     Supervisor: 'Employee access plus approval authority over immediate direct reports.',
     'Department Manager': 'Full departmental access, approval authority, and workspace administration.',
     'General Manager': 'Enterprise-wide visibility, final approval authority, and executive reports.',

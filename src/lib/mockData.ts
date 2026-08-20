@@ -63,13 +63,10 @@ export const DEPARTMENTS: Department[] = [
     managerId: 'BENECO-00127',
     employeeCount: 34,
     units: [
-      'Human Resources',
-      'Recruitment & Onboarding',
-      'Learning & Development',
-      'Employee Relations',
-      'Institutional Communications',
-      'Member-Consumer & Community Programs',
-      'Records Management',
+      'Human Resource Office',
+      'Community Relations Office',
+      'General Services Office',
+      'Material Equipment Management Office',
     ],
     contactEmail: 'isd@beneco.example.ph',
     contactLocal: '221',
@@ -1211,7 +1208,7 @@ export function buildModules(): BesModule[] {
 // ---------------------------------------------------------------------------
 export function buildTools(): AppTool[] {
   const nsdOnly = (level: ToolAccessLevel): ToolAccessGrant[] => [{ departmentId: 'NSD', level }];
-  return [
+  const tools: AppTool[] = [
     { code: 'GIS', name: 'Geographic Information System', description: 'Network and asset mapping across the franchise area.', iconKey: 'Map', ownerDepartmentId: 'NSD', access: nsdOnly('ADMIN') },
     { code: 'NMS', name: 'Network Management System', description: 'Real-time monitoring and control of the distribution network.', iconKey: 'Network', ownerDepartmentId: 'NSD', access: nsdOnly('ADMIN') },
     { code: 'CRS', name: 'Compliance Reporting System', description: 'Regulatory and technical compliance report generation.', iconKey: 'FileCheck', ownerDepartmentId: 'NSD', access: nsdOnly('ADMIN') },
@@ -1241,10 +1238,23 @@ export function buildTools(): AppTool[] {
       ],
     },
     // ISD Management System — HR, Community Relations, and Motorpool offices.
-    { code: 'HR Office', name: 'Human Resources Office System', description: 'Employee records, leave, and personnel management.', iconKey: 'User', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }] },
     { code: 'Community Relations', name: 'Community Relations Office System', description: 'Community engagement, outreach, and program tracking.', iconKey: 'Users', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }] },
-    { code: 'Motorpool', name: 'Motorpool Office System', description: 'Vehicle dispatch, maintenance, and trip requests.', iconKey: 'Car', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }] },
+    { code: 'General Services Office', name: 'General Services Office System', description: 'General services, vehicle dispatch, maintenance, and facilities support.', iconKey: 'Car', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }] },
+
+    // ISD Modules — mirrors the Institutional Services Modules workspace grid.
+    { code: 'Human Resources', name: 'Human Resources Module', description: 'Employee 201 files, benefits administration, and workforce records.', iconKey: 'Users', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Human Resource'] },
+    { code: 'Recruitment and Onboarding', name: 'Recruitment and Onboarding Module', description: 'Manage vacancies, applicant screening, and new employee onboarding.', iconKey: 'UserPlus', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Application Letter'] },
+    { code: 'Learning and Development', name: 'Learning and Development Module', description: 'Training programs, competency development, and learning records.', iconKey: 'GraduationCap', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Learning and Development'] },
+    { code: 'Performance Management', name: 'Performance Management Module', description: 'Goal setting, appraisal cycles, and performance ratings.', iconKey: 'TrendingUp', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Performance Management'] },
+    { code: 'Employee Relations', name: 'Employee Relations Module', description: 'Grievance handling, disciplinary cases, and employee welfare.', iconKey: 'HeartHandshake', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Employee Relations'] },
+    { code: 'Institutional Communications', name: 'Institutional Communications Module', description: 'Public information, internal communications, and brand management.', iconKey: 'Megaphone', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Institutional Communications'] },
+    { code: 'Member-Consumer and Community Programs', name: 'Member-Consumer and Community Programs Module', description: 'Community electrification, outreach, and member-consumer engagement.', iconKey: 'HandHeart', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Member-Consumer and Community Programs'] },
+    { code: 'Records Management', name: 'Records Management Module', description: 'Corporate records, retention schedules, and document custody.', iconKey: 'Archive', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Records Management'] },
+    { code: 'Policies and Issuances', name: 'Policies and Issuances Module', description: 'Drafting, review, and dissemination of institutional policies.', iconKey: 'FileStack', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Policy Related'] },
+    { code: 'Events Management', name: 'Events Management Module', description: 'Corporate events, seminars, and institutional activities.', iconKey: 'CalendarRange', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Events Management'] },
+    { code: 'Building and Facilities Management System', name: 'Building and Facilities Management System', description: 'Building operations, facility maintenance, space management, and service tracking.', iconKey: 'Building2', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Building and Facilities Management System'] },
   ];
+  return tools.map((tool) => ({ ...tool, status: tool.access.some((grant) => grant.level === 'SOON') ? 'SOON' : 'ENABLED' }));
 }
 
 // ---------------------------------------------------------------------------
