@@ -2126,6 +2126,9 @@ async function handle(req, res) {
             name: normalize(file.name),
             size: Number(file.size) || 0,
             type: nullableNormalize(file.type),
+            dataUrl: /^data:[^;,]+;base64,[a-z0-9+/=\r\n]+$/i.test(normalize(file.dataUrl)) && normalize(file.dataUrl).length <= 5_600_000
+              ? normalize(file.dataUrl)
+              : undefined,
           })).filter((file) => file.name).slice(0, 20))
           : null;
         await c.execute(`INSERT INTO bes_calendar_events
@@ -2145,7 +2148,7 @@ async function handle(req, res) {
           meetingLink: nullableNormalize(body.meetingLink),
           description: nullableNormalize(body.description),
           attendees: Array.isArray(body.attendees) ? body.attendees.map(normalize).filter(Boolean).join('|') : null,
-          attachments,
+          attachments: { val: attachments, type: oracledb.CLOB },
           visibility,
           visibleToUsers,
           departmentCode: departmentCodes.length ? departmentCodes.join('|') : null,
@@ -2212,6 +2215,9 @@ async function handle(req, res) {
             name: normalize(file.name),
             size: Number(file.size) || 0,
             type: nullableNormalize(file.type),
+            dataUrl: /^data:[^;,]+;base64,[a-z0-9+/=\r\n]+$/i.test(normalize(file.dataUrl)) && normalize(file.dataUrl).length <= 5_600_000
+              ? normalize(file.dataUrl)
+              : undefined,
           })).filter((file) => file.name).slice(0, 20))
           : null;
         const updated = await c.execute(`UPDATE bes_calendar_events SET
@@ -2247,7 +2253,7 @@ async function handle(req, res) {
           meetingLink: nullableNormalize(body.meetingLink),
           description: nullableNormalize(body.description),
           attendees: Array.isArray(body.attendees) ? body.attendees.map(normalize).filter(Boolean).join('|') : null,
-          attachments,
+          attachments: { val: attachments, type: oracledb.CLOB },
           visibility,
           visibleToUsers,
           departmentCode: departmentCodes.length ? departmentCodes.join('|') : null,

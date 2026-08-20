@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import {
   addMonths, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval,
   isSameMonth, isSameDay, format, addDays, subDays, isToday, parseISO,
@@ -190,6 +190,7 @@ function EventForm({
   const [departmentIds, setDepartmentIds] = useState<string[]>(eventDepartmentIds(initial ?? {}));
   const [officeAssignments, setOfficeAssignments] = useState<string[]>(eventOfficeAssignments(initial ?? {}));
   const [departmentPickerOpen, setDepartmentPickerOpen] = useState(false);
+  const departmentPickerRef = useRef<HTMLDivElement>(null);
   const [visibility, setVisibility] = useState<CalendarEvent['visibility']>(initial?.visibility ?? 'All employees');
   const [visibleToUsernames, setVisibleToUsernames] = useState<string[]>(initial?.visibleToUsernames ?? []);
   const [attachments, setAttachments] = useState<NonNullable<CalendarEvent['attachments']>>(initial?.attachments ?? []);
@@ -207,6 +208,15 @@ function EventForm({
       });
     return () => { cancelled = true; };
   }, [token]);
+
+  useEffect(() => {
+    if (!departmentPickerOpen) return;
+    function closeDepartmentPicker(event: PointerEvent) {
+      if (!departmentPickerRef.current?.contains(event.target as Node)) setDepartmentPickerOpen(false);
+    }
+    document.addEventListener('pointerdown', closeDepartmentPicker);
+    return () => document.removeEventListener('pointerdown', closeDepartmentPicker);
+  }, [departmentPickerOpen]);
 
   const pickerDays = useMemo(() => eachDayOfInterval({ start: startOfWeek(startOfMonth(pickerMonth)), end: endOfWeek(endOfMonth(pickerMonth)) }), [pickerMonth]);
   const dateRangeLabel = useMemo(() => {
@@ -296,8 +306,28 @@ function EventForm({
     if (layer && !creatingLayer) onLayerColorChange(layer, color);
   }
 
-  function addFiles(files: FileList | File[]) {
-    const next = Array.from(files).map((file) => ({ name: file.name, size: file.size, type: file.type || undefined }));
+  async function addFiles(files: FileList | File[]) {
+    let totalSize = attachments.reduce((total, file) => total + file.size, 0);
+    const accepted = Array.from(files).filter((file) => {
+      if (totalSize + file.size <= 4 * 1024 * 1024) {
+        totalSize += file.size;
+        return true;
+      }
+      setError(`${file.name} exceeds the 4 MB total calendar attachment limit.`);
+      return false;
+    });
+    let next: NonNullable<CalendarEvent['attachments']>;
+    try {
+      next = await Promise.all(accepted.map(async (file) => ({
+        name: file.name,
+        size: file.size,
+        type: file.type || undefined,
+        dataUrl: await fileDataUrl(file),
+      })));
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : 'Unable to read the selected attachment.');
+      return;
+    }
     setAttachments((current) => {
       const merged = [...current, ...next];
       const unique = new Map(merged.map((file) => [`${file.name}:${file.size}`, file]));
@@ -308,7 +338,7 @@ function EventForm({
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
-    if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files);
+    if (event.dataTransfer.files.length) void addFiles(event.dataTransfer.files);
   }
 
   function togglePerson(username: string) {
@@ -452,7 +482,7 @@ function EventForm({
         <Input id="ev-location" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Boardroom or meeting URL" />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="relative">
+        <div ref={departmentPickerRef} className="relative">
           <Label>Departments</Label>
           <button
             type="button"
@@ -556,13 +586,20 @@ function EventForm({
           <Paperclip className="mx-auto h-5 w-5 text-slate-400" />
           <p className="mt-1 text-sm font-medium text-slate-700">Drag and drop files here</p>
           <p className="text-xs text-slate-400">or choose files to attach to this event post</p>
-          <Input id="ev-files" type="file" multiple className="mt-3" onChange={(event) => { if (event.target.files) addFiles(event.target.files); event.target.value = ''; }} />
+          <Input id="ev-files" type="file" multiple className="mt-3" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ''; }} />
         </div>
         {attachments.length > 0 && (
           <div className="mt-2 space-y-1">
             {attachments.map((file) => (
               <div key={`${file.name}:${file.size}`} className="flex items-center justify-between gap-2 rounded-md border border-slate-100 px-2.5 py-1.5 text-xs">
                 <span className="min-w-0 truncate text-slate-600">{file.name} <span className="text-slate-400">({formatBytes(file.size)})</span></span>
+                {file.dataUrl ? (
+                  <button type="button" onClick={() => previewAttachment(file)} className="ml-auto shrink-0 font-medium text-brand-600 hover:underline">
+                    {canPreviewInBrowser(file) ? 'Preview' : 'Download'}
+                  </button>
+                ) : (
+                  <span className="ml-auto shrink-0 text-slate-400" title="Select this file again to store its content">Re-upload to enable</span>
+                )}
                 <button type="button" onClick={() => setAttachments((current) => current.filter((item) => !(item.name === file.name && item.size === file.size)))} className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-red-600" aria-label={`Remove ${file.name}`}>
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -610,6 +647,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, depa
   const [layerColors, setLayerColors] = useState<Record<string, string>>(() => ({ ...DEFAULT_LAYER_COLORS, ...safeLayerColors(loadCalendarSettings(username).layerColors) }));
   const [settingsOwner, setSettingsOwner] = useState(username);
   const [departmentMenuOpen, setDepartmentMenuOpen] = useState(false);
+  const departmentMenuRef = useRef<HTMLDivElement>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [detailEvent, setDetailEvent] = useState<CalendarEvent | null>(null);
   const [formOpen, setFormOpen] = useState(autoOpenNew);
@@ -636,6 +674,15 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, depa
     setDepartmentMenuOpen(false);
     setSettingsOwner(username);
   }, [username]);
+
+  useEffect(() => {
+    if (!departmentMenuOpen) return;
+    function closeDepartmentMenu(event: PointerEvent) {
+      if (!departmentMenuRef.current?.contains(event.target as Node)) setDepartmentMenuOpen(false);
+    }
+    document.addEventListener('pointerdown', closeDepartmentMenu);
+    return () => document.removeEventListener('pointerdown', closeDepartmentMenu);
+  }, [departmentMenuOpen]);
 
   useEffect(() => {
     if (settingsOwner !== username) return;
@@ -695,8 +742,10 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, depa
 
   const visibleEvents = useMemo(() => events.filter((e) => {
     if (!activeLayers.has(e.layer)) return false;
-    if (e.visibility === 'Me' && !activeCalendarScopes.has('my')) return false;
-    if (e.visibility === 'Specific people' && !activeCalendarScopes.has('our')) return false;
+    // Personal/shared calendars are independent filter categories. Their optional
+    // department metadata must not hide them when every department is unchecked.
+    if (e.visibility === 'Me') return activeCalendarScopes.has('my');
+    if (e.visibility === 'Specific people') return activeCalendarScopes.has('our');
     const ids = eventDepartmentIds(e);
     if (departmentScope) {
       if (ids.length > 0 && !ids.some((id) => departmentScope.has(id))) return false;
@@ -908,7 +957,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, depa
             );
           })}
         </div>
-        <div className="relative shrink-0">
+        <div ref={departmentMenuRef} className="relative shrink-0">
           <Button
             variant="outline"
             size="sm"
@@ -1145,7 +1194,13 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, depa
                 <ul className="space-y-1">
                   {detailEvent.attachments.map((file) => (
                     <li key={`${file.name}:${file.size}`} className="flex items-center gap-2 text-xs text-slate-600">
-                      <Paperclip className="h-3.5 w-3.5 text-slate-400" /> {file.name} <span className="text-slate-400">({formatBytes(file.size)})</span>
+                      <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      {file.dataUrl ? (
+                        <button type="button" onClick={() => previewAttachment(file)} className="min-w-0 truncate font-medium text-brand-600 hover:underline" title={`${canPreviewInBrowser(file) ? 'Preview' : 'Download'} ${file.name}`}>{file.name}</button>
+                      ) : (
+                        <span className="min-w-0 truncate" title="This older attachment contains metadata only">{file.name}</span>
+                      )}
+                      <span className="shrink-0 text-slate-400">({formatBytes(file.size)}){!file.dataUrl ? ' · preview unavailable' : ''}</span>
                     </li>
                   ))}
                 </ul>
@@ -1241,4 +1296,29 @@ function formatBytes(bytes: number) {
   const units = ['B', 'KB', 'MB', 'GB'];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function fileDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error(`Unable to read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function previewAttachment(file: NonNullable<CalendarEvent['attachments']>[number]) {
+  if (!file.dataUrl) return;
+  const link = document.createElement('a');
+  link.href = file.dataUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  if (!canPreviewInBrowser(file)) link.download = file.name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function canPreviewInBrowser(file: NonNullable<CalendarEvent['attachments']>[number]) {
+  return Boolean(file.type?.startsWith('image/') || file.type === 'application/pdf' || file.type?.startsWith('text/'));
 }

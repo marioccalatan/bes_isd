@@ -81,7 +81,7 @@ export interface CalendarEvent {
   meetingLink?: string;
   description?: string;
   attendees?: string[];
-  attachments?: { name: string; size: number; type?: string }[];
+  attachments?: { name: string; size: number; type?: string; dataUrl?: string }[];
   visibility?: 'All employees' | 'Department only' | 'Specific people' | 'Me';
   visibleToUsernames?: string[];
   done?: boolean;
