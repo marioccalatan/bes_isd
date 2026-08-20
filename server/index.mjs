@@ -853,21 +853,29 @@ async function handle(req, res) {
       }
       await withConnection(async (c) => {
         await c.execute(`DELETE FROM bes_tool_access WHERE tool_code=:toolCode`, { toolCode });
+        const uniqueAccess = new Map();
         for (const grant of access) {
           const departmentCode = normalize(grant.departmentId).toUpperCase();
           const level = normalize(grant.level).toUpperCase();
           if (!departmentCode || !['ADMIN','NEW','VIEW','EDIT','OPEN','SOON','EXISTING'].includes(level)) continue;
+          const officeName = nullableNormalize(grant.unit);
+          const positionName = nullableNormalize(grant.position);
+          const scopeKey = [departmentCode, officeName?.toUpperCase() || '-', positionName?.toUpperCase() || '-'].join('|');
+          uniqueAccess.set(scopeKey, { departmentCode, level, officeName, positionName, note: nullableNormalize(grant.note) });
+        }
+        for (const grant of uniqueAccess.values()) {
           await c.execute(`INSERT INTO bes_tool_access
               (tool_code,tool_name,department_code,office_name,position_name,access_level,tool_status,owner_department_code,access_note,is_active)
             VALUES (:toolCode,:toolName,:departmentCode,:officeName,:positionName,:accessLevel,:toolStatus,:ownerDepartmentCode,:accessNote,'Y')`, {
-            toolCode, toolName, departmentCode,
-            officeName: nullableNormalize(grant.unit), positionName: nullableNormalize(grant.position),
-            accessLevel: level, toolStatus: status, ownerDepartmentCode: ownerDepartmentId,
-            accessNote: nullableNormalize(grant.note),
+            toolCode, toolName, departmentCode: grant.departmentCode,
+            officeName: grant.officeName, positionName: grant.positionName,
+            accessLevel: grant.level, toolStatus: status, ownerDepartmentCode: ownerDepartmentId,
+            accessNote: grant.note,
           });
         }
         await c.execute(`DELETE FROM bes_task_subjects WHERE tool_code=:toolCode`, { toolCode });
-        for (const taskSubject of [...new Set(taskSubjects)]) {
+        const uniqueSubjects = [...new Map(taskSubjects.map((taskSubject) => [taskSubject.toUpperCase(), taskSubject])).values()];
+        for (const taskSubject of uniqueSubjects) {
           await c.execute(`INSERT INTO bes_task_subjects (tool_code,task_subject,is_active) VALUES (:toolCode,:taskSubject,'Y')`, { toolCode, taskSubject });
         }
         await c.commit();
@@ -2562,7 +2570,7 @@ async function handle(req, res) {
     return json(res, 404, { error: 'Not found' });
   } catch (error) {
     if (error?.statusCode) return json(res, error.statusCode, { error: error.message });
-    if (error?.errorNum === 1) return json(res, 409, { error: 'That employee number, username, or email is already registered.' });
+    if (error?.errorNum === 1) return json(res, 409, { error: 'A record with the same unique scope already exists. Refresh the page and try saving again.' });
     console.error(error);
     return json(res, 500, { error: 'The server could not complete the request.' });
   }
