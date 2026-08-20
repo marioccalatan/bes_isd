@@ -34,6 +34,10 @@ export const SIDEBAR_DEPARTMENT_IDS: DepartmentId[] = ['ISD', 'NSD', 'NNSD', 'AU
 
 export type SidebarModuleAccess = Record<string, DepartmentId[]>;
 
+export function emptySidebarModuleAccess(): SidebarModuleAccess {
+  return Object.fromEntries(NAV_ITEMS.map((item) => [item.to, []])) as SidebarModuleAccess;
+}
+
 export function defaultSidebarModuleAccess(): SidebarModuleAccess {
   return Object.fromEntries(
     NAV_ITEMS.map((item) => [item.to, item.adminOnly ? [] : SIDEBAR_DEPARTMENT_IDS])
@@ -61,8 +65,8 @@ function normalizeSidebarModuleAccess(access: unknown): SidebarModuleAccess {
 
 export function isSidebarModuleEnabledForDepartment(item: NavItem, departmentId?: string | null, access = defaultSidebarModuleAccess()): boolean {
   if (item.adminOnly) return false;
-  if (!departmentId) return true;
-  return (access[item.to] ?? SIDEBAR_DEPARTMENT_IDS).includes(departmentId as DepartmentId);
+  if (!departmentId) return false;
+  return (access[item.to] ?? []).includes(departmentId as DepartmentId);
 }
 
 export function visibleNavItems(role: AppRole, departmentId?: string | null, access = defaultSidebarModuleAccess()): NavItem[] {

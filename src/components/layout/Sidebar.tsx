@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { defaultSidebarModuleAccess, visibleNavItems, type SidebarModuleAccess } from '@/lib/nav';
+import { emptySidebarModuleAccess, visibleNavItems, type SidebarModuleAccess } from '@/lib/nav';
 import { fetchModuleRegistry } from '@/lib/api';
 import { useRolePreview } from '@/context/RolePreviewContext';
 import { useData } from '@/context/DataContext';
@@ -27,27 +27,32 @@ function Logo({ collapsed }: { collapsed?: boolean }) {
 }
 
 function NavList({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
-  const { effectiveRole, isPreviewing, previewDepartmentId } = useRolePreview();
+  const { effectiveRole, previewDepartmentId } = useRolePreview();
   const { token, user } = useAuth();
   const { emails, chatMessages } = useData();
-  const [moduleAccess, setModuleAccess] = useState(() => defaultSidebarModuleAccess());
-  const departmentItems = visibleNavItems(effectiveRole, previewDepartmentId ?? user?.departmentCode, moduleAccess);
-  const previewNavigation = new Set(['/home', '/my-work', '/workspace', '/calendar']);
-  const items = isPreviewing
-    ? departmentItems.filter((item) => previewNavigation.has(item.to))
-    : departmentItems;
+  const [moduleAccess, setModuleAccess] = useState<SidebarModuleAccess | null>(null);
+  const departmentItems = visibleNavItems(
+    effectiveRole,
+    previewDepartmentId ?? user?.departmentCode,
+    moduleAccess ?? emptySidebarModuleAccess(),
+  );
+  const items = departmentItems;
   const unreadMail = emails.filter((m) => m.folder === 'inbox' && !m.read).length;
   const unreadChat = chatMessages.filter((m) => m.senderId !== CURRENT_EMPLOYEE.id && !m.read).length;
   const inboxUnread = unreadMail + unreadChat;
 
   useEffect(() => {
+    setModuleAccess(null);
     if (!token) return;
     let cancelled = false;
     fetchModuleRegistry(token)
       .then((rows) => {
         if (!cancelled) setModuleAccess(Object.fromEntries(rows.map((row) => [row.path, row.departmentIds])) as SidebarModuleAccess);
       })
-      .catch((error) => console.warn('Unable to load Oracle module access.', error));
+      .catch((error) => {
+        console.warn('Unable to load Oracle module access.', error);
+        if (!cancelled) setModuleAccess(emptySidebarModuleAccess());
+      });
     return () => { cancelled = true; };
   }, [token]);
 
