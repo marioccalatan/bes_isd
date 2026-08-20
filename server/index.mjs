@@ -44,7 +44,13 @@ const serveStatic = async (req, res) => {
 
   const ext = path.extname(filePath).toLowerCase();
   const body = await fsp.readFile(filePath);
-  res.writeHead(200, { 'content-type': contentTypes[ext] ?? 'application/octet-stream' });
+  const cacheControl = ext === '.html'
+    ? 'no-cache, no-store, must-revalidate'
+    : 'public, max-age=31536000, immutable';
+  res.writeHead(200, {
+    'content-type': contentTypes[ext] ?? 'application/octet-stream',
+    'cache-control': cacheControl,
+  });
   if (req.method === 'HEAD') return res.end();
   return res.end(body);
 };

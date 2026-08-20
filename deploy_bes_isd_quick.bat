@@ -13,6 +13,8 @@ echo ============================================================
 echo   BENECO Enterprise System - Quick Restart
 echo ============================================================
 echo Target URL: http://%BES_HOST%:%BES_PORT%
+echo NOTE: Quick Restart does not pull Git changes or rebuild the frontend.
+echo       Use deploy_bes_isd.bat after every update from GitHub.
 echo.
 
 if not exist "node_modules" (
