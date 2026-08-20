@@ -900,6 +900,7 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, depa
       description: taskDescription,
       assigneeUsername: taskAssignee,
       departmentId: departmentIds[0],
+      attachments: taskSource.attachments,
       priority: taskPriority,
       dueDate: taskDueDate,
     });

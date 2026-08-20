@@ -163,7 +163,7 @@ export interface CalendarTaskInput {
   departmentId?: string;
   officeAssignment?: string;
   taskSubject?: string;
-  attachments?: string[];
+  attachments?: (string | NonNullable<CalendarEvent['attachments']>[number])[];
   municipality?: string;
   barangay?: string;
   address?: string;
@@ -532,6 +532,25 @@ export async function updateWorkTask(token: string, taskId: string, patch: Parti
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify(patch),
   });
+}
+
+export async function downloadWorkTaskAttachment(token: string, taskId: string, attachmentIndex: number, fileName: string) {
+  const response = await fetch(`/api/work/tasks/${encodeURIComponent(taskId)}/attachments/${attachmentIndex}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Unable to download the attachment.');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName.split('/').pop() || 'attachment';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export async function createWorkComment(token: string, taskId: string, message: string, parentCommentId?: string) {

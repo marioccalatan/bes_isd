@@ -19,7 +19,7 @@ import { canApprove } from '@/lib/permissions';
 import { CURRENT_EMPLOYEE } from '@/lib/mockData';
 import { formatDate, formatDateTime, processLabel, initials } from '@/lib/utils';
 import { PROCESS_DEFS } from '@/lib/processDefs';
-import { updateWorkTask } from '@/lib/api';
+import { downloadWorkTaskAttachment, updateWorkTask } from '@/lib/api';
 import { loadState, saveState } from '@/lib/storage';
 import { MUNICIPALITIES, MUNICIPALITY_BARANGAYS } from '@/lib/locations';
 import type { Comment, Priority, ProcessType, WorkStatus } from '@/lib/types';
@@ -382,10 +382,10 @@ export default function WorkItemDetail() {
                   <p className="text-sm text-slate-400">No attachments.</p>
                 ) : (
                   <ul className="space-y-1.5">
-                    {[...item.attachments, ...(typeof item.fields.attachment === 'string' ? [item.fields.attachment] : [])].map((a) => (
+                    {[...item.attachments, ...(typeof item.fields.attachment === 'string' ? [item.fields.attachment] : [])].map((a, attachmentIndex) => (
                       <li key={a}>
                         <button
-                          onClick={() => toast({ kind: 'info', title: 'Simulated download', description: `${a} would download here in production.` })}
+                          onClick={() => void downloadWorkTaskAttachment(token ?? '', item.id, attachmentIndex, a).catch((error) => toast({ kind: 'error', title: 'Download unavailable', description: error instanceof Error ? error.message : 'Unable to download this attachment.' }))}
                           className="flex items-center gap-2 text-sm text-brand-600 hover:underline"
                         >
                           <Paperclip className="h-3.5 w-3.5" /> {a}

@@ -144,6 +144,19 @@ const workTaskAttachmentPaths = (taskUid, files) => Array.isArray(files)
     })
     .filter(Boolean)
   : [];
+const workTaskAttachmentRecords = (taskUid, files) => workTaskAttachmentPaths(taskUid, files).map((attachmentPath, index) => {
+  const source = files[index];
+  const dataUrl = typeof source === 'object' && /^data:[^;,]+;base64,[a-z0-9+/=\r\n]+$/i.test(normalize(source?.dataUrl))
+    ? normalize(source.dataUrl)
+    : undefined;
+  return {
+    path: attachmentPath,
+    name: safeFileName(typeof source === 'object' ? source?.name : attachmentPath.split('/').pop()),
+    size: typeof source === 'object' ? Number(source?.size) || 0 : 0,
+    type: typeof source === 'object' ? nullableNormalize(source?.type) : null,
+    dataUrl,
+  };
+});
 const departmentCodesFromValue = (value) => String(value ?? '').split('|').map((item) => normalize(item).toUpperCase()).filter(Boolean);
 const departmentCodesFromBody = (body) => {
   const codes = Array.isArray(body.departmentIds)
@@ -1976,6 +1989,39 @@ async function handle(req, res) {
       });
       return result ? json(res, 200, { comment: commentFromRow(result) }) : json(res, 401, { error: 'Session expired.' });
     }
+    const workTaskAttachmentMatch = url.pathname.match(/^\/api\/work\/tasks\/([^/]+)\/attachments\/(\d+)$/);
+    if (req.method === 'GET' && workTaskAttachmentMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const taskUid = decodeURIComponent(workTaskAttachmentMatch[1]);
+      const attachmentIndex = Number(workTaskAttachmentMatch[2]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT attachments, created_by_user_id, assigned_to_user_id, department_code
+          FROM bes_work_tasks WHERE task_uid=:taskUid AND is_active='Y'`, { taskUid });
+        const task = found.rows[0];
+        if (!task) return false;
+        const allowed = Number(task.CREATED_BY_USER_ID) === Number(user.USER_ID)
+          || Number(task.ASSIGNED_TO_USER_ID) === Number(user.USER_ID)
+          || task.DEPARTMENT_CODE === user.DEPARTMENT_CODE
+          || isTaskModerator(user);
+        if (!allowed) throw Object.assign(new Error('You are not allowed to download this attachment.'), { statusCode: 403 });
+        const records = JSON.parse(String(task.ATTACHMENTS || '[]'));
+        return records[attachmentIndex] || false;
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Attachment not found.' });
+      const match = normalize(result.dataUrl).match(/^data:([^;,]+);base64,(.+)$/i);
+      if (!match) return json(res, 410, { error: 'This legacy attachment has no stored file content.' });
+      const file = Buffer.from(match[2], 'base64');
+      res.writeHead(200, {
+        'content-type': result.type || match[1] || 'application/octet-stream',
+        'content-length': file.length,
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeFileName(result.name || 'attachment'))}`,
+      });
+      return res.end(file);
+    }
     const workTaskMatch = url.pathname.match(/^\/api\/work\/tasks\/([^/]+)$/);
     if (req.method === 'PATCH' && workTaskMatch) {
       const token = bearerToken(req);
@@ -2004,7 +2050,7 @@ async function handle(req, res) {
         const status = ['In Progress', 'Completed', 'Cancelled', 'Returned'].includes(normalize(body.status)) ? normalize(body.status) : null;
         const dueDate = normalize(body.dueDate);
         const attachments = Array.isArray(body.attachments)
-          ? JSON.stringify(workTaskAttachmentPaths(taskUid, body.attachments))
+          ? JSON.stringify(workTaskAttachmentRecords(taskUid, body.attachments))
           : null;
         await c.execute(`UPDATE bes_work_tasks SET
             title = COALESCE(:title, title),
@@ -2029,7 +2075,7 @@ async function handle(req, res) {
           municipality: nullableNormalize(body.municipality),
           barangay: nullableNormalize(body.barangay),
           address: nullableNormalize(body.address),
-          attachments,
+          attachments: { val: attachments, type: oracledb.CLOB },
           priority,
           status,
           dueDate: /^\d{4}-\d{2}-\d{2}$/.test(dueDate) ? dueDate : null,
@@ -2067,7 +2113,7 @@ async function handle(req, res) {
         const taskUid = `TASK-${new Date().getFullYear()}-${Date.now()}`;
         const priority = ['Low', 'Normal', 'High', 'Urgent'].includes(normalize(body.priority)) ? normalize(body.priority) : 'Normal';
         const dueDate = normalize(body.dueDate);
-        const attachments = JSON.stringify(workTaskAttachmentPaths(taskUid, body.attachments));
+        const attachments = JSON.stringify(workTaskAttachmentRecords(taskUid, body.attachments));
         await c.execute(`INSERT INTO bes_work_tasks
           (task_uid, calendar_event_uid, control_number, title, description, department_code, office_assignment, task_subject, municipality, barangay, address, attachments, priority, status, due_date, assigned_to_user_id, created_by_user_id, is_active)
           VALUES
@@ -2085,7 +2131,7 @@ async function handle(req, res) {
           municipality: nullableNormalize(body.municipality),
           barangay: nullableNormalize(body.barangay),
           address: nullableNormalize(body.address),
-          attachments,
+          attachments: { val: attachments, type: oracledb.CLOB },
           priority,
           dueDate: /^\d{4}-\d{2}-\d{2}$/.test(dueDate) ? dueDate : null,
           assignedToUserId: assigneeRow.USER_ID,
