@@ -17,13 +17,22 @@ echo Target URL: http://%BES_HOST%:%BES_PORT%
 echo Deployment folder: %CD%
 echo.
 
-where git >nul 2>nul
-if errorlevel 1 (
-  echo ERROR: Git was not found in PATH.
-  echo Install Git or open this from Git Bash / GitHub Desktop's repository shell.
+set "BES_GIT="
+for /f "delims=" %%G in ('where git.exe 2^>nul') do if not defined BES_GIT set "BES_GIT=%%G"
+if not defined BES_GIT if exist "%ProgramFiles%\Git\cmd\git.exe" set "BES_GIT=%ProgramFiles%\Git\cmd\git.exe"
+if not defined BES_GIT if exist "%ProgramFiles(x86)%\Git\cmd\git.exe" set "BES_GIT=%ProgramFiles(x86)%\Git\cmd\git.exe"
+if not defined BES_GIT (
+  for /d %%D in ("%LOCALAPPDATA%\GitHubDesktop\app-*") do if exist "%%D\resources\app\git\cmd\git.exe" set "BES_GIT=%%D\resources\app\git\cmd\git.exe"
+)
+
+if not defined BES_GIT (
+  echo ERROR: Git was not found in PATH, Program Files, or GitHub Desktop.
+  echo Open GitHub Desktop once under this Windows account, or install Git for Windows.
   pause
   exit /b 1
 )
+
+echo Git executable: %BES_GIT%
 
 if not exist ".git" (
   echo ERROR: %CD% is not a Git working copy.
@@ -33,7 +42,7 @@ if not exist ".git" (
 )
 
 echo Updating source code from origin/%BES_BRANCH%...
-git fetch origin %BES_BRANCH%
+"%BES_GIT%" fetch origin %BES_BRANCH%
 if errorlevel 1 (
   echo.
   echo ERROR: git fetch failed. Check the server's network and GitHub access.
@@ -41,7 +50,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-git pull --ff-only origin %BES_BRANCH%
+"%BES_GIT%" pull --ff-only origin %BES_BRANCH%
 if errorlevel 1 (
   echo.
   echo ERROR: git pull failed. Resolve local changes or branch divergence, then retry.
@@ -50,7 +59,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-for /f %%C in ('git rev-parse --short HEAD') do set "BES_COMMIT=%%C"
+for /f %%C in ('call "%BES_GIT%" rev-parse --short HEAD') do set "BES_COMMIT=%%C"
 echo Deploying commit: %BES_COMMIT%
 echo.
 
