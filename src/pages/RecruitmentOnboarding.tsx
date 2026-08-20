@@ -18,6 +18,7 @@ import { addRecruitmentComment, archiveRecruitmentTask, createRecruitmentPositio
 import type { RecruitmentRecord, RecruitmentStatus, WorkItem } from '@/lib/types';
 import type { WorkspaceModuleDef } from '@/lib/workspace';
 import { formatDate, formatDateTime } from '@/lib/utils';
+import benecoLogo from '@/assets/brand/beneco-logo.png';
 
 const STATUSES: RecruitmentStatus[] = [
   'Received',
@@ -86,6 +87,15 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
     return records.filter((record) => [record.title, record.controlNumber, record.applicantName, record.positionApplying, record.status]
       .some((value) => String(value ?? '').toLowerCase().includes(query)));
   }, [records, search]);
+
+  const recordsByPosition = useMemo(() => {
+    const groups = new Map<string, RecruitmentRecord[]>();
+    for (const record of visibleRecords) {
+      const position = record.positionApplying?.trim() || 'Position Not Specified';
+      groups.set(position, [...(groups.get(position) ?? []), record]);
+    }
+    return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+  }, [visibleRecords]);
 
   const sourceTasks = useMemo(
     () => workItems.filter((item) => String(item.fields.taskSubject ?? '').trim().toLowerCase() === 'application letter'),
@@ -297,10 +307,39 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
     setArchiveProfile((current) => ({ ...current, [key]: value }));
   }
 
+  function exportApplicationsToExcel() {
+    const headers = [
+      'Application ID', 'Application Title', 'Source Task ID', 'Control No.', 'Applicant Name',
+      'Last Name', 'First Name', 'Middle Name', 'Suffix', 'Birth Date', 'Sex', 'Civil Status',
+      'Email', 'Mobile Number', 'Municipality', 'Barangay', 'Complete Address',
+      'Highest Educational Attainment', 'School', 'Year Graduated', 'Application Source',
+      'Position Applying', 'Created By', 'Assigned To', 'Date Submitted', 'Recruitment Status',
+      'Remarks', 'Action Taken', 'Comments', 'Created At', 'Updated At',
+    ];
+    const rows = visibleRecords.map((record) => [
+      record.id, record.title, record.sourceTaskId, record.controlNumber ?? '', record.applicantName,
+      record.lastName, record.firstName, record.middleName, record.suffix, record.birthDate, record.sex, record.civilStatus,
+      record.email, record.mobileNo, record.municipality, record.barangay, record.address,
+      record.highestEducation, record.schoolName, record.yearGraduated, record.applicationSource,
+      record.positionApplying ?? '', record.createdBy, record.assignedTo, record.dateSubmitted, record.status,
+      record.remarks, record.actionTaken ?? '', record.comments.map((item) => `${item.author}: ${item.message} (${item.createdAt})`).join(' | '), record.createdAt, record.updatedAt,
+    ]);
+    const cell = (value: unknown, tag: 'th' | 'td') => `<${tag}>${String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</${tag}>`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"></head><body><table border="1"><thead><tr>${headers.map((header) => cell(header, 'th')).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value) => cell(value, 'td')).join('')}</tr>`).join('')}</tbody></table></body></html>`;
+    const url = URL.createObjectURL(new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `recruitment-applications-${new Date().toISOString().slice(0, 10)}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div>
-      <PageHeader title={module.name} description={module.description} crumbs={[{ label: 'My Workspace', to: '/workspace' }, { label: module.name }]} />
-      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="no-print"><PageHeader title={module.name} description={module.description} crumbs={[{ label: 'My Workspace', to: '/workspace' }, { label: module.name }]} /></div>
+      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3 no-print">
         <Card className="p-4"><p className="text-xs text-slate-500">Incoming Tasks</p><p className="mt-1 text-xl font-bold text-slate-900">{sourceTasks.length}</p></Card>
         <Card className="p-4"><p className="text-xs text-slate-500">Applicant Pool</p><p className="mt-1 text-xl font-bold text-slate-900">{applicantPoolCount}</p></Card>
         <Card className="p-4"><p className="text-xs text-slate-500">Hired</p><p className="mt-1 text-xl font-bold text-slate-900">{hiredCount}</p></Card>
@@ -313,10 +352,54 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
         ]}
         value={tab}
         onChange={(value) => { setTab(value); setSearch(''); }}
-        className="mb-5"
+        className="mb-5 no-print"
       />
 
       <Card>
+        {tab === 'applications' && <div className="print-only text-slate-900">
+          <div className="border-b border-slate-400 pb-4 text-center">
+          <div className="flex items-center justify-center gap-3">
+            <img src={benecoLogo} alt="BENECO logo" className="h-16 w-16 object-contain" />
+            <div className="text-left"><p className="text-lg font-bold">Benguet Electric Cooperative</p><p className="text-sm">BENECO Enterprise System</p><p className="text-xs">Institutional Services Department · Human Resource Office</p></div>
+          </div>
+          <h1 className="mt-4 text-xl font-bold">Recruitment and Onboarding — Applications</h1>
+          <p className="mt-1 text-xs">Generated {new Intl.DateTimeFormat('en-PH', { dateStyle: 'long', timeStyle: 'short' }).format(new Date())}</p>
+          </div>
+          <div className="my-4" />
+          {recordsByPosition.map(([position, applicants]) => (
+            <section key={position} className="mb-5 break-inside-avoid">
+              <h2 className="border-b-2 border-slate-700 pb-1 text-base font-bold">{position} <span className="text-xs font-normal">({applicants.length} applicant{applicants.length === 1 ? '' : 's'})</span></h2>
+              <table className="mt-2 w-full table-fixed border-collapse text-[9px] leading-tight">
+                <thead>
+                  <tr className="bg-slate-100 text-left">
+                    <th className="w-[17%] border border-slate-400 p-1.5">Applicant Information</th>
+                    <th className="w-[12%] border border-slate-400 p-1.5">Contact</th>
+                    <th className="w-[15%] border border-slate-400 p-1.5">Address</th>
+                    <th className="w-[14%] border border-slate-400 p-1.5">Education</th>
+                    <th className="w-[10%] border border-slate-400 p-1.5">Application</th>
+                    <th className="w-[17%] border border-slate-400 p-1.5">Remarks / Actions</th>
+                    <th className="w-[15%] border border-slate-400 p-1.5">Recruitment Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {applicants.map((record, index) => (
+                    <tr key={record.id} className="break-inside-avoid align-top">
+                      <td className="border border-slate-400 p-1.5"><strong>{index + 1}. {record.lastName}, {[record.firstName, record.middleName, record.suffix].filter(Boolean).join(' ')}</strong><br />Birth date: {record.birthDate ? formatDate(record.birthDate) : '—'}<br />Sex: {record.sex || '—'}<br />Civil status: {record.civilStatus || '—'}</td>
+                      <td className="break-words border border-slate-400 p-1.5">Email: {record.email || '—'}<br />Mobile: {record.mobileNo || '—'}</td>
+                      <td className="border border-slate-400 p-1.5">Municipality: {record.municipality || '—'}<br />Barangay: {record.barangay || '—'}<br />Address: {record.address || '—'}</td>
+                      <td className="border border-slate-400 p-1.5">Attainment: {record.highestEducation || '—'}<br />School: {record.schoolName || '—'}<br />Year graduated: {record.yearGraduated || '—'}</td>
+                      <td className="border border-slate-400 p-1.5">Source: {record.applicationSource || '—'}<br />Date submitted: {record.dateSubmitted ? formatDate(record.dateSubmitted) : '—'}</td>
+                      <td className="border border-slate-400 p-1.5">Remarks: {record.remarks || '—'}<br />Action: {record.actionTaken || '—'}</td>
+                      <td className="border border-slate-400 p-1.5 font-semibold">{record.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          ))}
+          {visibleRecords.length === 0 && <p className="py-8 text-center text-sm">No applications match the current search.</p>}
+        </div>}
+        <div className={tab === 'applications' ? 'no-print' : ''}>
         <CardHeader>
           <CardTitle>{tab === 'tasks' ? 'Application Letter Tasks' : 'Applications'}</CardTitle>
           <p className="text-sm text-slate-500">{tab === 'tasks'
@@ -324,7 +407,7 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
             : 'Recruitment-owned records stored in BES_HRO_RECRUITMENT_AND_ONBOARDING.'}</p>
         </CardHeader>
         <CardContent>
-          <Toolbar search={search} onSearchChange={setSearch} placeholder={tab === 'tasks' ? 'Search task, control number, creator…' : 'Search applicant, control number, position, status…'} />
+          <div className="no-print"><Toolbar search={search} onSearchChange={setSearch} placeholder={tab === 'tasks' ? 'Search task, control number, creator…' : 'Search applicant, control number, position, status…'} onExport={tab === 'applications' ? exportApplicationsToExcel : undefined} onPrint={tab === 'applications' ? () => window.print() : undefined} exportLabel="Export to Excel" /></div>
           {tab === 'tasks' ? (
             <DataTable
                 columns={taskColumns}
@@ -347,6 +430,7 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
             />
           )}
         </CardContent>
+        </div>
       </Card>
 
       <HroTaskProcessingDrawer

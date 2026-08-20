@@ -90,7 +90,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
   return (
     <aside
       className={cn(
-        'hidden min-h-0 shrink-0 flex-col bg-sidebar-texture py-4 transition-all duration-200 lg:flex',
+        'no-print hidden min-h-0 shrink-0 flex-col bg-sidebar-texture py-4 transition-all duration-200 lg:flex',
         collapsed ? 'w-[68px] px-2' : 'w-64 px-3'
       )}
     >

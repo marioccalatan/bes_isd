@@ -4,8 +4,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 
 export function Toolbar({
-  search, onSearchChange, placeholder = 'Search…', children, onExport, onPrint,
-}: { search: string; onSearchChange: (v: string) => void; placeholder?: string; children?: ReactNode; onExport?: () => void; onPrint?: () => void }) {
+  search, onSearchChange, placeholder = 'Search…', children, onExport, onPrint, exportLabel = 'Export CSV',
+}: { search: string; onSearchChange: (v: string) => void; placeholder?: string; children?: ReactNode; onExport?: () => void; onPrint?: () => void; exportLabel?: string }) {
   return (
     <div className="mb-4 flex flex-col gap-2.5 md:flex-row md:items-center md:justify-between">
       <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -19,7 +19,7 @@ export function Toolbar({
         <div className="flex shrink-0 items-center gap-2 no-print">
           {onExport && (
             <Button variant="outline" size="sm" onClick={onExport}>
-              <Download className="h-3.5 w-3.5" /> Export CSV
+              <Download className="h-3.5 w-3.5" /> {exportLabel}
             </Button>
           )}
           {onPrint && (

@@ -4,7 +4,14 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import oracledb from 'oracledb';
 import { config } from './config.mjs';
-import { initializeDatabase, withConnection } from './db.mjs';
+import {
+  getDatabaseRuntimeStatus,
+  initializeDatabase,
+  useLocalDatabase,
+  useServerDatabase,
+  withConnection,
+  withLocalConnection,
+} from './db.mjs';
 import { createOpaqueToken, hashPassword, hashToken, verifyPassword } from './security.mjs';
 
 const json = (res, status, body, headers = {}) => {
@@ -232,6 +239,20 @@ const HRO_TOOL_TASK_CONFIG = {
   'member-programs': { table: 'BES_HRO_MCP_TASK_PROCESSING', subject: 'member-consumer and community programs' },
   'records-management': { table: 'BES_HRO_RM_TASK_PROCESSING', subject: 'records management' },
   'events-management': { table: 'BES_HRO_EM_TASK_PROCESSING', subject: 'events management' },
+};
+const isLocalDevelopmentRequest = (req) => {
+  const origin = normalize(req.headers.origin);
+  if (origin) {
+    try {
+      if (!['localhost', '127.0.0.1', '::1'].includes(new URL(origin).hostname)) return false;
+    } catch { return false; }
+  }
+  const forwardedHost = normalize(req.headers['x-forwarded-host']).split(',')[0].trim();
+  const requestHost = forwardedHost || normalize(req.headers.host);
+  const hostname = requestHost.startsWith('[')
+    ? requestHost.slice(1, requestHost.indexOf(']'))
+    : requestHost.split(':')[0];
+  return ['localhost', '127.0.0.1', '::1'].includes(hostname);
 };
 const recruitmentComment = (row) => ({
   id: row.COMMENT_UID,
@@ -508,6 +529,50 @@ async function requireAdministrator(token) {
   });
 }
 
+async function prepareServerDatabase(databaseConfig, admin, token) {
+  const connection = await oracledb.getConnection(databaseConfig);
+  try {
+    const tables = await connection.execute(`SELECT table_name
+      FROM user_tables
+      WHERE table_name IN ('BES_USERS','BES_USER_ROLES','BES_AUTH_SESSIONS')`);
+    const available = new Set(tables.rows.map((row) => row.TABLE_NAME));
+    const missing = ['BES_USERS', 'BES_USER_ROLES', 'BES_AUTH_SESSIONS'].filter((table) => !available.has(table));
+    if (missing.length) throw Object.assign(new Error(`Server schema is missing ${missing.join(', ')}. Push the schema and data from Database Sync first.`), { statusCode: 400 });
+
+    const remoteUser = await connection.execute(`SELECT u.user_id, u.username, u.app_role,
+        (SELECT COUNT(*) FROM bes_user_roles ur
+          WHERE ur.user_id=u.user_id AND ur.role_code='Administrator' AND ur.is_active='Y') administrator_roles
+      FROM bes_users u
+      WHERE LOWER(u.username)=LOWER(:username)
+        AND u.account_status='ACTIVE'`, { username: admin.USERNAME });
+    const user = remoteUser.rows[0];
+    if (!user) throw Object.assign(new Error(`The Administrator account ${admin.USERNAME} is not active in the server database. Sync BES_USERS and BES_USER_ROLES first.`), { statusCode: 400 });
+    if (user.APP_ROLE !== 'Administrator' && Number(user.ADMINISTRATOR_ROLES ?? 0) === 0) {
+      throw Object.assign(new Error(`The account ${admin.USERNAME} is not an Administrator in the server database.`), { statusCode: 403 });
+    }
+
+    const sessionHash = hashToken(token);
+    await connection.execute(`DELETE FROM bes_auth_sessions WHERE session_hash=:sessionHash`, { sessionHash });
+    await connection.execute(`INSERT INTO bes_auth_sessions (session_hash,user_id,expires_at)
+      VALUES (:sessionHash,:userId,SYSTIMESTAMP + NUMTODSINTERVAL(1,'DAY'))`, {
+      sessionHash,
+      userId: user.USER_ID,
+    });
+    const identity = await connection.execute(`SELECT
+        SYS_CONTEXT('USERENV','DB_NAME') db_name,
+        SYS_CONTEXT('USERENV','CON_NAME') container_name,
+        SYS_CONTEXT('USERENV','CURRENT_SCHEMA') schema_name
+      FROM dual`);
+    await connection.commit();
+    return identity.rows[0] ?? {};
+  } catch (error) {
+    try { await connection.rollback(); } catch {}
+    throw error;
+  } finally {
+    await connection.close();
+  }
+}
+
 async function listSyncTables(connection) {
   const tableResult = await connection.execute(`SELECT table_name
     FROM user_tables
@@ -602,7 +667,7 @@ async function pushOracleSchema(targetDetails, requestedTables) {
   if (selected.length === 0) throw Object.assign(new Error('Select at least one BES table for schema push.'), { statusCode: 400 });
   const target = await oracledb.getConnection(oracleTargetConfig(targetDetails));
   try {
-    return await withConnection(async (source) => {
+    return await withLocalConnection(async (source) => {
       const sourceTables = new Set((await listSyncTables(source)).map((table) => table.tableName));
       const missingSource = selected.filter((table) => !sourceTables.has(table));
       if (missingSource.length) throw Object.assign(new Error(`Local schema is missing: ${missingSource.join(', ')}`), { statusCode: 400 });
@@ -679,7 +744,7 @@ async function syncOracleTables(targetDetails, requestedTables, requestedDirecti
   const direction = ['push', 'pull', 'both'].includes(normalize(requestedDirection).toLowerCase()) ? normalize(requestedDirection).toLowerCase() : 'push';
   const target = await oracledb.getConnection(oracleTargetConfig(targetDetails));
   try {
-    return await withConnection(async (source) => {
+    return await withLocalConnection(async (source) => {
       if (direction === 'push') return copyOracleTables(source, target, selected, 'Local → Server');
       if (direction === 'pull') return copyOracleTables(target, source, selected, 'Server → Local');
       const pushed = await copyOracleTables(source, target, selected, 'Local → Server');

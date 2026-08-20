@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isBefore, isWithinInterval, addDays, startOfDay } from 'date-fns';
 import { ChevronDown, MessageSquarePlus, Paperclip, Plus, Trash2 } from 'lucide-react';
@@ -81,6 +81,7 @@ export default function MyWork() {
   const [taskPriority, setTaskPriority] = useState<Priority>('Normal');
   const [taskDueDate, setTaskDueDate] = useState('');
   const [officeDropdownOpen, setOfficeDropdownOpen] = useState(false);
+  const officeDropdownRef = useRef<HTMLDivElement>(null);
   const [taskAttachments, setTaskAttachments] = useState<string[]>([]);
   const [taskAttachmentDragging, setTaskAttachmentDragging] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
@@ -122,6 +123,15 @@ export default function MyWork() {
         toast({ kind: 'error', title: 'Users not loaded', description: 'Unable to load the Oracle employee directory.' });
       });
   }, [taskOpen, token, taskAssignee, user?.username, toast]);
+
+  useEffect(() => {
+    if (!officeDropdownOpen) return;
+    function closeOfficeDropdown(event: PointerEvent) {
+      if (!officeDropdownRef.current?.contains(event.target as Node)) setOfficeDropdownOpen(false);
+    }
+    document.addEventListener('pointerdown', closeOfficeDropdown);
+    return () => document.removeEventListener('pointerdown', closeOfficeDropdown);
+  }, [officeDropdownOpen]);
 
   useEffect(() => {
     if (taskSubject && !subjectOptions.includes(taskSubject)) setTaskSubject('');
@@ -530,7 +540,7 @@ export default function MyWork() {
             </div>
             <div>
               <Label>Office assignment</Label>
-              <div className="relative mt-1">
+              <div ref={officeDropdownRef} className="relative mt-1">
                 <button
                   type="button"
                   onClick={() => setOfficeDropdownOpen((open) => !open)}

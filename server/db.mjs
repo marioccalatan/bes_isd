@@ -4,8 +4,52 @@ import { config } from './config.mjs';
 oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
 oracledb.fetchAsString = [oracledb.CLOB];
 
+const localDatabaseConfig = Object.freeze({
+  user: config.user,
+  password: config.password,
+  connectString: config.connectString,
+});
+
+let activeDatabase = 'local';
+let serverDatabaseConfig = null;
+
+export function getDatabaseRuntimeStatus() {
+  return {
+    activeDatabase,
+    local: {
+      user: localDatabaseConfig.user,
+      connectString: localDatabaseConfig.connectString,
+    },
+    server: serverDatabaseConfig ? {
+      user: serverDatabaseConfig.user,
+      connectString: serverDatabaseConfig.connectString,
+    } : null,
+  };
+}
+
+export function useLocalDatabase() {
+  activeDatabase = 'local';
+}
+
+export function useServerDatabase(databaseConfig) {
+  serverDatabaseConfig = {
+    user: databaseConfig.user,
+    password: databaseConfig.password,
+    connectString: databaseConfig.connectString,
+  };
+  activeDatabase = 'server';
+}
+
+export async function withLocalConnection(work) {
+  const connection = await oracledb.getConnection(localDatabaseConfig);
+  try { return await work(connection); } finally { await connection.close(); }
+}
+
 export async function withConnection(work) {
-  const connection = await oracledb.getConnection(config);
+  const connectionConfig = activeDatabase === 'server' && serverDatabaseConfig
+    ? serverDatabaseConfig
+    : localDatabaseConfig;
+  const connection = await oracledb.getConnection(connectionConfig);
   try { return await work(connection); } finally { await connection.close(); }
 }
 
