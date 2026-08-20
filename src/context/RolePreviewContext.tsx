@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { AppRole, DepartmentId } from '@/lib/types';
 import { DEPARTMENTS, DEPT_MAP, EMPLOYEE_MAP } from '@/lib/mockData';
+import { useAuth } from '@/context/AuthContext';
 
 export const PREVIEWABLE_ROLES: AppRole[] = [
   'Employee',
@@ -104,13 +105,35 @@ interface RolePreviewContextValue {
 const RolePreviewContext = createContext<RolePreviewContextValue | undefined>(undefined);
 
 export function RolePreviewProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [previewRole, setPreviewRoleState] = useState<AppRole | null>(null);
   const [previewDepartmentId, setPreviewDepartmentId] = useState<DepartmentId | null>(null);
   const [previewLabelOverride, setPreviewLabelOverride] = useState<string | null>(null);
   const [previewOffice, setPreviewOffice] = useState<string | null>(null);
   const [previewPosition, setPreviewPosition] = useState<string | null>(null);
 
-  const effectiveRole = previewRole ?? 'Administrator';
+  const signedInRole = (user?.role ?? 'Employee') as AppRole;
+  const signedInAsAdministrator = signedInRole === 'Administrator'
+    || (user?.roles ?? []).some((role) => role.split(' (')[0] === 'Administrator');
+  const isPreviewing = signedInAsAdministrator && previewRole !== null;
+  const effectiveRole = isPreviewing ? previewRole : signedInRole;
+
+  useEffect(() => {
+    setPreviewRoleState(null);
+    setPreviewDepartmentId(null);
+    setPreviewLabelOverride(null);
+    setPreviewOffice(null);
+    setPreviewPosition(null);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (signedInAsAdministrator) return;
+    setPreviewRoleState(null);
+    setPreviewDepartmentId(null);
+    setPreviewLabelOverride(null);
+    setPreviewOffice(null);
+    setPreviewPosition(null);
+  }, [signedInAsAdministrator]);
 
   let previewLabel: string = previewLabelOverride ?? effectiveRole;
   if (previewRole === 'Department Manager' && previewDepartmentId) {
@@ -121,12 +144,13 @@ export function RolePreviewProvider({ children }: { children: ReactNode }) {
     <RolePreviewContext.Provider
       value={{
         effectiveRole,
-        isPreviewing: previewRole !== null,
+        isPreviewing,
         previewDepartmentId,
         previewLabel,
         previewOffice,
         previewPosition,
         setPreviewRole: (role) => {
+          if (!signedInAsAdministrator) return;
           setPreviewRoleState(role);
           setPreviewLabelOverride(null);
           setPreviewOffice(null);
@@ -134,11 +158,13 @@ export function RolePreviewProvider({ children }: { children: ReactNode }) {
           if (role !== 'Department Manager') setPreviewDepartmentId(null);
         },
         setPreviewDepartmentManager: (departmentId) => {
+          if (!signedInAsAdministrator) return;
           setPreviewRoleState('Department Manager');
           setPreviewDepartmentId(departmentId);
           setPreviewLabelOverride(null);
         },
         setPreviewPersona: (role, departmentId, label, office, position) => {
+          if (!signedInAsAdministrator) return;
           setPreviewRoleState(role);
           setPreviewDepartmentId(departmentId);
           setPreviewLabelOverride(label);
@@ -149,8 +175,6 @@ export function RolePreviewProvider({ children }: { children: ReactNode }) {
           setPreviewRoleState(null);
           setPreviewDepartmentId(null);
           setPreviewLabelOverride(null);
-          setPreviewOffice(null);
-          setPreviewPosition(null);
           setPreviewOffice(null);
           setPreviewPosition(null);
         },

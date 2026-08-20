@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
+import { AdministratorRoute, ProtectedRoute } from '@/components/layout/ProtectedRoute';
 import { AppShell } from '@/components/layout/AppShell';
 import Login from '@/pages/Login';
 import Home from '@/pages/Home';
@@ -78,7 +78,7 @@ export default function App() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/help" element={<Help />} />
-        <Route path="/admin" element={<Admin />} />
+        <Route path="/admin" element={<AdministratorRoute><Admin /></AdministratorRoute>} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="*" element={<NotFound />} />

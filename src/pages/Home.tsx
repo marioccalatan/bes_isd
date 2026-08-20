@@ -19,6 +19,7 @@ import { useRolePreview } from '@/context/RolePreviewContext';
 import { CURRENT_EMPLOYEE } from '@/lib/mockData';
 import { formatDate, processLabel } from '@/lib/utils';
 import { QUICK_CREATE_ITEMS } from '@/lib/services';
+import { canApprove } from '@/lib/permissions';
 
 function greeting() {
   const h = new Date().getHours();
@@ -44,7 +45,9 @@ export default function Home() {
   const weekEnd = addDays(today, 7);
   const myIds = new Set([user?.username, user?.employeeNo, CURRENT_EMPLOYEE.id].filter(Boolean).map(String));
 
-  const myApprovals = workItems.filter((w) => w.status === 'Pending Approval' && w.approvalChain.some((s) => s.status === 'Pending'));
+  const myApprovals = canApprove(effectiveRole)
+    ? workItems.filter((w) => w.status === 'Pending Approval' && w.approvalChain.some((s) => s.status === 'Pending'))
+    : [];
   const myTasksDueToday = workItems.filter((w) => (myIds.has(w.requestorId) || (w.assigneeId && myIds.has(w.assigneeId))) && w.dueDate && startOfDay(new Date(w.dueDate)).getTime() === today.getTime());
   const unreadMemos = news.filter((p) => !newsReadStates.find((r) => r.postId === p.id)?.read);
   const upcomingEvents = events.filter((e) => isWithinInterval(new Date(e.start), { start: today, end: weekEnd }));

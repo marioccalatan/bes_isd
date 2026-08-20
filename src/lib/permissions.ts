@@ -4,7 +4,7 @@ const MANAGER_TIER: AppRole[] = ['Department Manager', 'General Manager', 'Admin
 const APPROVER_TIER: AppRole[] = ['Supervisor', 'Department Secretary', 'Department Manager', 'General Manager', 'Administrator'];
 
 export function canSeeAdministration(role: AppRole): boolean {
-  return MANAGER_TIER.includes(role);
+  return role === 'Administrator';
 }
 
 export function canApprove(role: AppRole): boolean {
