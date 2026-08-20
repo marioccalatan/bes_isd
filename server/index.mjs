@@ -518,6 +518,15 @@ async function tableColumnMetadata(connection, tableName) {
   return result.rows;
 }
 
+async function tablePrimaryKeyColumns(connection, tableName) {
+  const result = await connection.execute(`SELECT cc.column_name
+    FROM user_constraints c
+    JOIN user_cons_columns cc ON cc.owner=c.owner AND cc.constraint_name=c.constraint_name
+    WHERE c.table_name=:tableName AND c.constraint_type='P'
+    ORDER BY cc.position`, { tableName });
+  return result.rows.map((row) => row.COLUMN_NAME);
+}
+
 function syncColumnType(column) {
   if (['VARCHAR2', 'CHAR'].includes(column.DATA_TYPE)) {
     const length = column.CHAR_USED === 'C' ? column.CHAR_LENGTH : column.DATA_LENGTH;
@@ -539,6 +548,25 @@ async function alignDestinationColumns(source, destination, table) {
     added.push(column.COLUMN_NAME);
   }
   return added;
+}
+
+function executeManyBindDefs(columns, rows) {
+  return Object.fromEntries(columns.map((column) => {
+    const name = column.COLUMN_NAME;
+    const dataType = column.DATA_TYPE;
+    if (dataType === 'CLOB' || dataType === 'NCLOB') return [name, { type: oracledb.CLOB }];
+    if (dataType === 'BLOB') return [name, { type: oracledb.BLOB }];
+    if (dataType === 'RAW') return [name, { type: oracledb.BUFFER, maxSize: Math.max(column.DATA_LENGTH ?? 1, 1) }];
+    if (['NUMBER', 'FLOAT', 'BINARY_FLOAT', 'BINARY_DOUBLE'].includes(dataType)) return [name, { type: oracledb.NUMBER }];
+    if (dataType === 'DATE') return [name, { type: oracledb.DATE }];
+    if (dataType.startsWith('TIMESTAMP')) return [name, { type: oracledb.DB_TYPE_TIMESTAMP }];
+
+    const largestValue = rows.reduce((largest, row) => {
+      const value = row[name];
+      return typeof value === 'string' ? Math.max(largest, Buffer.byteLength(value, 'utf8')) : largest;
+    }, 0);
+    return [name, { type: oracledb.STRING, maxSize: Math.max(column.DATA_LENGTH ?? 1, largestValue, 1) }];
+  }));
 }
 
 async function oracleValueText(value) {
@@ -596,17 +624,28 @@ async function copyOracleTables(source, destination, selected, direction) {
 
   const addedColumns = new Map();
   for (const table of selected) addedColumns.set(table, await alignDestinationColumns(source, destination, table));
-  for (const table of DB_SYNC_DELETE_ORDER.filter((table) => selected.includes(table))) await destination.execute(`DELETE FROM ${table}`);
-
   const report = [];
   for (const table of DB_SYNC_INSERT_ORDER.filter((table) => selected.includes(table))) {
-    const columns = await tableColumns(source, table);
+    const columnMetadata = await tableColumnMetadata(source, table);
+    const columns = columnMetadata.map((column) => column.COLUMN_NAME);
+    const primaryKeyColumns = await tablePrimaryKeyColumns(source, table);
+    if (primaryKeyColumns.length === 0) throw Object.assign(new Error(`${table} has no primary key. Safe append/update sync requires a primary key and did not modify this table.`), { statusCode: 400 });
     const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
-    if (sourceResult.rows.length > 0) await destination.executeMany(
-      `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map((column) => `:${column}`).join(', ')})`,
-      sourceResult.rows, { autoCommit: false }
-    );
-    report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length, addedColumns: addedColumns.get(table), direction });
+    const updateColumns = columns.filter((column) => !primaryKeyColumns.includes(column));
+    const usingColumns = columns.map((column) => `:${column} ${column}`).join(', ');
+    const match = primaryKeyColumns.map((column) => `destination.${column}=source.${column}`).join(' AND ');
+    const update = updateColumns.length ? `WHEN MATCHED THEN UPDATE SET ${updateColumns.map((column) => `destination.${column}=source.${column}`).join(', ')}` : '';
+    const mergeSql = `MERGE INTO ${table} destination
+      USING (SELECT ${usingColumns} FROM dual) source ON (${match})
+      ${update}
+      WHEN NOT MATCHED THEN INSERT (${columns.join(', ')}) VALUES (${columns.map((column) => `source.${column}`).join(', ')})`;
+    if (sourceResult.rows.length > 0) {
+      await destination.executeMany(mergeSql, sourceResult.rows, {
+        autoCommit: false,
+        bindDefs: executeManyBindDefs(columnMetadata, sourceResult.rows),
+      });
+    }
+    report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length, addedColumns: addedColumns.get(table), direction, note: 'Upserted; destination-only rows preserved.' });
   }
   await destination.commit();
   return report;
@@ -2336,6 +2375,40 @@ async function handle(req, res) {
       });
       return result ? json(res, 200, { user: publicUser(result) }) : json(res, 401, { error: 'Session expired.' });
     }
+    if (req.method === 'GET' && req.url === '/api/auth/registration-options') {
+      const departments = await withConnection(async (c) => {
+        const departmentRows = await c.execute(`SELECT department_id, department_code, department_name
+          FROM bes_departments WHERE is_active='Y' ORDER BY department_name`);
+        const officeRows = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name
+          FROM bes_offices WHERE is_active='Y' ORDER BY office_name`);
+        const positionRows = await c.execute(`SELECT position_id, department_id, office_id, position_title, employee_class
+          FROM bes_positions WHERE is_active='Y' ORDER BY position_title`);
+        const mapPosition = (position) => ({
+          id: String(position.POSITION_ID),
+          title: position.POSITION_TITLE,
+          employeeClass: position.EMPLOYEE_CLASS,
+        });
+        return departmentRows.rows.map((department) => ({
+          id: String(department.DEPARTMENT_ID),
+          code: department.DEPARTMENT_CODE,
+          name: department.DEPARTMENT_NAME,
+          positions: positionRows.rows
+            .filter((position) => position.DEPARTMENT_ID === department.DEPARTMENT_ID && position.OFFICE_ID == null)
+            .map(mapPosition),
+          offices: officeRows.rows
+            .filter((office) => office.DEPARTMENT_ID === department.DEPARTMENT_ID)
+            .map((office) => ({
+              id: String(office.OFFICE_ID),
+              name: office.OFFICE_NAME,
+              parentOfficeId: office.PARENT_OFFICE_ID == null ? null : String(office.PARENT_OFFICE_ID),
+              positions: positionRows.rows
+                .filter((position) => position.OFFICE_ID === office.OFFICE_ID)
+                .map(mapPosition),
+            })),
+        }));
+      });
+      return json(res, 200, { departments });
+    }
     if (req.method === 'POST' && req.url === '/api/auth/signup') {
       const body = await readBody(req);
       const employeeNo = normalize(body.employeeNo).toUpperCase();
@@ -2349,10 +2422,16 @@ async function handle(req, res) {
       const secured = hashPassword(password);
       await withConnection(async (c) => {
         await c.execute(`INSERT INTO bes_users
-          (employee_no,username,email,password_hash,password_salt,first_name,last_name,position_title,department_code,account_status)
-          VALUES (:employeeNo,:username,:email,:hash,:salt,:firstName,:lastName,:positionTitle,:departmentCode,'ACTIVE')`, {
-          employeeNo, username, email, hash: secured.hash, salt: secured.salt, firstName, lastName,
-          positionTitle: normalize(body.positionTitle) || null, departmentCode: normalize(body.departmentCode).toUpperCase() || null,
+          (employee_no,username,email,password_hash,password_salt,first_name,middle_name,last_name,suffix,
+           position_title,department_code,unit_name,mobile_no,employment_status,account_status)
+          VALUES (:employeeNo,:username,:email,:hash,:salt,:firstName,:middleName,:lastName,:suffix,
+           :positionTitle,:departmentCode,:unitName,:mobileNo,:employmentStatus,'ACTIVE')`, {
+          employeeNo, username, email, hash: secured.hash, salt: secured.salt, firstName,
+          middleName: nullableNormalize(body.middleName), lastName, suffix: nullableNormalize(body.suffix),
+          positionTitle: nullableNormalize(body.position),
+          departmentCode: nullableNormalize(body.departmentCode)?.toUpperCase() ?? null,
+          unitName: nullableNormalize(body.unitName), mobileNo: nullableNormalize(body.mobileNo),
+          employmentStatus: normalize(body.employmentStatus) || 'Active',
         });
         await c.commit();
       });

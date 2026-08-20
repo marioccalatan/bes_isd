@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { Award, Building2, CalendarDays, Camera, Edit3, Mail, MapPin, Phone, Save, Upload, UserRound, X } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card, CardContent } from '@/components/ui/card';
@@ -6,14 +6,12 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { useData } from '@/context/DataContext';
-import type { ProfileDetailsInput } from '@/lib/api';
+import { fetchRegistrationOptions, type OrgDepartment, type ProfileDetailsInput } from '@/lib/api';
 import { initials, formatDate } from '@/lib/utils';
-
-const POSITION_OPTIONS = ['Manager', 'Officer', 'Rank and File'];
 
 export default function Profile() {
   const { user, saveProfilePhoto, saveProfileDetails } = useAuth();
-  const { departments } = useData();
+  const { departments: dataDepartments } = useData();
   const fileRef = useRef<HTMLInputElement>(null);
   const [savingPhoto, setSavingPhoto] = useState(false);
   const [savingDetails, setSavingDetails] = useState(false);
@@ -21,6 +19,7 @@ export default function Profile() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [profileForm, setProfileForm] = useState<ProfileDetailsInput>(() => emptyProfileForm());
+  const [organizationDepartments, setOrganizationDepartments] = useState<OrgDepartment[]>([]);
 
   useEffect(() => {
     if (!user) return;
@@ -41,11 +40,24 @@ export default function Profile() {
     });
   }, [user]);
 
-  const dept = departments.find((d) => d.id === user?.departmentCode);
+  useEffect(() => {
+    fetchRegistrationOptions().then(setOrganizationDepartments).catch(() => undefined);
+  }, []);
+
+  const dept = dataDepartments.find((d) => d.id === user?.departmentCode);
   const departmentText = dept
     ? `${dept.name}${user?.unitName ? ` (${user.unitName})` : ''}`
     : user?.departmentCode ?? '—';
   const roleBadges = user?.roles?.length ? user.roles : [user?.role ?? 'Employee'];
+  const selectedOrganizationDepartment = useMemo(
+    () => organizationDepartments.find((department) => department.code === profileForm.departmentCode),
+    [organizationDepartments, profileForm.departmentCode],
+  );
+  const selectedOrganizationOffice = useMemo(
+    () => selectedOrganizationDepartment?.offices.find((office) => office.name === profileForm.unitName),
+    [profileForm.unitName, selectedOrganizationDepartment],
+  );
+  const profilePositions = selectedOrganizationOffice?.positions ?? selectedOrganizationDepartment?.positions ?? [];
 
   async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -192,33 +204,45 @@ export default function Profile() {
                 <Field label="Last Name" required value={profileForm.lastName ?? ''} onChange={(value) => updateField('lastName', value)} />
                 <Field label="Suffix" value={profileForm.suffix ?? ''} onChange={(value) => updateField('suffix', value)} />
                 <label className="block">
+                  <span className="text-xs font-medium text-[#cbd5e1]">Department</span>
+                  <select
+                    value={profileForm.departmentCode ?? ''}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, departmentCode: event.target.value, unitName: '', position: '' }))}
+                    className="mt-1 h-10 w-full rounded-lg border border-[#1d5b48] bg-[#061811] px-3 text-sm text-[#f8fafc] outline-none transition [color-scheme:dark] focus:border-[#34d399] focus:ring-2 focus:ring-[#22c55e]/25"
+                  >
+                    <option value="" className="bg-slate-950 text-slate-50">—</option>
+                    {organizationDepartments.map((department) => (
+                      <option key={department.id} value={department.code} className="bg-slate-950 text-slate-50">{department.code} — {department.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-[#cbd5e1]">Office / Unit</span>
+                  <select
+                    value={profileForm.unitName ?? ''}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, unitName: event.target.value, position: '' }))}
+                    disabled={!selectedOrganizationDepartment}
+                    className="mt-1 h-10 w-full rounded-lg border border-[#1d5b48] bg-[#061811] px-3 text-sm text-[#f8fafc] outline-none transition [color-scheme:dark] focus:border-[#34d399] focus:ring-2 focus:ring-[#22c55e]/25 disabled:opacity-50"
+                  >
+                    <option value="" className="bg-slate-950 text-slate-50">Department level / no office</option>
+                    {profileForm.unitName && !selectedOrganizationDepartment?.offices.some((office) => office.name === profileForm.unitName) && <option value={profileForm.unitName} className="bg-slate-950 text-slate-50">{profileForm.unitName} — current value</option>}
+                    {selectedOrganizationDepartment?.offices.map((office) => <option key={office.id} value={office.name} className="bg-slate-950 text-slate-50">{office.name}</option>)}
+                  </select>
+                </label>
+                <label className="block">
                   <span className="text-xs font-medium text-[#cbd5e1]">Position</span>
                   <select
                     value={profileForm.position ?? ''}
                     onChange={(event) => updateField('position', event.target.value)}
-                    className="mt-1 h-10 w-full rounded-lg border border-[#1d5b48] bg-[#061811] px-3 text-sm font-medium text-[#f8fafc] outline-none transition [color-scheme:dark] focus:border-[#34d399] focus:ring-2 focus:ring-[#22c55e]/25"
+                    disabled={!selectedOrganizationDepartment}
+                    className="mt-1 h-10 w-full rounded-lg border border-[#1d5b48] bg-[#061811] px-3 text-sm font-medium text-[#f8fafc] outline-none transition [color-scheme:dark] focus:border-[#34d399] focus:ring-2 focus:ring-[#22c55e]/25 disabled:opacity-50"
                   >
-                    <option value="" className="bg-slate-950 text-slate-50">—</option>
-                    {POSITION_OPTIONS.map((position) => (
-                      <option key={position} value={position} className="bg-slate-950 text-slate-50">{position}</option>
-                    ))}
+                    <option value="" className="bg-slate-950 text-slate-50">Select position</option>
+                    {profileForm.position && !profilePositions.some((position) => position.title === profileForm.position) && <option value={profileForm.position} className="bg-slate-950 text-slate-50">{profileForm.position} — current value</option>}
+                    {profilePositions.map((position) => <option key={position.id} value={position.title} className="bg-slate-950 text-slate-50">{position.title}</option>)}
                   </select>
                 </label>
                 <Field label="Designation" value={profileForm.designation ?? ''} onChange={(value) => updateField('designation', value)} />
-                <label className="block">
-                  <span className="text-xs font-medium text-[#cbd5e1]">Department</span>
-                  <select
-                    value={profileForm.departmentCode ?? ''}
-                    onChange={(event) => updateField('departmentCode', event.target.value)}
-                    className="mt-1 h-10 w-full rounded-lg border border-[#1d5b48] bg-[#061811] px-3 text-sm text-[#f8fafc] outline-none transition [color-scheme:dark] focus:border-[#34d399] focus:ring-2 focus:ring-[#22c55e]/25"
-                  >
-                    <option value="" className="bg-slate-950 text-slate-50">—</option>
-                    {departments.map((department) => (
-                      <option key={department.id} value={department.id} className="bg-slate-950 text-slate-50">{department.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <Field label="Unit" value={profileForm.unitName ?? ''} onChange={(value) => updateField('unitName', value)} />
                 <Field label="Mobile / Contact" value={profileForm.mobileNo ?? ''} onChange={(value) => updateField('mobileNo', value)} />
                 <Field label="Work Location" value={profileForm.workLocation ?? ''} onChange={(value) => updateField('workLocation', value)} />
                 <Field label="Date Hired" type="date" value={profileForm.dateHired ?? ''} onChange={(value) => updateField('dateHired', value)} />

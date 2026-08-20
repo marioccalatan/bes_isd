@@ -856,10 +856,10 @@ export default function Admin() {
 
   const currentDepartmentCode = user?.departmentCode as DepartmentId | undefined;
   const employeeFormDepartment = orgDepartments.find((department) => department.code === userEditForm.departmentCode);
-  const employeeFormPositions = employeeFormDepartment ? [
-    ...employeeFormDepartment.positions.map((position) => ({ value: position.title, label: `${position.title} — ${ORG_CLASS_LABELS[position.employeeClass]}` })),
-    ...employeeFormDepartment.offices.flatMap((office) => office.positions.map((position) => ({ value: position.title, label: `${position.title} — ${office.name}` }))),
-  ] : [];
+  const employeeFormOffice = employeeFormDepartment?.offices.find((office) => office.name === userEditForm.unitName);
+  const employeeFormPositions = employeeFormDepartment
+    ? (employeeFormOffice?.positions ?? employeeFormDepartment.positions).map((position) => ({ value: position.title, label: `${position.title} — ${ORG_CLASS_LABELS[position.employeeClass]}` }))
+    : [];
   const toolDepartmentTabs = orgDepartments.length > 0
     ? [{ value: 'ALL', label: 'All' }, ...orgDepartments.map((department) => ({ value: department.code, label: department.code }))]
     : TOOL_DEPT_TABS;
@@ -1379,7 +1379,7 @@ export default function Admin() {
                   <label className="flex items-start gap-2 rounded-md border border-gold-200 p-2"><input type="radio" checked={syncDirection === 'pull'} onChange={() => setSyncDirection('pull')} /><span><strong className="block">Pull</strong><span className="text-xs">Server → Local</span></span></label>
                   <label className="flex items-start gap-2 rounded-md border border-gold-200 p-2"><input type="radio" checked={syncDirection === 'both'} onChange={() => setSyncDirection('both')} /><span><strong className="block">Both</strong><span className="text-xs">Push, then mirror back</span></span></label>
                 </div>
-                <p className="mt-2 text-xs">Missing compatible columns are added to the destination before selected rows are replaced. New tables must already exist in both schemas. Pick related tables together to preserve foreign-key relationships.</p>
+                <p className="mt-2 text-xs">Missing compatible columns are added first. Rows with matching primary keys are updated, new rows are appended, and destination-only rows are preserved. New tables must already exist in both schemas.</p>
               </div>
             </CardContent>
           </Card>
@@ -1486,7 +1486,7 @@ export default function Admin() {
         onClose={() => setSyncConfirmOpen(false)}
         onConfirm={runSelectedDatabaseSync}
         title={`${syncDirection === 'push' ? 'Push to server' : syncDirection === 'pull' ? 'Pull from server' : 'Synchronize both directions'}?`}
-        description={`${syncDirection === 'push' ? 'Local Oracle will replace the selected server rows.' : syncDirection === 'pull' ? 'Server Oracle will replace the selected local rows.' : 'Local Oracle will first replace server rows, then the resulting server state will be mirrored locally.'} Missing compatible columns will be added to the destination. This affects ${syncSelectedTables.length} selected table${syncSelectedTables.length === 1 ? '' : 's'}.`}
+        description={`${syncDirection === 'push' ? 'Local Oracle will append new server rows and update matching primary-key rows.' : syncDirection === 'pull' ? 'Server Oracle will append new local rows and update matching primary-key rows.' : 'Local and server Oracle will merge in both directions; matching rows follow the push-then-pull order.'} Destination-only rows are preserved and nothing is deleted. Missing compatible columns will be added. This affects ${syncSelectedTables.length} selected table${syncSelectedTables.length === 1 ? '' : 's'}.`}
         confirmLabel={syncRunning ? 'Syncing...' : 'Sync Tables'}
         destructive
       />
@@ -1535,9 +1535,9 @@ export default function Admin() {
             <div><Label htmlFor="edit-middle-name">Middle Name</Label><Input id="edit-middle-name" value={userEditForm.middleName} onChange={(e) => setUserEditForm((f) => ({ ...f, middleName: e.target.value }))} /></div>
             <div><Label htmlFor="edit-last-name" required>Last Name</Label><Input id="edit-last-name" value={userEditForm.lastName} onChange={(e) => setUserEditForm((f) => ({ ...f, lastName: e.target.value }))} /></div>
             <div><Label htmlFor="edit-suffix">Suffix</Label><Input id="edit-suffix" value={userEditForm.suffix} onChange={(e) => setUserEditForm((f) => ({ ...f, suffix: e.target.value }))} /></div>
-            <div><Label htmlFor="edit-position">Position</Label><Select id="edit-position" value={userEditForm.position} onChange={(e) => setUserEditForm((f) => ({ ...f, position: e.target.value }))} disabled={!employeeFormDepartment}><option value="">Select position</option>{userEditForm.position && !employeeFormPositions.some((position) => position.value === userEditForm.position) && <option value={userEditForm.position}>{userEditForm.position} — current value</option>}{employeeFormPositions.map((position) => <option key={`${position.value}:${position.label}`} value={position.value}>{position.label}</option>)}</Select></div>
             <div><Label htmlFor="edit-department">Department</Label><Select id="edit-department" value={userEditForm.departmentCode} onChange={(e) => setUserEditForm((f) => ({ ...f, departmentCode: e.target.value, position: '', unitName: '' }))}><option value="">Select department</option>{userEditForm.departmentCode && !orgDepartments.some((department) => department.code === userEditForm.departmentCode) && <option value={userEditForm.departmentCode}>{userEditForm.departmentCode} — current value</option>}{orgDepartments.map((department) => <option key={department.id} value={department.code}>{department.code} — {department.name}</option>)}</Select></div>
-            <div><Label htmlFor="edit-unit">Office / Unit</Label><Select id="edit-unit" value={userEditForm.unitName} onChange={(e) => setUserEditForm((f) => ({ ...f, unitName: e.target.value }))} disabled={!employeeFormDepartment}><option value="">Department level / no office</option>{userEditForm.unitName && !employeeFormDepartment?.offices.some((office) => office.name === userEditForm.unitName) && <option value={userEditForm.unitName}>{userEditForm.unitName} — current value</option>}{employeeFormDepartment?.offices.map((office) => <option key={office.id} value={office.name}>{office.name}</option>)}</Select></div>
+            <div><Label htmlFor="edit-unit">Office / Unit</Label><Select id="edit-unit" value={userEditForm.unitName} onChange={(e) => setUserEditForm((f) => ({ ...f, unitName: e.target.value, position: '' }))} disabled={!employeeFormDepartment}><option value="">Department level / no office</option>{userEditForm.unitName && !employeeFormDepartment?.offices.some((office) => office.name === userEditForm.unitName) && <option value={userEditForm.unitName}>{userEditForm.unitName} — current value</option>}{employeeFormDepartment?.offices.map((office) => <option key={office.id} value={office.name}>{office.name}</option>)}</Select></div>
+            <div><Label htmlFor="edit-position">Position</Label><Select id="edit-position" value={userEditForm.position} onChange={(e) => setUserEditForm((f) => ({ ...f, position: e.target.value }))} disabled={!employeeFormDepartment}><option value="">Select position</option>{userEditForm.position && !employeeFormPositions.some((position) => position.value === userEditForm.position) && <option value={userEditForm.position}>{userEditForm.position} — current value</option>}{employeeFormPositions.map((position) => <option key={`${position.value}:${position.label}`} value={position.value}>{position.label}</option>)}</Select></div>
             <div>
               <Label htmlFor="edit-employment-status">Employment Status</Label>
               <Select id="edit-employment-status" value={userEditForm.employmentStatus} onChange={(e) => setUserEditForm((f) => ({ ...f, employmentStatus: e.target.value }))}>
@@ -1576,7 +1576,6 @@ export default function Admin() {
         title="Delete Employee"
         description={`This will disable ${userEdit?.name ?? 'this employee'}, remove active role assignments, sign them out of active sessions, and hide them from the active user list. Historical tasks and comments will be preserved.`}
         confirmLabel={userDeleting ? 'Deleting...' : 'Delete Employee'}
-        destructive
       />
       <ConfirmDialog
         open={schemaSyncConfirmOpen}

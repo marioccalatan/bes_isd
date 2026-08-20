@@ -73,6 +73,11 @@ export interface OrgPosition { id: string; title: string; employeeClass: OrgPosi
 export interface OrgOffice { id: string; name: string; parentOfficeId?: string | null; positions: OrgPosition[] }
 export interface OrgDepartment { id: string; code: string; name: string; positions: OrgPosition[]; offices: OrgOffice[] }
 
+export async function fetchRegistrationOptions() {
+  const result = await apiRequest<{ departments: OrgDepartment[] }>('/api/auth/registration-options');
+  return result.departments;
+}
+
 export async function fetchOrgStructure(token: string) {
   const result = await apiRequest<{ departments: OrgDepartment[] }>('/api/admin/org-structure', { headers: { authorization: `Bearer ${token}` } });
   return result.departments;
