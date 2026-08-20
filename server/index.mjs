@@ -865,8 +865,8 @@ async function handle(req, res) {
         }
         for (const grant of uniqueAccess.values()) {
           await c.execute(`INSERT INTO bes_tool_access
-              (tool_code,tool_name,department_code,office_name,position_name,access_level,tool_status,owner_department_code,access_note,is_active)
-            VALUES (:toolCode,:toolName,:departmentCode,:officeName,:positionName,:accessLevel,:toolStatus,:ownerDepartmentCode,:accessNote,'Y')`, {
+              (tool_access_id,tool_code,tool_name,department_code,office_name,position_name,access_level,tool_status,owner_department_code,access_note,is_active)
+            VALUES ((SELECT NVL(MAX(tool_access_id),0)+1 FROM bes_tool_access),:toolCode,:toolName,:departmentCode,:officeName,:positionName,:accessLevel,:toolStatus,:ownerDepartmentCode,:accessNote,'Y')`, {
             toolCode, toolName, departmentCode: grant.departmentCode,
             officeName: grant.officeName, positionName: grant.positionName,
             accessLevel: grant.level, toolStatus: status, ownerDepartmentCode: ownerDepartmentId,
@@ -876,7 +876,8 @@ async function handle(req, res) {
         await c.execute(`DELETE FROM bes_task_subjects WHERE tool_code=:toolCode`, { toolCode });
         const uniqueSubjects = [...new Map(taskSubjects.map((taskSubject) => [taskSubject.toUpperCase(), taskSubject])).values()];
         for (const taskSubject of uniqueSubjects) {
-          await c.execute(`INSERT INTO bes_task_subjects (tool_code,task_subject,is_active) VALUES (:toolCode,:taskSubject,'Y')`, { toolCode, taskSubject });
+          await c.execute(`INSERT INTO bes_task_subjects (tool_subject_id,tool_code,task_subject,is_active)
+            VALUES ((SELECT NVL(MAX(tool_subject_id),0)+1 FROM bes_task_subjects),:toolCode,:taskSubject,'Y')`, { toolCode, taskSubject });
         }
         await c.commit();
       });
