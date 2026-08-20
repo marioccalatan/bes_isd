@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { X } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { emptySidebarModuleAccess, visibleNavItems, type SidebarModuleAccess } from '@/lib/nav';
 import { fetchModuleRegistry } from '@/lib/api';
@@ -94,18 +94,19 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
         collapsed ? 'w-[68px] px-2' : 'w-64 px-3'
       )}
     >
-      <div className="mb-4">
-        <Logo collapsed={collapsed} />
-      </div>
-      <NavList collapsed={collapsed} />
-      <div className="mt-2 border-t border-white/10 px-1 pt-3">
+      <div className={cn('mb-4 flex items-center', collapsed ? 'justify-center' : 'justify-between')}>
+        {!collapsed && <Logo />}
         <button
+          type="button"
           onClick={onToggleCollapse}
-          className="w-full rounded-lg px-2 py-2 text-left text-xs font-medium text-ondark-subtle hover:bg-white/5 hover:text-white"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="rounded-lg p-2 text-ondark-subtle transition-colors hover:bg-white/10 hover:text-white"
         >
-          {collapsed ? '»' : '« Collapse'}
+          <Menu className="h-5 w-5" aria-hidden="true" />
         </button>
       </div>
+      <NavList collapsed={collapsed} />
     </aside>
   );
 }

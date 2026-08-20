@@ -293,8 +293,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
               activity: existing.activity.length > task.activity.length ? existing.activity : task.activity,
             };
           });
-          const taskIds = new Set(tasks.map((task) => task.id));
-          return [...mergedTasks, ...current.filter((item) => item.processType !== 'task-assignment' || !taskIds.has(item.id))];
+          // Oracle is authoritative for task assignments. Keeping task rows that
+          // are absent from this scoped response can leak stale tasks from a
+          // previous login or role preview into the current user's queue.
+          return [...mergedTasks, ...current.filter((item) => item.processType !== 'task-assignment')];
         });
       })
       .catch((error) => {

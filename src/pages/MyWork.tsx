@@ -54,11 +54,12 @@ function directoryDisplayName(person: DirectoryUser) {
 export default function MyWork() {
   const { workItems, departments, createTaskFromCalendarEvent, addComment } = useData();
   const { user, token, username } = useAuth();
-  const { effectiveRole } = useRolePreview();
+  const { effectiveRole, previewDepartmentId } = useRolePreview();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = searchParams.get('tab') ?? 'tasks';
+  const activeDepartmentId = previewDepartmentId ?? user?.departmentCode;
+  const initialTab = searchParams.get('tab') ?? (activeDepartmentId ? 'team' : 'tasks');
   const [tab, setTab] = useState(initialTab);
   const [statusFilter, setStatusFilter] = useState('All');
   const [priorityFilter, setPriorityFilter] = useState('All');
@@ -92,7 +93,7 @@ export default function MyWork() {
   const [quickCommentDraft, setQuickCommentDraft] = useState('');
   const [savingQuickComment, setSavingQuickComment] = useState(false);
 
-  const showTeamTab = canSeeTeamItems(effectiveRole);
+  const showTeamTab = Boolean(activeDepartmentId) || canSeeTeamItems(effectiveRole);
   const showApprovalsTab = canApprove(effectiveRole);
   const canCreateTask = canApprove(effectiveRole);
   const myIds = new Set([user?.username, user?.employeeNo, CURRENT_EMPLOYEE.id].filter(Boolean).map(String));
@@ -130,8 +131,13 @@ export default function MyWork() {
   const myDrafts = oracleWorkItems.filter((w) => myIds.has(w.requestorId) && w.status === 'Draft');
   const myApprovals = oracleWorkItems.filter((w) => w.status === 'Pending Approval' && w.approvalChain.some((s) => s.status === 'Pending'));
   const assignedToMe = oracleWorkItems.filter((w) => w.assigneeId && myIds.has(w.assigneeId) && !['Completed', 'Approved', 'Cancelled', 'Rejected'].includes(w.status));
-  const teamItems = oracleWorkItems.filter((w) => w.isTeamItem);
-  const completed = oracleWorkItems.filter((w) => (myIds.has(w.requestorId) || (w.assigneeId && myIds.has(w.assigneeId)) || w.isTeamItem) && (w.status === 'Completed' || w.status === 'Approved'));
+  const hasEnterpriseTeamScope = effectiveRole === 'Administrator' || effectiveRole === 'General Manager';
+  const departmentScopedItems = showTeamTab
+    ? oracleWorkItems.filter((w) => hasEnterpriseTeamScope || (!!activeDepartmentId && w.departmentId === activeDepartmentId))
+    : [];
+  const teamItems = departmentScopedItems.filter((w) => !['Completed', 'Approved', 'Cancelled', 'Rejected'].includes(w.status));
+  const departmentScopedItemIds = new Set(departmentScopedItems.map((w) => w.id));
+  const completed = oracleWorkItems.filter((w) => (myIds.has(w.requestorId) || (w.assigneeId && myIds.has(w.assigneeId)) || departmentScopedItemIds.has(w.id)) && (w.status === 'Completed' || w.status === 'Approved'));
   const myTasks = [
     ...assignedToMe,
     ...myApprovals,
@@ -142,7 +148,7 @@ export default function MyWork() {
     { value: 'tasks', label: 'My Tasks', count: myTasks.length },
     { value: 'requests', label: 'My Requests', count: myRequests.length },
     ...(showApprovalsTab ? [{ value: 'approvals', label: 'My Approvals', count: myApprovals.length }] : []),
-    ...(showTeamTab ? [{ value: 'team', label: 'Assigned to My Team', count: teamItems.length }] : []),
+    ...(showTeamTab ? [{ value: 'team', label: 'Department Tasks', count: teamItems.length }] : []),
     { value: 'completed', label: 'Completed', count: completed.length },
     { value: 'drafts', label: 'Drafts', count: myDrafts.length },
   ];

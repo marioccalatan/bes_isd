@@ -4,7 +4,7 @@ import {
   isSameMonth, isSameDay, format, addDays, subDays, isToday, parseISO,
 } from 'date-fns';
 import {
-  ChevronLeft, ChevronRight, MapPin, Video, Users, Pencil, Trash2, Plus, AlertTriangle, Paperclip, Bell, X, ThumbsUp, ListChecks,
+  ChevronDown, ChevronLeft, ChevronRight, MapPin, Video, Users, Pencil, Trash2, Plus, Paperclip, Bell, X, ThumbsUp, ListChecks,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CalendarEvent, CalendarLayer, DepartmentId } from '@/lib/types';
@@ -156,7 +156,6 @@ function EventForm({
   onSave,
   onCancel,
   onDelete,
-  existingEvents,
   layers,
   layerColors,
   onAddLayer,
@@ -166,7 +165,6 @@ function EventForm({
   onSave: (v: { title: string; layer: CalendarLayer; color: string; date: string; endDate: string; startTime: string; endTime: string; location: string; description: string; departmentIds: string[]; officeAssignment: string; visibility: CalendarEvent['visibility']; visibleToUsernames: string[]; attachments: NonNullable<CalendarEvent['attachments']> }) => void;
   onCancel: () => void;
   onDelete?: () => void;
-  existingEvents: CalendarEvent[];
   layers: CalendarLayer[];
   layerColors: Record<string, string>;
   onAddLayer: (layer: string, color: string) => void;
@@ -191,6 +189,7 @@ function EventForm({
   const [description, setDescription] = useState(initial?.description ?? '');
   const [departmentIds, setDepartmentIds] = useState<string[]>(eventDepartmentIds(initial ?? {}));
   const [officeAssignments, setOfficeAssignments] = useState<string[]>(eventOfficeAssignments(initial ?? {}));
+  const [departmentPickerOpen, setDepartmentPickerOpen] = useState(false);
   const [visibility, setVisibility] = useState<CalendarEvent['visibility']>(initial?.visibility ?? 'All employees');
   const [visibleToUsernames, setVisibleToUsernames] = useState<string[]>(initial?.visibleToUsernames ?? []);
   const [attachments, setAttachments] = useState<NonNullable<CalendarEvent['attachments']>>(initial?.attachments ?? []);
@@ -208,19 +207,6 @@ function EventForm({
       });
     return () => { cancelled = true; };
   }, [token]);
-
-  const conflicts = useMemo(() => {
-    if (!date || !endDate || !startTime || !endTime) return [];
-    const s = new Date(`${date}T${startTime}`);
-    const e = new Date(`${endDate}T${endTime}`);
-    if (e <= s) return [];
-    return existingEvents.filter((ev) => {
-      if (initial?.id && ev.id === initial.id) return false;
-      const evS = parseISO(ev.start);
-      const evE = parseISO(ev.end);
-      return s < evE && e > evS;
-    });
-  }, [date, endDate, startTime, endTime, existingEvents, initial?.id]);
 
   const pickerDays = useMemo(() => eachDayOfInterval({ start: startOfWeek(startOfMonth(pickerMonth)), end: endOfWeek(endOfMonth(pickerMonth)) }), [pickerMonth]);
   const dateRangeLabel = useMemo(() => {
@@ -466,14 +452,28 @@ function EventForm({
         <Input id="ev-location" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Boardroom or meeting URL" />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div>
+        <div className="relative">
           <Label>Departments</Label>
-          <div id="ev-dept" className="max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-surface p-2">
+          <button
+            type="button"
+            aria-expanded={departmentPickerOpen}
+            aria-controls="ev-dept"
+            onClick={() => setDepartmentPickerOpen((open) => !open)}
+            className="flex h-10 w-full items-center justify-between rounded-md border border-slate-200 bg-surface px-3 text-left text-sm text-slate-700 hover:border-slate-300"
+          >
+            <span className="truncate">
+              {departmentIds.length === 0
+                ? 'No department / enterprise-wide'
+                : `${departmentIds.length} department${departmentIds.length === 1 ? '' : 's'}${officeAssignments.length ? ` · ${officeAssignments.length} office${officeAssignments.length === 1 ? '' : 's'}` : ''}`}
+            </span>
+            <ChevronDown className={cn('h-4 w-4 shrink-0 text-slate-400 transition-transform', departmentPickerOpen && 'rotate-180')} />
+          </button>
+          {departmentPickerOpen && <div id="ev-dept" className="absolute left-0 top-full z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-slate-200 bg-surface p-1.5 shadow-xl">
             <label className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-slate-50">
               <input
                 type="checkbox"
                 checked={departmentIds.length === 0}
-                onChange={() => setDepartmentIds([])}
+                onChange={() => { setDepartmentIds([]); setOfficeAssignments([]); }}
                 className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600"
               />
               <span className="font-medium text-slate-700">No department / enterprise-wide</span>
@@ -510,7 +510,7 @@ function EventForm({
                 </div>
               );
             })}
-            </div>
+          </div>}
         </div>
         <div>
           <Label htmlFor="ev-visibility" required>Who can see this post</Label>
@@ -571,12 +571,6 @@ function EventForm({
           </div>
         )}
       </div>
-      {conflicts.length > 0 && (
-        <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-50 p-2.5 text-xs text-gold-800">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>Possible conflict with: {conflicts.map((c) => c.title).join(', ')}</span>
-        </div>
-      )}
       {error && <p className="text-xs font-medium text-red-600" role="alert">{error}</p>}
       <div className="flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -1171,7 +1165,6 @@ export function EnterpriseCalendar({ size = 'default', autoOpenNew = false, depa
           onCancel={() => { setFormOpen(false); setEditingEvent(null); setNewEventDate(null); }}
           onDelete={editingEvent ? () => { setDeleteTarget(editingEvent); setFormOpen(false); setEditingEvent(null); setNewEventDate(null); } : undefined}
           onSave={handleSaveEvent}
-          existingEvents={visibleEvents}
           layers={calendarLayers}
           layerColors={layerColors}
           onAddLayer={addLayer}

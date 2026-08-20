@@ -1822,6 +1822,11 @@ async function handle(req, res) {
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
+        const role = normalize(user.APP_ROLE);
+        const enterpriseScope = ['Administrator', 'General Manager'].includes(role) ? 1 : 0;
+        // Every employee can collaborate on work assigned to their own
+        // department. The department code remains the hard visibility boundary.
+        const departmentScope = user.DEPARTMENT_CODE ? 1 : 0;
         const tasks = await c.execute(`SELECT t.*,
             au.username assigned_to_username, au.first_name assigned_to_first_name, au.last_name assigned_to_last_name,
             cu.username created_by_username, cu.first_name created_by_first_name, cu.last_name created_by_last_name
@@ -1832,10 +1837,13 @@ async function handle(req, res) {
             AND (
               t.assigned_to_user_id = :userId
               OR t.created_by_user_id = :userId
-              OR (:departmentCode IS NOT NULL AND t.department_code = :departmentCode)
+              OR :enterpriseScope = 1
+              OR (:departmentScope = 1 AND :departmentCode IS NOT NULL AND t.department_code = :departmentCode)
             )
           ORDER BY NVL(t.due_date, TRUNC(t.created_at)) DESC, t.created_at DESC`, {
           userId: user.USER_ID,
+          enterpriseScope,
+          departmentScope,
           departmentCode: user.DEPARTMENT_CODE ?? null,
         });
         const comments = await c.execute(`SELECT wc.*,
@@ -1847,10 +1855,13 @@ async function handle(req, res) {
             AND (
               t.assigned_to_user_id = :userId
               OR t.created_by_user_id = :userId
-              OR (:departmentCode IS NOT NULL AND t.department_code = :departmentCode)
+              OR :enterpriseScope = 1
+              OR (:departmentScope = 1 AND :departmentCode IS NOT NULL AND t.department_code = :departmentCode)
             )
           ORDER BY wc.created_at`, {
           userId: user.USER_ID,
+          enterpriseScope,
+          departmentScope,
           departmentCode: user.DEPARTMENT_CODE ?? null,
         });
         return { user, tasks, comments };
