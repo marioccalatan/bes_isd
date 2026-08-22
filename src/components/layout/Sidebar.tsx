@@ -111,14 +111,17 @@ function DatabaseRuntimeToggle({ collapsed }: { collapsed?: boolean }) {
         type="button"
         role="switch"
         aria-checked={usingServer}
+        aria-label={`Database source: ${usingServer ? 'Server' : 'Local'}. Switch to ${usingServer ? 'Local' : 'Server'}.`}
         onClick={toggleDatabase}
         disabled={!runtime || switching}
-        className="flex w-full items-center justify-between rounded-md border border-white/15 bg-white/5 px-2 py-1.5 text-xs transition-colors hover:bg-white/10 disabled:opacity-50"
+        className="flex w-full items-center justify-center gap-2 rounded-md border border-white/15 bg-white/5 px-2 py-1.5 text-xs transition-colors hover:bg-white/10 disabled:opacity-50"
       >
-        <span>{switching ? 'Switching…' : usingServer ? 'Use Local' : 'Use Server'}</span>
-        <span className={cn('relative h-5 w-9 rounded-full transition-colors', usingServer ? 'bg-blue-500' : 'bg-emerald-500')}>
-          <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform', usingServer ? 'translate-x-[18px]' : 'translate-x-0.5')} />
+        <span className={cn('font-medium transition-colors', !usingServer ? 'text-white' : 'text-ondark-subtle')}>Local</span>
+        <span className={cn('relative h-5 w-9 shrink-0 rounded-full transition-colors', usingServer ? 'bg-blue-500' : 'bg-emerald-500')}>
+          <span className={cn('absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform', usingServer && 'translate-x-4')} />
         </span>
+        <span className={cn('font-medium transition-colors', usingServer ? 'text-white' : 'text-ondark-subtle')}>Server</span>
+        {switching && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
       </button>
     </div>
   );

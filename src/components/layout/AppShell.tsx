@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar, MobileDrawer } from './Sidebar';
 import { Topbar } from './Topbar';
 import { RolePreviewBanner } from './RolePreviewBanner';
@@ -8,13 +8,21 @@ import { AboutDialog } from './AboutDialog';
 import { GuidedTour } from './GuidedTour';
 
 export function AppShell() {
-  const [collapsed, setCollapsed] = useState(false);
+  const { pathname } = useLocation();
+  const focusedWorkspacePage = pathname === '/workspace/building-facilities/maintenance'
+    || pathname === '/workspace/building-facilities/program-of-works';
+  const sidebarHidden = pathname === '/workspace/vehicle-fleet/maintenance-schedule';
+  const [collapsed, setCollapsed] = useState(focusedWorkspacePage);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    setCollapsed(focusedWorkspacePage);
+  }, [focusedWorkspacePage]);
 
   return (
     <div className="flex h-svh w-full overflow-hidden bg-canvas">
-      <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed((c) => !c)} />
-      <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      {!sidebarHidden && <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed((c) => !c)} />}
+      {!sidebarHidden && <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <RolePreviewBanner />
         <Topbar onOpenDrawer={() => setDrawerOpen(true)} />

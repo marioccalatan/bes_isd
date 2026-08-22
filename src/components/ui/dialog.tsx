@@ -11,11 +11,12 @@ interface DialogProps {
   children: ReactNode;
   footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  contentOverflowVisible?: boolean;
 }
 
 const sizeClasses = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
 
-export function Dialog({ open, onClose, title, description, children, footer, size = 'md' }: DialogProps) {
+export function Dialog({ open, onClose, title, description, children, footer, size = 'md', contentOverflowVisible = false }: DialogProps) {
   const ref = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -65,7 +66,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5">{children}</div>
+        <div className={cn('flex-1 p-4 sm:p-5', contentOverflowVisible ? 'overflow-visible' : 'overflow-y-auto')}>{children}</div>
         {footer && <div className="flex items-center justify-end gap-2 border-t border-slate-200 p-4 sm:p-5">{footer}</div>}
       </div>
     </div>,

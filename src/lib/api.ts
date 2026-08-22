@@ -229,6 +229,158 @@ export interface PolicyRecordInput {
   nature: PolicyRecordNature;
   documentType: PolicyDocumentType;
   status: PolicyRecordStatus;
+  originalDocumentNumber?: string;
+}
+
+export async function deleteOrgEntity(token: string, entity: 'office', id: string) {
+  return apiRequest<{ ok: true }>(`/api/admin/org-structure/${entity}/${encodeURIComponent(id)}`, {
+    method: 'DELETE', headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+export async function fetchFleetVehicles<T>(token: string) {
+  const result = await apiRequest<{ vehicles: T; updatedAt?: string }>('/api/fleet/vehicles', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result.vehicles;
+}
+
+export async function saveFleetVehicles<T>(token: string, vehicles: T[]) {
+  return apiRequest<{ ok: true }>('/api/fleet/vehicles', {
+    method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ vehicles }),
+  });
+}
+
+export interface BfmFacility {
+  id: string;
+  parentId?: string;
+  name: string;
+  type: string;
+  description: string;
+  location: string;
+  sortOrder: number;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface BfmPersonnel {
+  id: string;
+  name: string;
+  employeeNo: string;
+  position: string;
+  contact: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export type BfmTodoStatus = 'Pending' | 'In Progress' | 'Completed' | 'Deferred';
+export interface BfmTodo {
+  id: string;
+  facilityId: string;
+  title: string;
+  description: string;
+  category: string;
+  frequency: string;
+  customDays: number[];
+  priority: 'Low' | 'Normal' | 'High' | 'Urgent';
+  status: BfmTodoStatus;
+  dueDate: string;
+  lastCompletedAt: string;
+  workerIds: string[];
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface BfmActivity {
+  id: string;
+  todoId: string;
+  previousStatus: string;
+  newStatus: string;
+  note: string;
+  performedForId?: string;
+  performedForName?: string;
+  workDate: string;
+  updatedBy: string;
+  createdAt: string;
+}
+
+export interface BfmWorkDetail {
+  id: string;
+  todoId: string;
+  workDate: string;
+  findings: string;
+  actionTaken: string;
+  materialsUsed: string;
+  recommendation: string;
+  convertedTaskId?: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface BfmOperationsData {
+  facilities: BfmFacility[];
+  personnel: BfmPersonnel[];
+  todos: BfmTodo[];
+  activity: BfmActivity[];
+  workDetails: BfmWorkDetail[];
+  projects: BfmProject[];
+  canManage?: boolean;
+}
+
+export interface BfmProject {
+  id: string; facilityId: string; title: string; description: string; category: string;
+  priority: 'Low' | 'Normal' | 'High' | 'Urgent'; status: 'Planned' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
+  budgetAmount: number | null; budgetStatus: 'Available' | 'For Realignment' | 'For Budgeting';
+  startDate: string; targetDate: string; workerIds: string[]; updatedBy: string; updatedAt: string;
+}
+
+export async function fetchBfmOperations(token: string) {
+  return apiRequest<BfmOperationsData>('/api/bfm/operations', { headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function createBfmFacility(token: string, input: { parentId?: string; name: string; type: string; description: string; location: string }) {
+  return apiRequest<BfmOperationsData>('/api/bfm/facilities', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function updateBfmFacility(token: string, facilityId: string, input: { name: string; type: string; description: string; location: string }) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/facilities/${encodeURIComponent(facilityId)}`, { method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function deleteBfmFacility(token: string, facilityId: string) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/facilities/${encodeURIComponent(facilityId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function createBfmPersonnel(token: string, input: { name: string; employeeNo: string; position: string; contact: string }) {
+  return apiRequest<BfmOperationsData>('/api/bfm/personnel', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function createBfmTodo(token: string, input: { facilityId: string; title: string; description: string; category: string; frequency: string; customDays: number[]; priority: string; dueDate: string; workerIds: string[] }) {
+  return apiRequest<BfmOperationsData>('/api/bfm/todos', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function updateBfmTodo(token: string, todoId: string, input: { title: string; description: string; category: string; frequency: string; customDays: number[]; priority: string; dueDate: string; workerIds: string[] }) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/todos/${encodeURIComponent(todoId)}`, { method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function deleteBfmTodo(token: string, todoId: string) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/todos/${encodeURIComponent(todoId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function updateBfmTodoStatus(token: string, todoId: string, input: { status: BfmTodoStatus; workerId?: string; note?: string; workDate?: string }) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/todos/${encodeURIComponent(todoId)}/status`, { method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function saveBfmWorkDetails(token: string, todoId: string, input: { workDate: string; findings: string; actionTaken: string; materialsUsed: string; recommendation: string; convertedTaskId?: string }) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/todos/${encodeURIComponent(todoId)}/work-details`, { method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function createBfmProject(token: string, input: { facilityId: string; title: string; description: string; category: string; priority: string; status: string; startDate: string; targetDate: string; budgetAmount?: number | null; budgetStatus?: string; workerIds: string[] }) {
+  return apiRequest<BfmOperationsData>('/api/bfm/projects', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function updateBfmProject(token: string, projectId: string, input: { title: string; description: string; category: string; priority: string; status: string; startDate: string; targetDate: string; budgetAmount?: number | null; budgetStatus?: string; workerIds: string[] }) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/projects/${encodeURIComponent(projectId)}`, { method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function deleteBfmProject(token: string, projectId: string) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
 }
 
 export type PolicyTaskStatus = 'Received' | 'Under Review' | 'For Approval' | 'Approved' | 'Issued' | 'Completed' | 'Returned';
@@ -482,6 +634,13 @@ export async function uploadPolicyRecordAttachment(token: string, recordId: stri
   return body as { ok: true; attachmentName: string; attachmentMimeType: string; attachmentSize: number };
 }
 
+export async function deletePolicyRecordAttachment(token: string, recordId: string) {
+  return apiRequest<{ ok: true }>(`/api/policy-records/${encodeURIComponent(recordId)}/attachment`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
 export async function downloadPolicyRecordAttachment(token: string, recordId: string, fallbackName: string) {
   const response = await fetch(`/api/policy-records/${encodeURIComponent(recordId)}/attachment`, {
     headers: { authorization: `Bearer ${token}` },
@@ -502,6 +661,68 @@ export async function downloadPolicyRecordAttachment(token: string, recordId: st
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+export async function previewPolicyRecordAttachment(token: string, recordId: string) {
+  const previewWindow = window.open('', '_blank');
+  if (!previewWindow) {
+    // Popup blocked — fall back to downloading the file instead of a dead-end error.
+    await downloadPolicyRecordAttachment(token, recordId, 'Policy document.docx');
+    return;
+  }
+  previewWindow.opener = null;
+  previewWindow.document.title = 'Loading policy attachment…';
+  previewWindow.document.body.textContent = 'Loading policy attachment…';
+
+  try {
+    const response = await fetch(`/api/policy-records/${encodeURIComponent(recordId)}/attachment`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || 'Unable to preview the attachment.');
+    }
+    const blob = await response.blob();
+    const contentDisposition = response.headers.get('content-disposition') ?? '';
+    const encodedName = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const fileName = encodedName ? decodeURIComponent(encodedName) : 'Policy document.docx';
+    const { renderAsync } = await import('docx-preview');
+    const document = previewWindow.document;
+    document.open();
+    document.write(`<!doctype html><html><head><meta charset="utf-8"><title></title><style>
+      *{box-sizing:border-box} body{margin:0;background:#e5e7eb;color:#111827;font-family:Arial,sans-serif}
+      .preview-toolbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;background:#052e25;color:white;box-shadow:0 2px 8px #0003}
+      .preview-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:700}
+      .preview-note{flex:none;font-size:12px;color:#bbf7d0}
+      #docx-preview{min-height:calc(100vh - 48px);padding:40px 56px 64px;overflow:auto}
+      #docx-preview .docx-wrapper{display:flex;flex-direction:column;align-items:center;min-width:max-content;background:transparent;padding:0}
+      #docx-preview .docx-wrapper>section.docx{flex:none;margin:0 0 32px!important;box-shadow:0 8px 24px #0004}
+      #docx-preview section.docx table{width:100%!important;max-width:100%!important;table-layout:fixed}
+      #docx-preview section.docx td,#docx-preview section.docx th{min-width:0!important;max-width:100%;overflow-wrap:anywhere}
+      #docx-preview section.docx img{max-width:100%;height:auto}
+      #docx-preview .docx-wrapper>section.docx:last-child{margin-bottom:0!important}
+      @media(max-width:900px){#docx-preview{padding:24px 16px 40px}}
+    </style></head><body><header class="preview-toolbar"><div class="preview-title"></div><div class="preview-note">DOCX preview</div></header><main id="docx-preview"></main></body></html>`);
+    document.close();
+    document.title = `${fileName} — Preview`;
+    const title = document.querySelector<HTMLElement>('.preview-title');
+    const container = document.querySelector<HTMLElement>('#docx-preview');
+    if (!container) throw new Error('Unable to prepare the document preview.');
+    if (title) title.textContent = fileName;
+    await renderAsync(await blob.arrayBuffer(), container, document.head, {
+      className: 'docx',
+      inWrapper: true,
+      ignoreWidth: false,
+      ignoreHeight: false,
+      breakPages: true,
+      renderHeaders: true,
+      renderFooters: true,
+      renderFootnotes: true,
+    });
+  } catch (error) {
+    previewWindow.close();
+    throw error;
+  }
 }
 
 export async function createCalendarEvent(token: string, event: Omit<CalendarEvent, 'id' | 'editable' | 'ownerId'>) {

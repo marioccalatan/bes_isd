@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface DrawerProps {
   open: boolean;
@@ -10,9 +11,10 @@ interface DrawerProps {
   footer?: ReactNode;
   side?: 'right' | 'left';
   widthClass?: string;
+  contentClassName?: string;
 }
 
-export function Drawer({ open, onClose, title, children, footer, side = 'right', widthClass = 'max-w-xl' }: DrawerProps) {
+export function Drawer({ open, onClose, title, children, footer, side = 'right', widthClass = 'max-w-xl', contentClassName }: DrawerProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -42,7 +44,7 @@ export function Drawer({ open, onClose, title, children, footer, side = 'right',
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">{children}</div>
+        <div className={cn('min-h-0 flex-1 overflow-y-auto p-4', contentClassName)}>{children}</div>
         {footer && <div className="flex items-center justify-end gap-2 border-t border-slate-200 p-4">{footer}</div>}
       </div>
     </div>,

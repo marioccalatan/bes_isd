@@ -1253,6 +1253,7 @@ export function buildTools(): AppTool[] {
     { code: 'Policies and Issuances', name: 'Policies and Issuances Module', description: 'Drafting, review, and dissemination of institutional policies.', iconKey: 'FileStack', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Policy Related'] },
     { code: 'Events Management', name: 'Events Management Module', description: 'Corporate events, seminars, and institutional activities.', iconKey: 'CalendarRange', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Events Management'] },
     { code: 'Building and Facilities Management System', name: 'Building and Facilities Management System', description: 'Building operations, facility maintenance, space management, and service tracking.', iconKey: 'Building2', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', level: 'ADMIN' }], taskSubjects: ['Building and Facilities Management System'] },
+    { code: 'Vehicle Fleet Management System', name: 'Vehicle Fleet Management System', description: 'Vehicle inventory, inspections, maintenance schedules, registration records, and fleet compliance metrics.', iconKey: 'Car', ownerDepartmentId: 'ISD', access: [{ departmentId: 'ISD', unit: 'General Services Office', level: 'ADMIN', note: 'ISD — General Services Office fleet operations.' }], taskSubjects: ['Vehicle Fleet Management System'] },
   ];
   return tools.map((tool) => ({ ...tool, status: tool.access.some((grant) => grant.level === 'SOON') ? 'SOON' : 'ENABLED' }));
 }

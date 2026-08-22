@@ -35,6 +35,7 @@ import {
   testDatabaseSyncConnection,
   updateAdminUser,
   saveOrgEntity,
+  deleteOrgEntity,
   saveToolRegistryEntry,
   saveModuleRegistryAccess,
   type AdminUser,
@@ -185,6 +186,15 @@ function ToolAccessEditor({
   const officeManagedDeptIds = new Set(
     departments.filter((d) => tool.access.some((a) => a.departmentId === d.id && (a.unit || a.position))).map((d) => d.id)
   );
+  const [officeManagedEnabled, setOfficeManagedEnabled] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries([...officeManagedDeptIds].map((departmentId) => [departmentId, true]))
+  );
+  const [officeManagedLevels, setOfficeManagedLevels] = useState<Record<string, ToolAccessLevel>>(() =>
+    Object.fromEntries([...officeManagedDeptIds].map((departmentId) => [
+      departmentId,
+      tool.access.find((grant) => grant.departmentId === departmentId)?.level ?? 'ADMIN',
+    ]))
+  );
 
   const [grants, setGrants] = useState<Record<DepartmentId, ToolAccessLevel | null>>(() => {
     const map = {} as Record<DepartmentId, ToolAccessLevel | null>;
@@ -318,7 +328,9 @@ function ToolAccessEditor({
       const editableRows = departments
         .filter((d) => !officeManagedDeptIds.has(d.id) && grants[d.id] != null)
         .map((d) => ({ departmentId: d.id, level: grants[d.id]! }));
-      const preservedRows = tool.access.filter((a) => officeManagedDeptIds.has(a.departmentId));
+      const preservedRows = tool.access
+        .filter((a) => officeManagedDeptIds.has(a.departmentId) && officeManagedEnabled[a.departmentId] !== false)
+        .map((grant) => ({ ...grant, level: officeManagedLevels[grant.departmentId] ?? grant.level }));
       access = [...preservedRows, ...editableRows];
     }
     try {
@@ -383,12 +395,21 @@ function ToolAccessEditor({
             return (
               <div key={d.id} className="flex flex-wrap items-center justify-between gap-2 p-2.5">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
-                  {!officeManaged && <Checkbox checked={level != null} onChange={(e) => toggle(d.id, e.target.checked)} />}
+                  {officeManaged
+                    ? <Checkbox checked={officeManagedEnabled[d.id] !== false} onChange={(e) => setOfficeManagedEnabled((current) => ({ ...current, [d.id]: e.target.checked }))} />
+                    : <Checkbox checked={level != null} onChange={(e) => toggle(d.id, e.target.checked)} />}
                   {d.name}
-                  {d.id === tool.ownerDepartmentId && <Badge className="border-gold-200 bg-gold-50 text-gold-800">Owner</Badge>}
                 </label>
                 {officeManaged ? (
-                  <span className="text-xs text-slate-400">Configured per office — edit from the {d.shortName} tab</span>
+                  <Select
+                    value={officeManagedLevels[d.id] ?? 'ADMIN'}
+                    disabled={officeManagedEnabled[d.id] === false}
+                    onChange={(event) => setOfficeManagedLevels((current) => ({ ...current, [d.id]: event.target.value as ToolAccessLevel }))}
+                    className="w-auto"
+                    aria-label={`Access level for ${d.name}`}
+                  >
+                    {ACCESS_LEVELS.map((accessLevel) => <option key={accessLevel} value={accessLevel}>{accessLevel}</option>)}
+                  </Select>
                 ) : (
                   <Select
                     value={level ?? ''}
@@ -517,6 +538,7 @@ export default function Admin() {
   const [orgLoading, setOrgLoading] = useState(false);
   const [orgEditor, setOrgEditor] = useState<Record<string, string> | null>(null);
   const [orgSaving, setOrgSaving] = useState(false);
+  const [orgDeleteOpen, setOrgDeleteOpen] = useState(false);
   const [collapsedDepartments, setCollapsedDepartments] = useState<Set<string>>(new Set());
 
   async function loadOracleUsers(cancelled?: () => boolean) {
@@ -571,6 +593,21 @@ export default function Admin() {
       toast({ kind: 'success', title: 'Organizational structure updated', description: 'The change was saved to Oracle.' });
     } catch (error) {
       toast({ kind: 'error', title: 'Unable to save', description: error instanceof Error ? error.message : 'Oracle request failed.' });
+    } finally { setOrgSaving(false); }
+  }
+
+  async function deleteOrganizationOffice() {
+    if (!token || !orgEditor?.id || orgEditor.entity !== 'office') return;
+    setOrgSaving(true);
+    try {
+      await deleteOrgEntity(token, 'office', orgEditor.id);
+      await loadOrgStructure();
+      setOrgDeleteOpen(false);
+      setOrgEditor(null);
+      toast({ kind: 'success', title: 'Office deleted', description: 'The office was removed from the organizational structure.' });
+    } catch (error) {
+      setOrgDeleteOpen(false);
+      toast({ kind: 'error', title: 'Unable to delete office', description: error instanceof Error ? error.message : 'Oracle request failed.' });
     } finally { setOrgSaving(false); }
   }
 
@@ -688,9 +725,15 @@ export default function Admin() {
     setSyncMessage('');
     try {
       const result = await fetchDatabaseSyncLocalTables(token);
+      const previouslyKnown = new Set(syncTables.map((table) => table.tableName));
       setSyncTables(result.tables);
       setSyncExcludedTables(result.excludedTables);
-      setSyncSelectedTables((selected) => selected.length ? selected.filter((table) => result.tables.some((item) => item.tableName === table)) : result.tables.map((table) => table.tableName));
+      setSyncSelectedTables((selected) => {
+        const available = new Set(result.tables.map((table) => table.tableName));
+        const retained = selected.filter((table) => available.has(table));
+        const newlyDiscovered = result.tables.filter((table) => !previouslyKnown.has(table.tableName)).map((table) => table.tableName);
+        return [...new Set([...retained, ...newlyDiscovered])];
+      });
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : 'Unable to load local Oracle tables.');
     } finally {
@@ -1564,13 +1607,14 @@ export default function Admin() {
         confirmLabel={schemaSyncRunning ? 'Pushing Schema...' : 'Push Schema Tables'}
       />
 
-      <Dialog open={!!orgEditor} onClose={() => setOrgEditor(null)} title={`${orgEditor?.id ? 'Edit' : 'Add'} ${orgEditor?.entity === 'department' ? 'Department' : orgEditor?.entity === 'office' ? 'Office / Sub-office' : 'Position'}`} size="sm" footer={<><Button variant="outline" onClick={() => setOrgEditor(null)} disabled={orgSaving}>Cancel</Button><Button onClick={saveOrganizationEditor} disabled={orgSaving}>{orgSaving ? 'Saving…' : 'Save'}</Button></>}>
+      <Dialog open={!!orgEditor} onClose={() => setOrgEditor(null)} title={`${orgEditor?.id ? 'Edit' : 'Add'} ${orgEditor?.entity === 'department' ? 'Department' : orgEditor?.entity === 'office' ? 'Office / Sub-office' : 'Position'}`} size="sm" footer={<div className="flex w-full items-center justify-between gap-2">{orgEditor?.entity === 'office' && orgEditor.id ? <Button variant="destructive" onClick={() => setOrgDeleteOpen(true)} disabled={orgSaving}><Trash2 className="h-4 w-4" /> Delete</Button> : <span />}<div className="flex gap-2"><Button variant="outline" onClick={() => setOrgEditor(null)} disabled={orgSaving}>Cancel</Button><Button onClick={saveOrganizationEditor} disabled={orgSaving}>{orgSaving ? 'Saving…' : 'Save'}</Button></div></div>}>
         {orgEditor && <div className="space-y-3">
           {orgEditor.entity === 'department' && <><div><Label htmlFor="org-department-name" required>Department Name</Label><Input id="org-department-name" value={orgEditor.name ?? ''} onChange={(event) => setOrgEditor({ ...orgEditor, name: event.target.value })} placeholder="Institutional Services Department" /></div><div><Label htmlFor="org-department-code" required>Initials / Code</Label><Input id="org-department-code" value={orgEditor.code ?? ''} onChange={(event) => setOrgEditor({ ...orgEditor, code: event.target.value.toUpperCase() })} placeholder="ISD" /></div></>}
           {orgEditor.entity === 'office' && <><div><Label htmlFor="org-office-name" required>Office Name</Label><Input id="org-office-name" value={orgEditor.name ?? ''} onChange={(event) => setOrgEditor({ ...orgEditor, name: event.target.value })} placeholder="Human Resource Office" /></div><div><Label htmlFor="org-parent-office">Parent Office</Label><Select id="org-parent-office" value={orgEditor.parentOfficeId ?? ''} onChange={(event) => setOrgEditor({ ...orgEditor, parentOfficeId: event.target.value })}><option value="">None — top-level office</option>{orgDepartments.find((department) => department.id === orgEditor.departmentId)?.offices.filter((office) => office.id !== orgEditor.id).map((office) => <option key={office.id} value={office.id}>{office.name}</option>)}</Select><p className="mt-1 text-xs text-slate-500">Select a parent only when this is a sub-office.</p></div></>}
           {orgEditor.entity === 'position' && <><div><Label htmlFor="org-position-title" required>Position Title</Label><Input id="org-position-title" value={orgEditor.title ?? ''} onChange={(event) => setOrgEditor({ ...orgEditor, title: event.target.value })} /></div><div><Label htmlFor="org-position-class" required>Organizational Role</Label><Select id="org-position-class" value={orgEditor.employeeClass ?? 'RAF'} onChange={(event) => setOrgEditor({ ...orgEditor, employeeClass: event.target.value })}>{orgEditor.departmentId ? <><option value="DEPARTMENT_MANAGER">Department Manager</option><option value="DEPARTMENT_SECRETARY">Department Secretary</option></> : <><option value="OFFICE_SECRETARY">Office Secretary</option><option value="SUPERVISOR">Supervisor</option><option value="RAF">Rank-and-File (RAF)</option></>}</Select></div></>}
         </div>}
       </Dialog>
+      <ConfirmDialog open={orgDeleteOpen} onClose={() => setOrgDeleteOpen(false)} onConfirm={deleteOrganizationOffice} title="Delete Office / Sub-office?" description={`Delete ${orgEditor?.name ?? 'this office'} and all of its child data? This also removes its sub-offices, positions, and office-level tool access. This action cannot be undone from the application.`} confirmLabel={orgSaving ? 'Deleting…' : 'Delete Office and Child Data'} destructive />
 
       <Dialog open={!!toolEdit} onClose={() => setToolEdit(null)} title={`Edit Access — ${toolEdit?.code ?? ''}`} description={toolEdit?.name} size="md">
         {toolEdit && (

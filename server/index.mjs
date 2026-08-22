@@ -61,9 +61,9 @@ const serveStatic = async (req, res) => {
   if (req.method === 'HEAD') return res.end();
   return res.end(body);
 };
-const readBody = async (req) => {
+const readBody = async (req, maxChars = 8_000_000) => {
   let raw = '';
-  for await (const chunk of req) { raw += chunk; if (raw.length > 8_000_000) throw Object.assign(new Error('Request body exceeds the 8 MB limit.'), { statusCode: 413 }); }
+  for await (const chunk of req) { raw += chunk; if (raw.length > maxChars) throw Object.assign(new Error(`Request body exceeds the ${Math.round(maxChars / 1_000_000)} MB limit.`), { statusCode: 413 }); }
   return raw ? JSON.parse(raw) : {};
 };
 const readBinaryBody = async (req, maxBytes = 25 * 1024 * 1024) => {
@@ -130,6 +130,15 @@ const attachmentList = (value) => {
       .map((file) => typeof file === 'string' ? file : file?.path || file?.name)
       .map((file) => normalize(file))
       .filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+const jsonArray = (value) => {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
@@ -230,6 +239,78 @@ const policyTaskProcessing = (row) => ({
   actionTaken: row.ACTION_TAKEN || '',
   updatedAt: localIso(row.UPDATED_AT),
 });
+
+async function loadBuildingFacilitiesOperations(connection) {
+  const [facilities, personnel, todos, assignments, activity, workDetails, projects] = await Promise.all([
+    connection.execute(`SELECT f.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name
+      FROM bes_bfm_facilities f LEFT JOIN bes_users u ON u.user_id=f.updated_by_user_id
+      WHERE f.is_active='Y' ORDER BY f.sort_order, f.facility_name`),
+    connection.execute(`SELECT p.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name
+      FROM bes_bfm_personnel p LEFT JOIN bes_users u ON u.user_id=p.updated_by_user_id
+      WHERE p.is_active='Y' ORDER BY p.personnel_name`),
+    connection.execute(`SELECT t.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name
+      FROM bes_bfm_todos t LEFT JOIN bes_users u ON u.user_id=t.updated_by_user_id
+      WHERE t.is_active='Y' ORDER BY t.due_date NULLS LAST, t.todo_title`),
+    connection.execute(`SELECT todo_uid, personnel_uid FROM bes_bfm_todo_workers`),
+    connection.execute(`SELECT a.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name,
+        p.personnel_name performed_for_name
+      FROM bes_bfm_activity a
+      LEFT JOIN bes_users u ON u.user_id=a.updated_by_user_id
+      LEFT JOIN bes_bfm_personnel p ON p.personnel_uid=a.performed_for_personnel_uid
+      ORDER BY a.created_at DESC`),
+    connection.execute(`SELECT d.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name
+      FROM bes_bfm_work_details d LEFT JOIN bes_users u ON u.user_id=d.updated_by_user_id
+      ORDER BY d.work_date DESC, d.updated_at DESC`),
+    connection.execute(`SELECT p.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name
+      FROM bes_bfm_projects p LEFT JOIN bes_users u ON u.user_id=p.updated_by_user_id
+      WHERE p.is_active='Y' ORDER BY p.target_date NULLS LAST, p.project_title`),
+  ]);
+  const updaterName = (row) => [row.UPDATED_BY_FIRST_NAME, row.UPDATED_BY_LAST_NAME].filter(Boolean).join(' ') || row.UPDATED_BY_USERNAME || 'System';
+  const workerIds = new Map();
+  for (const row of assignments.rows) {
+    const values = workerIds.get(row.TODO_UID) ?? [];
+    values.push(row.PERSONNEL_UID);
+    workerIds.set(row.TODO_UID, values);
+  }
+  return {
+    facilities: facilities.rows.map((row) => ({
+      id: row.FACILITY_UID, parentId: row.PARENT_FACILITY_UID || undefined, name: row.FACILITY_NAME,
+      type: row.FACILITY_TYPE, description: row.DESCRIPTION || '', location: row.LOCATION || '', sortOrder: Number(row.SORT_ORDER || 0),
+      updatedBy: updaterName(row), updatedAt: localIso(row.UPDATED_AT),
+    })),
+    personnel: personnel.rows.map((row) => ({
+      id: row.PERSONNEL_UID, name: row.PERSONNEL_NAME, employeeNo: row.EMPLOYEE_NO || '', position: row.POSITION_TITLE || '',
+      contact: row.CONTACT_INFO || '', updatedBy: updaterName(row), updatedAt: localIso(row.UPDATED_AT),
+    })),
+    todos: todos.rows.map((row) => ({
+      id: row.TODO_UID, facilityId: row.FACILITY_UID, title: row.TODO_TITLE, description: row.DESCRIPTION || '',
+      category: row.CATEGORY, frequency: row.FREQUENCY,
+      customDays: String(row.CUSTOM_DAYS || '').split(',').map(Number).filter((day) => day >= 1 && day <= 7),
+      priority: row.PRIORITY, status: row.TODO_STATUS,
+      dueDate: localDateOnly(row.DUE_DATE), lastCompletedAt: localIso(row.LAST_COMPLETED_AT), workerIds: workerIds.get(row.TODO_UID) ?? [],
+      updatedBy: updaterName(row), updatedAt: localIso(row.UPDATED_AT),
+    })),
+    activity: activity.rows.map((row) => ({
+      id: row.ACTIVITY_UID, todoId: row.TODO_UID, previousStatus: row.PREVIOUS_STATUS || '', newStatus: row.NEW_STATUS,
+      note: row.WORK_NOTE || '', performedForId: row.PERFORMED_FOR_PERSONNEL_UID || undefined,
+      performedForName: row.PERFORMED_FOR_NAME || undefined, workDate: localDateOnly(row.WORK_DATE),
+      updatedBy: updaterName(row), createdAt: localIso(row.CREATED_AT),
+    })),
+    workDetails: workDetails.rows.map((row) => ({
+      id: row.DETAIL_UID, todoId: row.TODO_UID, workDate: localDateOnly(row.WORK_DATE),
+      findings: row.FINDINGS || '', actionTaken: row.ACTION_TAKEN || '', materialsUsed: row.MATERIALS_USED || '',
+      recommendation: row.RECOMMENDATION || '', convertedTaskId: row.CONVERTED_TASK_UID || undefined,
+      updatedBy: updaterName(row), updatedAt: localIso(row.UPDATED_AT),
+    })),
+    projects: projects.rows.map((row) => ({
+      id: row.PROJECT_UID, facilityId: row.FACILITY_UID, title: row.PROJECT_TITLE, description: row.DESCRIPTION || '',
+      category: row.CATEGORY, priority: row.PRIORITY, status: row.PROJECT_STATUS,
+      startDate: localDateOnly(row.START_DATE), targetDate: localDateOnly(row.TARGET_DATE),
+      budgetAmount: row.BUDGET_AMOUNT == null ? null : Number(row.BUDGET_AMOUNT), budgetStatus: row.BUDGET_STATUS || 'For Budgeting',
+      workerIds: jsonArray(row.ASSIGNED_PERSONNEL), updatedBy: updaterName(row), updatedAt: localIso(row.UPDATED_AT),
+    })),
+  };
+}
 const HRO_TOOL_TASK_CONFIG = {
   recruitment: { table: 'BES_HRO_REC_TASK_PROCESSING', subject: 'application letter' },
   'human-resources': { table: 'BES_HRO_HR_TASK_PROCESSING', subject: 'human resource' },
@@ -422,6 +503,14 @@ const DB_SYNC_TABLES = [
   'BES_HRO_RECRUITMENT_POSITIONS',
   'BES_POLICY_RECORDS',
   'BES_POLICY_TASK_PROCESSING',
+  'BES_FLEET_STORE',
+  'BES_BFM_FACILITIES',
+  'BES_BFM_PERSONNEL',
+  'BES_BFM_TODOS',
+  'BES_BFM_TODO_WORKERS',
+  'BES_BFM_ACTIVITY',
+  'BES_BFM_WORK_DETAILS',
+  'BES_BFM_PROJECTS',
   'BES_HRO_REC_TASK_PROCESSING',
   'BES_HRO_HR_TASK_PROCESSING',
   'BES_HRO_LD_TASK_PROCESSING',
@@ -433,6 +522,13 @@ const DB_SYNC_TABLES = [
   'BES_HRO_EM_TASK_PROCESSING',
 ];
 const DB_SYNC_DELETE_ORDER = [
+  'BES_BFM_PROJECTS',
+  'BES_BFM_WORK_DETAILS',
+  'BES_BFM_ACTIVITY',
+  'BES_BFM_TODO_WORKERS',
+  'BES_BFM_TODOS',
+  'BES_BFM_PERSONNEL',
+  'BES_BFM_FACILITIES',
   'BES_HRO_REC_TASK_PROCESSING',
   'BES_HRO_HR_TASK_PROCESSING',
   'BES_HRO_LD_TASK_PROCESSING',
@@ -443,6 +539,7 @@ const DB_SYNC_DELETE_ORDER = [
   'BES_HRO_RM_TASK_PROCESSING',
   'BES_HRO_EM_TASK_PROCESSING',
   'BES_POLICY_TASK_PROCESSING',
+  'BES_FLEET_STORE',
   'BES_HRO_RECRUITMENT_COMMENTS',
   'BES_HRO_RECRUITMENT_POSITIONS',
   'BES_HRO_RECRUITMENT_AND_ONBOARDING',
@@ -484,6 +581,14 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_HRO_RECRUITMENT_POSITIONS',
   'BES_POLICY_RECORDS',
   'BES_POLICY_TASK_PROCESSING',
+  'BES_FLEET_STORE',
+  'BES_BFM_FACILITIES',
+  'BES_BFM_PERSONNEL',
+  'BES_BFM_TODOS',
+  'BES_BFM_TODO_WORKERS',
+  'BES_BFM_ACTIVITY',
+  'BES_BFM_WORK_DETAILS',
+  'BES_BFM_PROJECTS',
   'BES_HRO_REC_TASK_PROCESSING',
   'BES_HRO_HR_TASK_PROCESSING',
   'BES_HRO_LD_TASK_PROCESSING',
@@ -495,6 +600,18 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_HRO_EM_TASK_PROCESSING',
 ];
 const DB_SYNC_ALLOWED = new Set(DB_SYNC_TABLES);
+const DB_SYNC_KEY_OVERRIDES = new Map([
+  ['BES_DEPARTMENTS', ['DEPARTMENT_NAME']],
+  ['BES_HRO_RECRUITMENT_POSITIONS', ['POSITION_NAME']],
+  ['BES_OFFICES', ['DEPARTMENT_ID', 'OFFICE_NAME']],
+  ['BES_POSITIONS', ['DEPARTMENT_ID', 'OFFICE_ID', 'POSITION_TITLE']],
+  ['BES_TASK_SUBJECTS', ['TOOL_CODE', 'TASK_SUBJECT']],
+  ['BES_TOOL_ACCESS', ['TOOL_CODE', 'DEPARTMENT_CODE', 'OFFICE_NAME', 'POSITION_NAME']],
+  ['BES_USER_ROLES', ['USER_ID', 'ROLE_CODE', 'SCOPE_DEPARTMENT_CODE', 'SCOPE_UNIT_NAME']],
+]);
+const DB_SYNC_CASE_INSENSITIVE_KEYS = new Set([
+  'DEPARTMENT_NAME', 'OFFICE_NAME', 'POSITION_TITLE', 'POSITION_NAME', 'TASK_SUBJECT',
+]);
 
 const oracleConnectString = (details) => {
   const host = normalize(details.host);
@@ -550,6 +667,26 @@ async function prepareServerDatabase(databaseConfig, admin, token) {
     if (!user) throw Object.assign(new Error(`The Administrator account ${admin.USERNAME} is not active in the server database. Sync BES_USERS and BES_USER_ROLES first.`), { statusCode: 400 });
     if (user.APP_ROLE !== 'Administrator' && Number(user.ADMINISTRATOR_ROLES ?? 0) === 0) {
       throw Object.assign(new Error(`The account ${admin.USERNAME} is not an Administrator in the server database.`), { statusCode: 403 });
+    }
+
+    const policyTable = await connection.execute(`SELECT COUNT(*) table_count
+      FROM user_tables WHERE table_name = 'BES_POLICY_RECORDS'`);
+    if (Number(policyTable.rows[0]?.TABLE_COUNT ?? 0) > 0) {
+      try {
+        await connection.execute(`ALTER TABLE bes_policy_records DROP CONSTRAINT chk_bes_policy_records_status`);
+      } catch (error) {
+        if (error.errorNum !== 2443) throw error;
+      }
+      await connection.execute(`UPDATE bes_policy_records
+        SET policy_status = 'New (Draft)'
+        WHERE policy_status = 'Draft'`);
+      try {
+        await connection.execute(`ALTER TABLE bes_policy_records MODIFY (effectivity_date NULL)`);
+      } catch (error) {
+        if (error.errorNum !== 1451) throw error;
+      }
+      await connection.execute(`ALTER TABLE bes_policy_records ADD CONSTRAINT chk_bes_policy_records_status
+        CHECK (policy_status IN ('Effective', 'New (Draft)', 'Amended (Draft)', 'Amended', 'Rescinded'))`);
     }
 
     const sessionHash = hashToken(token);
@@ -612,6 +749,57 @@ async function tablePrimaryKeyColumns(connection, tableName) {
   return result.rows.map((row) => row.COLUMN_NAME);
 }
 
+async function tableIdentityColumns(connection, tableName) {
+  const result = await connection.execute(`SELECT column_name FROM user_tab_identity_cols
+    WHERE table_name=:tableName ORDER BY column_name`, { tableName });
+  return result.rows.map((row) => row.COLUMN_NAME);
+}
+
+async function alignIdentitySequences(connection, tableName) {
+  const result = await connection.execute(`SELECT column_name, generation_type FROM user_tab_identity_cols
+    WHERE table_name=:tableName ORDER BY column_name`, { tableName });
+  for (const row of result.rows) {
+    const generation = row.GENERATION_TYPE === 'ALWAYS' ? 'ALWAYS' : 'BY DEFAULT';
+    await connection.execute(`ALTER TABLE ${tableName} MODIFY ${row.COLUMN_NAME}
+      GENERATED ${generation} AS IDENTITY (START WITH LIMIT VALUE)`);
+  }
+}
+
+async function executeWithTableTriggersDisabled(connection, tableName, operation) {
+  const triggerResult = await connection.execute(`SELECT trigger_name FROM user_triggers
+    WHERE table_name=:tableName AND status='ENABLED' ORDER BY trigger_name`, { tableName });
+  const triggers = triggerResult.rows.map((row) => row.TRIGGER_NAME);
+  try {
+    for (const trigger of triggers) await connection.execute(`ALTER TRIGGER ${trigger} DISABLE`);
+    return await operation();
+  } finally {
+    for (const trigger of triggers) {
+      try { await connection.execute(`ALTER TRIGGER ${trigger} ENABLE`); } catch (error) { console.error(`Unable to re-enable trigger ${trigger}:`, error); }
+    }
+  }
+}
+
+async function tableSyncKeyColumns(connection, tableName) {
+  const override = DB_SYNC_KEY_OVERRIDES.get(tableName);
+  if (override) return override;
+  const result = await connection.execute(`SELECT c.constraint_name, c.constraint_type, cc.column_name, cc.position
+    FROM user_constraints c
+    JOIN user_cons_columns cc ON cc.owner=c.owner AND cc.constraint_name=c.constraint_name
+    WHERE c.table_name=:tableName AND c.constraint_type IN ('P','U')
+    ORDER BY c.constraint_name, cc.position`, { tableName });
+  const constraints = new Map();
+  for (const row of result.rows) {
+    const current = constraints.get(row.CONSTRAINT_NAME) ?? { type: row.CONSTRAINT_TYPE, columns: [] };
+    current.columns.push(row.COLUMN_NAME);
+    constraints.set(row.CONSTRAINT_NAME, current);
+  }
+  const candidates = [...constraints.values()];
+  const stableUid = candidates.find((candidate) => candidate.columns.length === 1 && candidate.columns[0].endsWith('_UID'));
+  const primaryKey = candidates.find((candidate) => candidate.type === 'P');
+  const uniqueKey = candidates.find((candidate) => candidate.type === 'U');
+  return (stableUid ?? uniqueKey ?? primaryKey)?.columns ?? [];
+}
+
 function syncColumnType(column) {
   if (['VARCHAR2', 'CHAR'].includes(column.DATA_TYPE)) {
     const length = column.CHAR_USED === 'C' ? column.CHAR_LENGTH : column.DATA_LENGTH;
@@ -654,11 +842,53 @@ function executeManyBindDefs(columns, rows) {
   }));
 }
 
+async function materializeOracleLobs(rows, columns) {
+  const lobColumns = columns.filter((column) => ['CLOB', 'NCLOB', 'BLOB'].includes(column.DATA_TYPE));
+  if (!lobColumns.length) return rows;
+  return Promise.all(rows.map(async (row) => {
+    const materialized = { ...row };
+    for (const column of lobColumns) {
+      const value = row[column.COLUMN_NAME];
+      if (value != null && typeof value.getData === 'function') materialized[column.COLUMN_NAME] = await value.getData();
+    }
+    return materialized;
+  }));
+}
+
 async function oracleValueText(value) {
   if (value == null) return '';
   if (typeof value === 'string') return value;
   if (typeof value.getData === 'function') return String(await value.getData());
   return String(value);
+}
+
+async function remapPositionScopeIds(source, destination, rows) {
+  if (!rows.length) return rows;
+  const [sourceDepartments, targetDepartments, sourceOffices, targetOffices] = await Promise.all([
+    source.execute(`SELECT department_id, department_code FROM bes_departments`),
+    destination.execute(`SELECT department_id, department_code FROM bes_departments`),
+    source.execute(`SELECT office_id, department_id, office_name FROM bes_offices`),
+    destination.execute(`SELECT office_id, department_id, office_name FROM bes_offices`),
+  ]);
+  const sourceDepartmentCodes = new Map(sourceDepartments.rows.map((row) => [String(row.DEPARTMENT_ID), normalize(row.DEPARTMENT_CODE).toUpperCase()]));
+  const targetDepartmentIds = new Map(targetDepartments.rows.map((row) => [normalize(row.DEPARTMENT_CODE).toUpperCase(), row.DEPARTMENT_ID]));
+  const sourceOfficeScopes = new Map(sourceOffices.rows.map((row) => [String(row.OFFICE_ID), {
+    departmentCode: sourceDepartmentCodes.get(String(row.DEPARTMENT_ID)),
+    officeName: normalize(row.OFFICE_NAME).toUpperCase(),
+  }]));
+  const targetOfficeIds = new Map(targetOffices.rows.map((row) => {
+    const departmentCode = [...targetDepartmentIds.entries()].find(([, id]) => String(id) === String(row.DEPARTMENT_ID))?.[0] ?? '';
+    return [`${departmentCode}\u0000${normalize(row.OFFICE_NAME).toUpperCase()}`, row.OFFICE_ID];
+  }));
+  return rows.map((row) => {
+    const departmentCode = sourceDepartmentCodes.get(String(row.DEPARTMENT_ID ?? '')) ?? '';
+    const officeScope = row.OFFICE_ID == null ? null : sourceOfficeScopes.get(String(row.OFFICE_ID));
+    return {
+      ...row,
+      DEPARTMENT_ID: departmentCode ? (targetDepartmentIds.get(departmentCode) ?? row.DEPARTMENT_ID) : row.DEPARTMENT_ID,
+      OFFICE_ID: officeScope ? (targetOfficeIds.get(`${officeScope.departmentCode}\u0000${officeScope.officeName}`) ?? row.OFFICE_ID) : null,
+    };
+  });
 }
 
 async function pushOracleSchema(targetDetails, requestedTables) {
@@ -711,26 +941,50 @@ async function copyOracleTables(source, destination, selected, direction) {
   for (const table of selected) addedColumns.set(table, await alignDestinationColumns(source, destination, table));
   const report = [];
   for (const table of DB_SYNC_INSERT_ORDER.filter((table) => selected.includes(table))) {
-    const columnMetadata = await tableColumnMetadata(source, table);
-    const columns = columnMetadata.map((column) => column.COLUMN_NAME);
-    const primaryKeyColumns = await tablePrimaryKeyColumns(source, table);
-    if (primaryKeyColumns.length === 0) throw Object.assign(new Error(`${table} has no primary key. Safe append/update sync requires a primary key and did not modify this table.`), { statusCode: 400 });
-    const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
-    const updateColumns = columns.filter((column) => !primaryKeyColumns.includes(column));
-    const usingColumns = columns.map((column) => `:${column} ${column}`).join(', ');
-    const match = primaryKeyColumns.map((column) => `destination.${column}=source.${column}`).join(' AND ');
-    const update = updateColumns.length ? `WHEN MATCHED THEN UPDATE SET ${updateColumns.map((column) => `destination.${column}=source.${column}`).join(', ')}` : '';
-    const mergeSql = `MERGE INTO ${table} destination
-      USING (SELECT ${usingColumns} FROM dual) source ON (${match})
-      ${update}
-      WHEN NOT MATCHED THEN INSERT (${columns.join(', ')}) VALUES (${columns.map((column) => `source.${column}`).join(', ')})`;
-    if (sourceResult.rows.length > 0) {
-      await destination.executeMany(mergeSql, sourceResult.rows, {
-        autoCommit: false,
-        bindDefs: executeManyBindDefs(columnMetadata, sourceResult.rows),
-      });
+    let syncStage = 'reading metadata';
+    try {
+      const columnMetadata = await tableColumnMetadata(source, table);
+      const columns = columnMetadata.map((column) => column.COLUMN_NAME);
+      const syncKeyColumns = await tableSyncKeyColumns(source, table);
+      if (syncKeyColumns.length === 0) throw Object.assign(new Error(`${table} has no primary or unique key. Safe append/update sync did not modify this table.`), { statusCode: 400 });
+      const primaryKeyColumns = await tablePrimaryKeyColumns(source, table);
+      const identityColumns = await tableIdentityColumns(destination, table);
+      syncStage = 'reading source rows';
+      const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
+      sourceResult.rows = await materializeOracleLobs(sourceResult.rows, columnMetadata);
+      if (table === 'BES_POSITIONS') sourceResult.rows = await remapPositionScopeIds(source, destination, sourceResult.rows);
+      const immutableColumns = new Set([...syncKeyColumns, ...primaryKeyColumns]);
+      const updateColumns = columns.filter((column) => !immutableColumns.has(column));
+      const usesLogicalKey = syncKeyColumns.some((column) => !primaryKeyColumns.includes(column));
+      const insertColumns = usesLogicalKey ? columns.filter((column) => !identityColumns.includes(column)) : columns;
+      if (usesLogicalKey && identityColumns.length) {
+        syncStage = 'aligning destination identity';
+        await alignIdentitySequences(destination, table);
+      }
+      const usingColumns = columns.map((column) => `:${column} ${column}`).join(', ');
+      const match = syncKeyColumns.map((column) => {
+        const destinationValue = DB_SYNC_CASE_INSENSITIVE_KEYS.has(column) ? `UPPER(destination.${column})` : `destination.${column}`;
+        const sourceValue = DB_SYNC_CASE_INSENSITIVE_KEYS.has(column) ? `UPPER(source.${column})` : `source.${column}`;
+        return `(${destinationValue}=${sourceValue} OR (destination.${column} IS NULL AND source.${column} IS NULL))`;
+      }).join(' AND ');
+      const update = updateColumns.length ? `WHEN MATCHED THEN UPDATE SET ${updateColumns.map((column) => `destination.${column}=source.${column}`).join(', ')}` : '';
+      const mergeSql = `MERGE INTO ${table} destination
+        USING (SELECT ${usingColumns} FROM dual) source ON (${match})
+        ${update}
+        WHEN NOT MATCHED THEN INSERT (${insertColumns.join(', ')}) VALUES (${insertColumns.map((column) => `source.${column}`).join(', ')})`;
+      if (sourceResult.rows.length > 0) {
+        syncStage = 'merging rows';
+        await executeWithTableTriggersDisabled(destination, table, () => destination.executeMany(mergeSql, sourceResult.rows, {
+            autoCommit: false,
+            bindDefs: executeManyBindDefs(columnMetadata, sourceResult.rows),
+          }));
+      }
+      report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length, addedColumns: addedColumns.get(table), direction, syncKey: syncKeyColumns, note: 'Upserted; destination-only rows preserved.' });
+    } catch (error) {
+      if (error?.statusCode) throw error;
+      const detail = normalize(error?.message) || 'Unknown Oracle error.';
+      throw Object.assign(new Error(`${table} sync failed while ${syncStage}: ${detail}`), { statusCode: error?.errorNum === 1 ? 409 : 400, cause: error });
     }
-    report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length, addedColumns: addedColumns.get(table), direction, note: 'Upserted; destination-only rows preserved.' });
   }
   await destination.commit();
   return report;
@@ -1726,7 +1980,7 @@ async function handle(req, res) {
       const policyStatus = normalize(body.status) || 'Effective';
       const allowedNatures = new Set(['Financial', 'Human Resources', 'Legal and Compliance', 'Public Relations', 'Operations']);
       const allowedDocumentTypes = new Set(['Policy', 'Issuance', 'Guidelines']);
-      const allowedPolicyStatuses = new Set(['Effective', 'Draft', 'Amended', 'Rescinded']);
+      const allowedPolicyStatuses = new Set(['Effective', 'New (Draft)', 'Amended (Draft)', 'Amended', 'Rescinded']);
       if (!title || !documentNumber || !revisionNumber || !contents || (effectivityDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate)) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType) || !allowedPolicyStatuses.has(policyStatus)) {
         return json(res, 400, { error: 'Title, document number, document type, revision number, contents, nature, and policy status are required.' });
       }
@@ -1834,6 +2088,29 @@ async function handle(req, res) {
       });
       return res.end(file);
     }
+    if (req.method === 'DELETE' && policyAttachmentMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const recordUid = decodeURIComponent(policyAttachmentMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const updated = await c.execute(`UPDATE bes_policy_records
+          SET attachment_name = NULL,
+              attachment_mime_type = NULL,
+              attachment_size = NULL,
+              attachment_blob = NULL,
+              attachment_data = NULL,
+              updated_at = SYSTIMESTAMP
+          WHERE record_uid = :recordUid AND is_active = 'Y'`, { recordUid });
+        if (!updated.rowsAffected) return false;
+        await c.commit();
+        return true;
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Policy record not found.' });
+      return json(res, 200, { ok: true });
+    }
     const policyRecordMatch = url.pathname.match(/^\/api\/policy-records\/([^/]+)$/);
     if (req.method === 'PATCH' && policyRecordMatch) {
       const token = bearerToken(req);
@@ -1848,17 +2125,26 @@ async function handle(req, res) {
       const nature = normalize(body.nature);
       const documentType = normalize(body.documentType);
       const policyStatus = normalize(body.status) || 'Effective';
+      const originalDocumentNumber = normalize(body.originalDocumentNumber);
       const allowedNatures = new Set(['Financial', 'Human Resources', 'Legal and Compliance', 'Public Relations', 'Operations']);
       const allowedDocumentTypes = new Set(['Policy', 'Issuance', 'Guidelines']);
-      const allowedPolicyStatuses = new Set(['Effective', 'Draft', 'Amended', 'Rescinded']);
+      const allowedPolicyStatuses = new Set(['Effective', 'New (Draft)', 'Amended (Draft)', 'Amended', 'Rescinded']);
       if (!title || !documentNumber || !revisionNumber || !contents || (effectivityDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectivityDate)) || !allowedNatures.has(nature) || !allowedDocumentTypes.has(documentType) || !allowedPolicyStatuses.has(policyStatus)) {
         return json(res, 400, { error: 'Title, document number, document type, revision number, contents, nature, and policy status are required.' });
       }
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
+        const existing = await c.execute(`SELECT record_uid FROM bes_policy_records
+          WHERE is_active = 'Y'
+            AND (record_uid = :recordUid
+              OR (:originalDocumentNumber IS NOT NULL AND UPPER(document_number) = UPPER(:originalDocumentNumber)))
+          ORDER BY CASE WHEN record_uid = :recordUid THEN 0 ELSE 1 END
+          FETCH FIRST 1 ROW ONLY`, { recordUid, originalDocumentNumber: originalDocumentNumber || null });
+        const resolvedRecordUid = existing.rows[0]?.RECORD_UID;
+        if (!resolvedRecordUid) return false;
         const duplicate = await c.execute(`SELECT record_uid FROM bes_policy_records
-          WHERE UPPER(document_number) = UPPER(:documentNumber) AND record_uid <> :recordUid AND is_active = 'Y'`, { documentNumber, recordUid });
+          WHERE UPPER(document_number) = UPPER(:documentNumber) AND record_uid <> :resolvedRecordUid AND is_active = 'Y'`, { documentNumber, resolvedRecordUid });
         if (duplicate.rows[0]) throw Object.assign(new Error('Another policy record already uses that document number.'), { statusCode: 409 });
         const updated = await c.execute(`UPDATE bes_policy_records SET
             title = :title,
@@ -1870,7 +2156,7 @@ async function handle(req, res) {
             contents = :contents,
             nature = :nature,
             updated_at = SYSTIMESTAMP
-          WHERE record_uid = :recordUid AND is_active = 'Y'`, {
+          WHERE record_uid = :resolvedRecordUid AND is_active = 'Y'`, {
           title,
           documentNumber,
           documentType,
@@ -1879,7 +2165,7 @@ async function handle(req, res) {
           effectivityDate: effectivityDate || null,
           contents: { val: contents, type: oracledb.CLOB },
           nature,
-          recordUid,
+          resolvedRecordUid,
         });
         if (!updated.rowsAffected) return false;
         await c.commit();
@@ -1887,7 +2173,7 @@ async function handle(req, res) {
             u.username created_by_username, u.first_name created_by_first_name, u.last_name created_by_last_name
           FROM bes_policy_records p
           LEFT JOIN bes_users u ON u.user_id = p.created_by_user_id
-          WHERE p.record_uid = :recordUid`, { recordUid });
+          WHERE p.record_uid = :resolvedRecordUid`, { resolvedRecordUid });
         return found.rows[0];
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
@@ -1911,6 +2197,432 @@ async function handle(req, res) {
       if (result === null) return json(res, 401, { error: 'Session expired.' });
       if (!result) return json(res, 404, { error: 'Policy record not found.' });
       return json(res, 200, { ok: true });
+    }
+    const orgDeleteMatch = url.pathname.match(/^\/api\/admin\/org-structure\/(office)\/(\d+)$/);
+    if (req.method === 'DELETE' && orgDeleteMatch) {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const officeId = Number(orgDeleteMatch[2]);
+      await withConnection(async (c) => {
+        const officeResult = await c.execute(`SELECT office_name FROM bes_offices WHERE office_id=:officeId AND is_active='Y'`, { officeId });
+        const officeName = officeResult.rows[0]?.OFFICE_NAME;
+        if (!officeName) throw Object.assign(new Error('Office not found.'), { statusCode: 404 });
+        const officeTree = await c.execute(`SELECT office_id, office_name FROM bes_offices
+          WHERE is_active='Y' START WITH office_id=:officeId CONNECT BY PRIOR office_id=parent_office_id`, { officeId });
+        await c.execute(`UPDATE bes_positions SET is_active='N', updated_at=SYSTIMESTAMP
+          WHERE office_id IN (SELECT office_id FROM bes_offices START WITH office_id=:officeId CONNECT BY PRIOR office_id=parent_office_id)`, { officeId });
+        await c.execute(`UPDATE bes_offices SET is_active='N', updated_at=SYSTIMESTAMP
+          WHERE office_id IN (SELECT office_id FROM bes_offices START WITH office_id=:officeId CONNECT BY PRIOR office_id=parent_office_id)`, { officeId });
+        for (const office of officeTree.rows) {
+          await c.execute(`DELETE FROM bes_tool_access WHERE office_name=:officeName`, { officeName: office.OFFICE_NAME });
+        }
+        await c.commit();
+      });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && req.url === '/api/fleet/vehicles') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        return c.execute(`SELECT payload, updated_at FROM bes_fleet_store WHERE data_key='VEHICLES'`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      const payload = result.rows[0]?.PAYLOAD;
+      let vehicles = [];
+      try { vehicles = payload ? JSON.parse(String(payload)) : []; } catch { vehicles = []; }
+      return json(res, 200, { vehicles, updatedAt: localIso(result.rows[0]?.UPDATED_AT) });
+    }
+    if (req.method === 'PUT' && req.url === '/api/fleet/vehicles') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req, 50_000_000);
+      if (!Array.isArray(body.vehicles)) return json(res, 400, { error: 'Vehicles must be an array.' });
+      const payload = JSON.stringify(body.vehicles);
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`MERGE INTO bes_fleet_store target USING (SELECT 'VEHICLES' data_key FROM dual) source
+          ON (target.data_key=source.data_key)
+          WHEN MATCHED THEN UPDATE SET payload=:payload,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (data_key,payload,updated_by_user_id) VALUES ('VEHICLES',:payload,:userId)`, {
+          payload: { val: payload, type: oracledb.CLOB }, userId: user.USER_ID,
+        });
+        await c.commit();
+      });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && req.url === '/api/bfm/operations') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const adminRole = await c.execute(`SELECT COUNT(*) role_count FROM bes_user_roles
+          WHERE user_id=:userId AND role_code='Administrator' AND is_active='Y'`, { userId: user.USER_ID });
+        return { ...(await loadBuildingFacilitiesOperations(c)), canManage: user.APP_ROLE === 'Administrator' || Number(adminRole.rows[0]?.ROLE_COUNT || 0) > 0 };
+      });
+      return result ? json(res, 200, result) : json(res, 401, { error: 'Session expired.' });
+    }
+    if (req.method === 'POST' && req.url === '/api/bfm/facilities') {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to add facilities.' });
+      const body = await readBody(req);
+      const name = normalize(body.name);
+      const type = normalize(body.type) || 'Facility';
+      const parentId = nullableNormalize(body.parentId);
+      const description = nullableNormalize(body.description);
+      const location = nullableNormalize(body.location);
+      if (!name) return json(res, 400, { error: 'Facility name is required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (parentId) {
+          const parent = await c.execute(`SELECT facility_uid FROM bes_bfm_facilities WHERE facility_uid=:parentId AND is_active='Y'`, { parentId });
+          if (!parent.rows[0]) throw Object.assign(new Error('Parent facility not found.'), { statusCode: 404 });
+        }
+        const facilityUid = `BFM-FAC-${Date.now()}`;
+        await c.execute(`INSERT INTO bes_bfm_facilities
+          (facility_uid,parent_facility_uid,facility_name,facility_type,description,location,sort_order,created_by_user_id,updated_by_user_id)
+          VALUES (:facilityUid,:parentId,:name,:type,:description,:location,
+            (SELECT NVL(MAX(sort_order),0)+10 FROM bes_bfm_facilities WHERE NVL(parent_facility_uid,'-')=NVL(:parentId,'-')),
+            :userId,:userId)`, { facilityUid, parentId, name, type, description, location, userId: user.USER_ID });
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      return result ? json(res, 201, result) : json(res, 401, { error: 'Session expired.' });
+    }
+    const bfmFacilityMatch = url.pathname.match(/^\/api\/bfm\/facilities\/([^/]+)$/);
+    if (req.method === 'PATCH' && bfmFacilityMatch) {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to edit facilities.' });
+      const facilityUid = decodeURIComponent(bfmFacilityMatch[1]);
+      const body = await readBody(req);
+      const name = normalize(body.name);
+      const type = normalize(body.type) || 'Facility';
+      const description = nullableNormalize(body.description);
+      const location = nullableNormalize(body.location);
+      if (!name) return json(res, 400, { error: 'Facility name is required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const updated = await c.execute(`UPDATE bes_bfm_facilities SET facility_name=:name,facility_type=:type,
+          description=:description,location=:location,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+          WHERE facility_uid=:facilityUid AND is_active='Y'`, { name, type, description, location, userId: user.USER_ID, facilityUid });
+        if (!updated.rowsAffected) return false;
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Facility not found.' });
+    }
+    if (req.method === 'DELETE' && bfmFacilityMatch) {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to delete facilities.' });
+      const facilityUid = decodeURIComponent(bfmFacilityMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const removed = await c.execute(`DELETE FROM bes_bfm_facilities WHERE facility_uid=:facilityUid`, { facilityUid });
+        if (!removed.rowsAffected) return false;
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Facility not found.' });
+    }
+    if (req.method === 'POST' && req.url === '/api/bfm/personnel') {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to add personnel.' });
+      const body = await readBody(req);
+      const name = normalize(body.name);
+      if (!name) return json(res, 400, { error: 'Personnel name is required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        await c.execute(`INSERT INTO bes_bfm_personnel
+          (personnel_uid,personnel_name,employee_no,position_title,contact_info,created_by_user_id,updated_by_user_id)
+          VALUES (:personnelUid,:personnelName,:employeeNo,:positionTitle,:contactInfo,:userId,:userId)`, {
+          personnelUid: `BFM-PER-${Date.now()}`, personnelName: name, employeeNo: nullableNormalize(body.employeeNo),
+          positionTitle: nullableNormalize(body.position), contactInfo: nullableNormalize(body.contact), userId: user.USER_ID,
+        });
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      return result ? json(res, 201, result) : json(res, 401, { error: 'Session expired.' });
+    }
+    if (req.method === 'POST' && req.url === '/api/bfm/todos') {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to add facility tasks.' });
+      const body = await readBody(req);
+      const facilityId = normalize(body.facilityId);
+      const title = normalize(body.title);
+      const category = normalize(body.category) || 'General';
+      const frequency = normalize(body.frequency) || 'As Needed';
+      const customDays = frequency === 'Custom' && Array.isArray(body.customDays)
+        ? [...new Set(body.customDays.map(Number).filter((day) => Number.isInteger(day) && day >= 1 && day <= 7))].sort((a, b) => a - b)
+        : [];
+      const priority = normalize(body.priority) || 'Normal';
+      const dueDate = normalize(body.dueDate);
+      const workerIds = Array.isArray(body.workerIds) ? [...new Set(body.workerIds.map(normalize).filter(Boolean))] : [];
+      if (!facilityId || !title || !['Low','Normal','High','Urgent'].includes(priority) || (frequency === 'Custom' && !customDays.length) || (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate))) {
+        return json(res, 400, { error: 'Facility, task title, and a valid priority are required.' });
+      }
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const facility = await c.execute(`SELECT facility_uid FROM bes_bfm_facilities WHERE facility_uid=:facilityId AND is_active='Y'`, { facilityId });
+        if (!facility.rows[0]) throw Object.assign(new Error('Facility not found.'), { statusCode: 404 });
+        const todoUid = `BFM-TODO-${Date.now()}`;
+        await c.execute(`INSERT INTO bes_bfm_todos
+          (todo_uid,facility_uid,todo_title,description,category,frequency,custom_days,priority,due_date,created_by_user_id,updated_by_user_id)
+          VALUES (:todoUid,:facilityId,:title,:description,:category,:frequency,:customDays,:priority,
+            CASE WHEN :dueDate IS NULL THEN NULL ELSE TO_DATE(:dueDate,'YYYY-MM-DD') END,:userId,:userId)`, {
+          todoUid, facilityId, title, description: nullableNormalize(body.description), category, frequency, customDays: customDays.join(',') || null, priority,
+          dueDate: dueDate || null, userId: user.USER_ID,
+        });
+        for (const personnelUid of workerIds) await c.execute(`INSERT INTO bes_bfm_todo_workers (todo_uid,personnel_uid,assigned_by_user_id)
+          SELECT :todoUid,:personnelUid,:userId FROM dual WHERE EXISTS
+          (SELECT 1 FROM bes_bfm_personnel WHERE personnel_uid=:personnelUid AND is_active='Y')`, { todoUid, personnelUid, userId: user.USER_ID });
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      return result ? json(res, 201, result) : json(res, 401, { error: 'Session expired.' });
+    }
+    const bfmTodoMatch = url.pathname.match(/^\/api\/bfm\/todos\/([^/]+)$/);
+    if (req.method === 'PATCH' && bfmTodoMatch) {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to edit facility tasks.' });
+      const todoUid = decodeURIComponent(bfmTodoMatch[1]);
+      const body = await readBody(req);
+      const title = normalize(body.title);
+      const category = normalize(body.category) || 'General';
+      const frequency = normalize(body.frequency) || 'As Needed';
+      const customDays = frequency === 'Custom' && Array.isArray(body.customDays)
+        ? [...new Set(body.customDays.map(Number).filter((day) => Number.isInteger(day) && day >= 1 && day <= 7))].sort((a, b) => a - b)
+        : [];
+      const priority = normalize(body.priority) || 'Normal';
+      const dueDate = normalize(body.dueDate);
+      const workerIds = Array.isArray(body.workerIds) ? [...new Set(body.workerIds.map(normalize).filter(Boolean))] : [];
+      if (!title || !['Low','Normal','High','Urgent'].includes(priority) || (frequency === 'Custom' && !customDays.length) || (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate))) {
+        return json(res, 400, { error: 'Task title and a valid priority are required.' });
+      }
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const updated = await c.execute(`UPDATE bes_bfm_todos SET todo_title=:title,description=:description,
+          category=:category,frequency=:frequency,custom_days=:customDays,priority=:priority,
+          due_date=CASE WHEN :dueDate IS NULL THEN NULL ELSE TO_DATE(:dueDate,'YYYY-MM-DD') END,
+          updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+          WHERE todo_uid=:todoUid AND is_active='Y'`, {
+          title, description: nullableNormalize(body.description), category, frequency, customDays: customDays.join(',') || null, priority,
+          dueDate: dueDate || null, userId: user.USER_ID, todoUid,
+        });
+        if (!updated.rowsAffected) return false;
+        await c.execute(`DELETE FROM bes_bfm_todo_workers WHERE todo_uid=:todoUid`, { todoUid });
+        for (const personnelUid of workerIds) await c.execute(`INSERT INTO bes_bfm_todo_workers (todo_uid,personnel_uid,assigned_by_user_id)
+          SELECT :todoUid,:personnelUid,:userId FROM dual WHERE EXISTS
+          (SELECT 1 FROM bes_bfm_personnel WHERE personnel_uid=:personnelUid AND is_active='Y')`, { todoUid, personnelUid, userId: user.USER_ID });
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Facility task not found.' });
+    }
+    if (req.method === 'DELETE' && bfmTodoMatch) {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to delete facility tasks.' });
+      const todoUid = decodeURIComponent(bfmTodoMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const removed = await c.execute(`DELETE FROM bes_bfm_todos WHERE todo_uid=:todoUid`, { todoUid });
+        if (!removed.rowsAffected) return false;
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Facility task not found.' });
+    }
+    const bfmTodoStatusMatch = url.pathname.match(/^\/api\/bfm\/todos\/([^/]+)\/status$/);
+    if (req.method === 'PATCH' && bfmTodoStatusMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const todoUid = decodeURIComponent(bfmTodoStatusMatch[1]);
+      const body = await readBody(req);
+      const status = normalize(body.status);
+      const workerId = nullableNormalize(body.workerId);
+      const note = nullableNormalize(body.note);
+      const workDate = normalize(body.workDate);
+      if (!['Pending','In Progress','Completed','Deferred'].includes(status) || (workDate && !/^\d{4}-\d{2}-\d{2}$/.test(workDate))) return json(res, 400, { error: 'Select a valid task status and work date.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT todo_status FROM bes_bfm_todos WHERE todo_uid=:todoUid AND is_active='Y'`, { todoUid });
+        if (!found.rows[0]) return false;
+        if (workerId) {
+          const worker = await c.execute(`SELECT personnel_uid FROM bes_bfm_personnel WHERE personnel_uid=:workerId AND is_active='Y'`, { workerId });
+          if (!worker.rows[0]) throw Object.assign(new Error('Selected personnel was not found.'), { statusCode: 404 });
+        }
+        const previousStatus = found.rows[0].TODO_STATUS;
+        await c.execute(`UPDATE bes_bfm_todos SET todo_status=:nextStatus,
+          last_completed_at=CASE WHEN :nextStatus='Completed' THEN SYSTIMESTAMP ELSE last_completed_at END,
+          updated_by_user_id=:userId,updated_at=SYSTIMESTAMP WHERE todo_uid=:todoUid`, { nextStatus: status, userId: user.USER_ID, todoUid });
+        await c.execute(`INSERT INTO bes_bfm_activity
+          (activity_uid,todo_uid,previous_status,new_status,work_note,work_date,performed_for_personnel_uid,updated_by_user_id)
+          VALUES (:activityUid,:todoUid,:previousStatus,:nextStatus,:workNote,
+            CASE WHEN :workDate IS NULL THEN TRUNC(SYSDATE) ELSE TO_DATE(:workDate,'YYYY-MM-DD') END,:workerId,:userId)`, {
+          activityUid: `BFM-ACT-${Date.now()}`, todoUid, previousStatus, nextStatus: status, workNote: note,
+          workDate: workDate || null, workerId, userId: user.USER_ID,
+        });
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Facility task not found.' });
+    }
+    const bfmWorkDetailsMatch = url.pathname.match(/^\/api\/bfm\/todos\/([^/]+)\/work-details$/);
+    if (req.method === 'PUT' && bfmWorkDetailsMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const todoUid = decodeURIComponent(bfmWorkDetailsMatch[1]);
+      const body = await readBody(req);
+      const workDate = normalize(body.workDate);
+      const findingsText = nullableNormalize(body.findings);
+      const actionTakenText = nullableNormalize(body.actionTaken);
+      const materialsUsedText = nullableNormalize(body.materialsUsed);
+      const recommendationText = nullableNormalize(body.recommendation);
+      const convertedTaskId = nullableNormalize(body.convertedTaskId);
+      const values = [findingsText, actionTakenText, materialsUsedText, recommendationText];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(workDate)) return json(res, 400, { error: 'Select a valid work date.' });
+      if (values.some((value) => value && value.length > 4000)) return json(res, 400, { error: 'Each maintenance detail must be 4,000 characters or fewer.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const todo = await c.execute(`SELECT todo_uid FROM bes_bfm_todos WHERE todo_uid=:todoUid AND is_active='Y'`, { todoUid });
+        if (!todo.rows[0]) return false;
+        const existing = await c.execute(`SELECT detail_uid FROM bes_bfm_work_details
+          WHERE todo_uid=:todoUid AND work_date=TO_DATE(:workDate,'YYYY-MM-DD')`, { todoUid, workDate });
+        if (existing.rows[0]) {
+          await c.execute(`UPDATE bes_bfm_work_details SET findings=:findingsText,action_taken=:actionTakenText,
+            materials_used=:materialsUsedText,recommendation=:recommendationText,
+            converted_task_uid=COALESCE(:convertedTaskId,converted_task_uid),updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+            WHERE detail_uid=:detailUid`, {
+            findingsText, actionTakenText, materialsUsedText, recommendationText, convertedTaskId,
+            userId: user.USER_ID, detailUid: existing.rows[0].DETAIL_UID,
+          });
+        } else {
+          await c.execute(`INSERT INTO bes_bfm_work_details
+            (detail_uid,todo_uid,work_date,findings,action_taken,materials_used,recommendation,converted_task_uid,created_by_user_id,updated_by_user_id)
+            VALUES (:detailUid,:todoUid,TO_DATE(:workDate,'YYYY-MM-DD'),:findingsText,:actionTakenText,
+              :materialsUsedText,:recommendationText,:convertedTaskId,:userId,:userId)`, {
+            detailUid: `BFM-DET-${Date.now()}`, todoUid, workDate, findingsText, actionTakenText,
+            materialsUsedText, recommendationText, convertedTaskId, userId: user.USER_ID,
+          });
+        }
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Facility task not found.' });
+    }
+    if (req.method === 'POST' && req.url === '/api/bfm/projects') {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to add projects.' });
+      const body = await readBody(req);
+      const facilityId = normalize(body.facilityId);
+      const title = normalize(body.title);
+      const priority = ['Low','Normal','High','Urgent'].includes(normalize(body.priority)) ? normalize(body.priority) : 'Normal';
+      const status = ['Planned','In Progress','On Hold','Completed','Cancelled'].includes(normalize(body.status)) ? normalize(body.status) : 'Planned';
+      const startDate = normalize(body.startDate);
+      const targetDate = normalize(body.targetDate);
+      const budgetAmountText = normalize(body.budgetAmount);
+      const budgetAmount = budgetAmountText === '' ? null : Number(budgetAmountText);
+      const budgetStatus = ['Available','For Realignment','For Budgeting'].includes(normalize(body.budgetStatus)) ? normalize(body.budgetStatus) : 'For Budgeting';
+      if (!facilityId || !title || !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return json(res, 400, { error: 'Facility, project title, and target date are required.' });
+      if (budgetAmount !== null && (!Number.isFinite(budgetAmount) || budgetAmount < 0)) return json(res, 400, { error: 'Budget amount must be a valid non-negative number.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const projectUid = `BFM-PRJ-${Date.now()}`;
+        await c.execute(`INSERT INTO bes_bfm_projects
+          (project_uid,facility_uid,project_title,description,category,priority,project_status,start_date,target_date,budget_amount,budget_status,assigned_personnel,created_by_user_id,updated_by_user_id)
+          SELECT :projectUid,:facilityId,:title,:description,:category,:priority,:projectStatus,
+            CASE WHEN :startDate IS NULL THEN NULL ELSE TO_DATE(:startDate,'YYYY-MM-DD') END,TO_DATE(:targetDate,'YYYY-MM-DD'),:budgetAmount,:budgetStatus,:workerIds,:userId,:userId
+          FROM dual WHERE EXISTS (SELECT 1 FROM bes_bfm_facilities WHERE facility_uid=:facilityId AND is_active='Y')`, {
+          projectUid, facilityId, title, description: nullableNormalize(body.description), category: normalize(body.category) || 'General',
+          priority, projectStatus: status, startDate: /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : null,
+          targetDate, budgetAmount: { val: budgetAmount, type: oracledb.NUMBER }, budgetStatus, workerIds: { val: JSON.stringify(Array.isArray(body.workerIds) ? body.workerIds : []), type: oracledb.CLOB }, userId: user.USER_ID,
+        });
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      return result ? json(res, 201, result) : json(res, 401, { error: 'Session expired.' });
+    }
+    const bfmProjectMatch = url.pathname.match(/^\/api\/bfm\/projects\/([^/]+)$/);
+    if (req.method === 'PATCH' && bfmProjectMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const projectUid = decodeURIComponent(bfmProjectMatch[1]);
+      const body = await readBody(req);
+      const status = ['Planned','In Progress','On Hold','Completed','Cancelled'].includes(normalize(body.status)) ? normalize(body.status) : null;
+      const targetDate = normalize(body.targetDate);
+      const hasBudgetAmount = Object.prototype.hasOwnProperty.call(body, 'budgetAmount');
+      const budgetAmountText = normalize(body.budgetAmount);
+      const budgetAmount = budgetAmountText === '' ? null : Number(budgetAmountText);
+      const budgetStatus = ['Available','For Realignment','For Budgeting'].includes(normalize(body.budgetStatus)) ? normalize(body.budgetStatus) : null;
+      if (hasBudgetAmount && budgetAmount !== null && (!Number.isFinite(budgetAmount) || budgetAmount < 0)) return json(res, 400, { error: 'Budget amount must be a valid non-negative number.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const updated = await c.execute(`UPDATE bes_bfm_projects SET
+          project_title=COALESCE(:title,project_title),description=:description,category=COALESCE(:category,category),
+          priority=COALESCE(:priority,priority),project_status=COALESCE(:projectStatus,project_status),
+          start_date=CASE WHEN :startDate IS NULL THEN start_date ELSE TO_DATE(:startDate,'YYYY-MM-DD') END,
+          target_date=CASE WHEN :targetDate IS NULL THEN target_date ELSE TO_DATE(:targetDate,'YYYY-MM-DD') END,
+          budget_amount=CASE WHEN :hasBudgetAmount=1 THEN :budgetAmount ELSE budget_amount END,
+          budget_status=COALESCE(:budgetStatus,budget_status),
+          assigned_personnel=COALESCE(:workerIds,assigned_personnel),updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+          WHERE project_uid=:projectUid AND is_active='Y'`, {
+          title: nullableNormalize(body.title), description: nullableNormalize(body.description), category: nullableNormalize(body.category),
+          priority: ['Low','Normal','High','Urgent'].includes(normalize(body.priority)) ? normalize(body.priority) : null,
+          projectStatus: status, startDate: /^\d{4}-\d{2}-\d{2}$/.test(normalize(body.startDate)) ? normalize(body.startDate) : null,
+          targetDate: /^\d{4}-\d{2}-\d{2}$/.test(targetDate) ? targetDate : null,
+          hasBudgetAmount: hasBudgetAmount ? 1 : 0, budgetAmount: { val: budgetAmount, type: oracledb.NUMBER }, budgetStatus,
+          workerIds: Array.isArray(body.workerIds) ? { val: JSON.stringify(body.workerIds), type: oracledb.CLOB } : null,
+          userId: user.USER_ID, projectUid,
+        });
+        if (!updated.rowsAffected) return false;
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Project not found.' });
+    }
+    if (req.method === 'DELETE' && bfmProjectMatch) {
+      const token = bearerToken(req);
+      const admin = await requireAdministrator(token);
+      if (!admin) return json(res, 403, { error: 'Administrator access is required to delete projects.' });
+      const projectUid = decodeURIComponent(bfmProjectMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const removed = await c.execute(`DELETE FROM bes_bfm_projects WHERE project_uid=:projectUid`, { projectUid });
+        if (!removed.rowsAffected) return false;
+        await c.commit();
+        return loadBuildingFacilitiesOperations(c);
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Project not found.' });
     }
     if (req.method === 'GET' && req.url === '/api/calendar/events') {
       const token = bearerToken(req);
@@ -2671,6 +3383,11 @@ async function handle(req, res) {
     if (error?.statusCode) return json(res, error.statusCode, { error: error.message });
     if (error?.errorNum === 1) return json(res, 409, { error: 'A record with the same unique scope already exists. Refresh the page and try saving again.' });
     console.error(error);
+    if (isLocalDevelopmentRequest(req)) {
+      const code = normalize(error?.code);
+      const message = normalize(error?.message) || 'Unknown database error.';
+      return json(res, 500, { error: [code, message].filter(Boolean).join(': ') });
+    }
     return json(res, 500, { error: 'The server could not complete the request.' });
   }
 }

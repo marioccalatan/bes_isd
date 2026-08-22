@@ -9,6 +9,7 @@ import { DataTable, type Column } from '@/components/ui/data-table';
 import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
 import { Drawer } from '@/components/ui/drawer';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { Pagination } from '@/components/ui/pagination';
 import { Tabs } from '@/components/ui/tabs';
 import { useAuth } from '@/context/AuthContext';
 import { useData } from '@/context/DataContext';
@@ -16,9 +17,11 @@ import { useToast } from '@/context/ToastContext';
 import {
   createPolicyRecord,
   deletePolicyRecord,
+  deletePolicyRecordAttachment,
   downloadPolicyRecordAttachment,
   fetchPolicyRecords,
   fetchPolicyTaskProcessing,
+  previewPolicyRecordAttachment,
   uploadPolicyRecordAttachment,
   updatePolicyRecord,
   updatePolicyTaskProcessing,
@@ -28,7 +31,7 @@ import {
 } from '@/lib/api';
 import type { Comment, PolicyDocumentType, PolicyRecord, PolicyRecordNature, PolicyRecordStatus, WorkItem } from '@/lib/types';
 import type { WorkspaceModuleDef } from '@/lib/workspace';
-import { exportToCsv } from '@/hooks/useTableControls';
+import { exportToCsv, useTableControls } from '@/hooks/useTableControls';
 import { formatDate, formatDateTime } from '@/lib/utils';
 
 const NATURES: PolicyRecordNature[] = [
@@ -39,7 +42,30 @@ const NATURES: PolicyRecordNature[] = [
   'Operations',
 ];
 const DOCUMENT_TYPES: PolicyDocumentType[] = ['Policy', 'Issuance', 'Guidelines'];
-const POLICY_STATUSES: PolicyRecordStatus[] = ['Effective', 'Draft', 'Amended', 'Rescinded'];
+const POLICY_STATUSES: PolicyRecordStatus[] = ['Effective', 'New (Draft)', 'Amended (Draft)', 'Amended', 'Rescinded'];
+
+// Matches any all-caps heading line (e.g. "PURPOSE:", "IMPLEMENTING GUIDELINES:", "PART I -- SCOPE:") rather than a
+// fixed keyword list, since the source policy documents use many different section headings, always written this way.
+const POLICY_SECTION_PATTERN = "[A-Z][A-Z0-9()&/'-]+(?:[ \\t]+[A-Z0-9()&/'-]+)*";
+
+type PolicyContentBlock = { heading?: string; body: string; provision?: boolean };
+
+function formatPolicyContents(contents: string): PolicyContentBlock[] {
+  const separated = contents
+    .replace(/\r\n?/g, '\n')
+    .replace(new RegExp(`\\s+(?=(${POLICY_SECTION_PATTERN})\\s*:)`, 'gi'), '\n\n')
+    .trim();
+
+  return separated.split(/\n{2,}/).flatMap((section) => {
+    const match = section.trim().match(new RegExp(`^(${POLICY_SECTION_PATTERN})\\s*:\\s*([\\s\\S]*)$`, 'i'));
+    if (!match) return [{ body: section.trim() }];
+    const heading = `${match[1].toUpperCase()}:`;
+    const body = match[2].trim();
+    if (!/^POLIC(?:Y|IES):$/i.test(heading) || !/^1\.\s/.test(body)) return [{ heading, body }];
+    const provisions = body.split(/\s+(?=\d+\.\s)/).filter(Boolean);
+    return provisions.map((provision, index) => ({ heading: index === 0 ? heading : undefined, body: provision, provision: true }));
+  });
+}
 const POLICY_TASK_STATUSES: PolicyTaskStatus[] = ['Received', 'Under Review', 'For Approval', 'Approved', 'Issued', 'Completed', 'Returned'];
 
 const EMPTY_FORM: PolicyRecordInput = {
@@ -68,6 +94,8 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
   const [form, setForm] = useState<PolicyRecordInput>(EMPTY_FORM);
   const [attachment, setAttachment] = useState<File | null>(null);
   const [attachmentDragging, setAttachmentDragging] = useState(false);
+  const [confirmRemoveAttachment, setConfirmRemoveAttachment] = useState(false);
+  const [removingAttachment, setRemovingAttachment] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<PolicyRecord | null>(null);
   const [processingRecords, setProcessingRecords] = useState<PolicyTaskProcessing[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -109,12 +137,13 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
       .some((value) => String(value ?? '').toLowerCase().includes(query)));
   }, [policyTasks, search]);
 
-  const visibleRecords = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return records;
-    return records.filter((record) => [record.title, record.documentNumber, record.revisionNumber, record.documentType, record.status, record.nature, record.contents]
-      .some((value) => String(value ?? '').toLowerCase().includes(query)));
-  }, [records, search]);
+  const matchesRecordSearch = (record: PolicyRecord, query: string) => [record.title, record.documentNumber, record.revisionNumber, record.documentType, record.status, record.nature, record.contents]
+    .some((value) => String(value ?? '').toLowerCase().includes(query));
+  const {
+    search: recordSearch, setSearch: setRecordSearch,
+    page: recordPage, setPage: setRecordPage, pageCount: recordPageCount,
+    pageRows: recordPageRows, filteredCount: recordFilteredCount,
+  } = useTableControls(records, matchesRecordSearch, 20);
 
   const taskColumns: Column<WorkItem>[] = [
     {
@@ -177,7 +206,23 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
     { key: 'revisionNumber', header: 'Revision', render: (record) => record.revisionNumber },
     { key: 'effectivityDate', header: 'Effectivity Date', render: (record) => record.effectivityDate ? formatDate(record.effectivityDate) : '—' },
     { key: 'nature', header: 'Nature', render: (record) => <Badge>{record.nature}</Badge> },
-    { key: 'attachmentName', header: 'Attachment', render: (record) => record.attachmentName ? <span className="text-brand-700">{record.attachmentName}</span> : '—' },
+    {
+      key: 'attachmentName',
+      header: 'Attachment',
+      render: (record) => record.attachmentName ? (
+        <button
+          type="button"
+          className="text-left text-brand-700 underline-offset-2 hover:underline"
+          title="Open attachment preview in a new tab"
+          onClick={(event) => {
+            event.stopPropagation();
+            void previewAttachment(record);
+          }}
+        >
+          {record.attachmentName}
+        </button>
+      ) : '—',
+    },
   ];
 
   function updateForm<K extends keyof PolicyRecordInput>(key: K, value: PolicyRecordInput[K]) {
@@ -254,7 +299,10 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
     }
     setSaving(true);
     try {
-      const payload: PolicyRecordInput = { ...form };
+      const payload: PolicyRecordInput = {
+        ...form,
+        originalDocumentNumber: editingRecord?.documentNumber,
+      };
       const result = editingRecord
         ? await updatePolicyRecord(token, editingRecord.id, payload)
         : await createPolicyRecord(token, payload);
@@ -278,9 +326,32 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
       setForm(EMPTY_FORM);
       setAttachment(null);
     } catch (error) {
-      toast({ kind: 'error', title: 'Unable to add policy record', description: error instanceof Error ? error.message : 'Please try again.' });
+      toast({ kind: 'error', title: editingRecord ? 'Unable to update policy record' : 'Unable to add policy record', description: error instanceof Error ? error.message : 'Please try again.' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function removeAttachment() {
+    if (!editingRecord) return;
+    setRemovingAttachment(true);
+    try {
+      await deletePolicyRecordAttachment(token, editingRecord.id);
+      const clearAttachment = (record: PolicyRecord): PolicyRecord => ({
+        ...record,
+        attachmentName: undefined,
+        attachmentMimeType: undefined,
+        attachmentSize: undefined,
+      });
+      setRecords((current) => current.map((record) => record.id === editingRecord.id ? clearAttachment(record) : record));
+      setEditingRecord((current) => current ? clearAttachment(current) : current);
+      setSelectedRecord((current) => current && current.id === editingRecord.id ? clearAttachment(current) : current);
+      toast({ kind: 'success', title: 'Attachment removed', description: `${editingRecord.documentNumber} no longer has a DOCX attachment.` });
+      setConfirmRemoveAttachment(false);
+    } catch (error) {
+      toast({ kind: 'error', title: 'Unable to remove attachment', description: error instanceof Error ? error.message : 'Please try again.' });
+    } finally {
+      setRemovingAttachment(false);
     }
   }
 
@@ -306,6 +377,15 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
       await downloadPolicyRecordAttachment(token, record.id, record.attachmentName);
     } catch (error) {
       toast({ kind: 'error', title: 'Download failed', description: error instanceof Error ? error.message : 'Please try again.' });
+    }
+  }
+
+  async function previewAttachment(record: PolicyRecord) {
+    if (!record.attachmentName) return;
+    try {
+      await previewPolicyRecordAttachment(token, record.id);
+    } catch (error) {
+      toast({ kind: 'error', title: 'Preview failed', description: error instanceof Error ? error.message : 'Please try again.' });
     }
   }
 
@@ -364,21 +444,22 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
           </CardHeader>
           <CardContent>
             <Toolbar
-              search={search}
-              onSearchChange={setSearch}
+              search={recordSearch}
+              onSearchChange={setRecordSearch}
               placeholder="Search title, document number, type, nature…"
               onExport={() => exportToCsv('policy-records.csv', ['Title', 'Document Number', 'Document Type', 'Status', 'Revision Number', 'Effectivity Date', 'Nature', 'Attachment'], records.map((record) => [record.title, record.documentNumber, record.documentType, record.status, record.revisionNumber, record.effectivityDate, record.nature, record.attachmentName ?? '']))}
               onPrint={() => window.print()}
             />
             <DataTable
               columns={recordColumns}
-              rows={visibleRecords}
+              rows={recordPageRows}
               getRowId={(record) => record.id}
               onRowClick={setSelectedRecord}
               cardTitle={(record) => record.title}
               emptyTitle={recordsLoading ? 'Loading policy records…' : 'No policy records yet'}
               emptyDescription={recordsLoading ? 'Reading the Oracle policy register.' : 'Select Add Record to create the first policy record.'}
             />
+            <Pagination page={recordPage} pageCount={recordPageCount} onChange={setRecordPage} total={recordFilteredCount} pageSize={20} />
           </CardContent>
         </Card>
       )}
@@ -402,35 +483,58 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
           <div className="sm:col-span-2"><Label required>Contents</Label><Textarea className="min-h-36" value={form.contents} onChange={(event) => updateForm('contents', event.target.value)} placeholder="Enter the policy summary, scope, provisions, or controlled contents." /></div>
           <div className="sm:col-span-2">
             <Label>Attachment File</Label>
-            <label
-              onDragEnter={(event) => { event.preventDefault(); setAttachmentDragging(true); }}
-              onDragOver={(event) => { event.preventDefault(); setAttachmentDragging(true); }}
-              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setAttachmentDragging(false); }}
-              onDrop={dropAttachment}
-              className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${attachmentDragging ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/20' : 'border-slate-300 bg-slate-50/40 hover:border-brand-400 hover:bg-brand-50/30'}`}
-            >
-              <FileText className="mb-2 h-6 w-6 text-slate-400" />
-              <span className="text-sm font-medium text-slate-700">{attachment ? attachment.name : editingRecord?.attachmentName ? `Current: ${editingRecord.attachmentName}` : 'Choose a DOCX policy document'}</span>
-              <span className="mt-1 text-xs text-slate-500">Drag and drop one DOCX here, or click to choose. Stored as an Oracle BLOB. Maximum 25 MB.</span>
-              <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only" onChange={(event) => { if (event.target.files?.length) chooseAttachment(event.target.files); event.target.value = ''; }} />
-            </label>
+            <div className="relative">
+              <label
+                onDragEnter={(event) => { event.preventDefault(); setAttachmentDragging(true); }}
+                onDragOver={(event) => { event.preventDefault(); setAttachmentDragging(true); }}
+                onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setAttachmentDragging(false); }}
+                onDrop={dropAttachment}
+                className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${attachmentDragging ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/20' : 'border-slate-300 bg-slate-50/40 hover:border-brand-400 hover:bg-brand-50/30'}`}
+              >
+                <FileText className="mb-2 h-6 w-6 text-slate-400" />
+                <span className="text-sm font-medium text-slate-700">{attachment ? attachment.name : editingRecord?.attachmentName ? `Current: ${editingRecord.attachmentName}` : 'Choose a DOCX policy document'}</span>
+                <span className="mt-1 text-xs text-slate-500">Drag and drop one DOCX here, or click to choose. Stored as an Oracle BLOB. Maximum 25 MB.</span>
+                <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only" onChange={(event) => { if (event.target.files?.length) chooseAttachment(event.target.files); event.target.value = ''; }} />
+              </label>
+              {!attachment && editingRecord?.attachmentName && (
+                <button
+                  type="button"
+                  onClick={(event) => { event.preventDefault(); event.stopPropagation(); setConfirmRemoveAttachment(true); }}
+                  className="absolute right-2 top-2 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                  title="Remove attachment"
+                  aria-label="Remove attachment"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </Dialog>
 
-      <Drawer open={!!selectedRecord} onClose={() => setSelectedRecord(null)} title={selectedRecord?.title ?? ''}>
+      <Drawer open={!!selectedRecord} onClose={() => setSelectedRecord(null)} title={selectedRecord?.title ?? ''} contentClassName="overflow-hidden">
         {selectedRecord && (
-          <div className="space-y-5 text-sm">
-            <div className="flex flex-wrap gap-2"><Badge>{selectedRecord.documentType}</Badge><Badge>{selectedRecord.status}</Badge><Badge>{selectedRecord.nature}</Badge><Badge>Revision {selectedRecord.revisionNumber}</Badge></div>
-            <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex h-full min-h-0 flex-col gap-5 text-sm">
+            <div className="flex shrink-0 flex-wrap gap-2"><Badge>{selectedRecord.documentType}</Badge><Badge>{selectedRecord.status}</Badge><Badge>{selectedRecord.nature}</Badge><Badge>Revision {selectedRecord.revisionNumber}</Badge></div>
+            <dl className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-2">
               <div><dt className="text-xs text-slate-500">Document Number</dt><dd className="mt-0.5 font-mono font-medium text-slate-800">{selectedRecord.documentNumber}</dd></div>
               <div><dt className="text-xs text-slate-500">Document Type</dt><dd className="mt-0.5 font-medium text-slate-800">{selectedRecord.documentType}</dd></div>
               <div><dt className="text-xs text-slate-500">Effectivity Date</dt><dd className="mt-0.5 font-medium text-slate-800">{selectedRecord.effectivityDate ? formatDate(selectedRecord.effectivityDate) : 'Not set'}</dd></div>
               <div><dt className="text-xs text-slate-500">Created By</dt><dd className="mt-0.5 font-medium text-slate-800">{selectedRecord.createdBy ?? 'System baseline'}</dd></div>
               <div><dt className="text-xs text-slate-500">Last Updated</dt><dd className="mt-0.5 font-medium text-slate-800">{formatDate(selectedRecord.updatedAt)}</dd></div>
             </dl>
-            <div><p className="text-xs text-slate-500">Contents</p><p className="mt-1 whitespace-pre-wrap text-slate-700">{selectedRecord.contents}</p></div>
-            <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">
+            <div className="flex min-h-0 flex-1 flex-col">
+              <p className="shrink-0 text-xs text-slate-500">Contents</p>
+              <div className="mt-2 min-h-0 flex-1 space-y-4 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/30 p-3 pr-2 text-slate-700 scrollbar-thin">
+                {formatPolicyContents(selectedRecord.contents).map((block, index) => (
+                  <p key={`${block.heading ?? 'paragraph'}-${index}`} className={`whitespace-pre-wrap leading-6 ${block.provision ? 'pl-5 [text-indent:-1.25rem]' : ''}`}>
+                    {block.heading && <strong className="mb-1 block font-semibold text-slate-900">{block.heading}</strong>}
+                    {block.body}
+                  </p>
+                ))}
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2 border-t border-slate-200 pt-4">
               {selectedRecord.attachmentName && <Button variant="outline" onClick={() => downloadAttachment(selectedRecord)}><Download className="h-4 w-4" /> Download {selectedRecord.attachmentName}</Button>}
               <Button onClick={() => openEdit(selectedRecord)}><Pencil className="h-4 w-4" /> Edit Record</Button>
               <Button variant="destructive" onClick={() => setDeleteTarget(selectedRecord)}><Trash2 className="h-4 w-4" /> Delete</Button>
@@ -480,6 +584,16 @@ export default function PoliciesIssuances({ module }: { module: WorkspaceModuleD
           </div>
         )}
       </Drawer>
+
+      <ConfirmDialog
+        open={confirmRemoveAttachment}
+        onClose={() => { if (!removingAttachment) setConfirmRemoveAttachment(false); }}
+        onConfirm={removeAttachment}
+        title="Remove attachment?"
+        description={`The DOCX attached to ${editingRecord?.documentNumber ?? 'this policy record'} will be permanently removed from Oracle. You can upload a new one afterward.`}
+        confirmLabel={removingAttachment ? 'Removing…' : 'Remove Attachment'}
+        destructive
+      />
 
       <ConfirmDialog
         open={!!deleteTarget}

@@ -1,96 +1,121 @@
-import { useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { Lock, Download, Printer, Star, CheckCircle2, History } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { Download, FileText, Printer, X } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useData } from '@/context/DataContext';
+import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { useRolePreview } from '@/context/RolePreviewContext';
-import { canAccessDocument, accessExplanation } from '@/lib/permissions';
+import { downloadPolicyRecordAttachment, fetchPolicyRecords } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import type { PolicyRecord } from '@/lib/types';
 import NotFound from './NotFound';
 
 export default function DocumentDetail() {
   const { id } = useParams<{ id: string }>();
-  const { documents } = useData();
+  const navigate = useNavigate();
+  const { token } = useAuth();
   const { toast } = useToast();
-  const { effectiveRole } = useRolePreview();
-  const [favorite, setFavorite] = useState(false);
-  const [acknowledged, setAcknowledged] = useState(false);
-  const doc = documents.find((d) => d.id === id);
-  if (!doc) return <NotFound />;
+  const [record, setRecord] = useState<PolicyRecord | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [downloading, setDownloading] = useState(false);
 
-  const accessible = canAccessDocument(doc.classification, effectiveRole);
-  const related = documents.filter((d) => d.category === doc.category && d.id !== doc.id).slice(0, 3);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    fetchPolicyRecords(token)
+      .then((records) => {
+        if (!cancelled) setRecord(records.find((item) => item.id === id) ?? null);
+      })
+      .catch((fetchError) => {
+        if (!cancelled) setError(fetchError instanceof Error ? fetchError.message : 'Unable to load this policy record.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [id, token]);
+
+  async function downloadAttachment() {
+    if (!record?.attachmentName) return;
+    setDownloading(true);
+    try {
+      await downloadPolicyRecordAttachment(token, record.id, record.attachmentName);
+    } catch (downloadError) {
+      toast({ kind: 'error', title: 'Download failed', description: downloadError instanceof Error ? downloadError.message : 'Unable to download the attachment.' });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  function closeDocument() {
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    navigate('/documents', { replace: true });
+  }
+
+  if (loading) {
+    return <div className="rounded-xl border border-slate-200 py-16 text-center text-sm text-slate-500">Loading policy record from Oracle…</div>;
+  }
+  if (!record && !error) return <NotFound />;
 
   return (
     <div className="mx-auto max-w-3xl">
-      <PageHeader title={accessible ? doc.title : 'Restricted Document'} crumbs={[{ label: 'Documents and Policies', to: '/documents' }, { label: doc.id }]} actions={<Badge>{doc.category}</Badge>} />
+      <PageHeader
+        title={record?.title ?? 'Policy record unavailable'}
+        crumbs={[{ label: 'Documents and Policies', to: '/documents' }, { label: record?.documentNumber ?? id ?? 'Record' }]}
+        actions={(
+          <div className="flex items-center gap-2 no-print">
+            {record && <Badge>{record.documentType}</Badge>}
+            <Button variant="outline" size="sm" onClick={closeDocument} aria-label="Close document and go back">
+              <X className="h-4 w-4" /> Close
+            </Button>
+          </div>
+        )}
+      />
 
-      {!accessible ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400"><Lock className="h-6 w-6" /></div>
-            <p className="text-sm font-semibold text-slate-800">Access Restricted — {doc.classification}</p>
-            <p className="max-w-sm text-sm text-slate-500">{accessExplanation(doc.classification)}</p>
-          </CardContent>
-        </Card>
+      {error || !record ? (
+        <Card><CardContent className="py-12 text-center text-sm text-red-700">{error || 'Policy record not found.'}</CardContent></Card>
       ) : (
         <Card>
-          <CardContent className="space-y-4 pt-5">
+          <CardContent className="space-y-5 pt-5">
+            <div className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><FileText className="h-5 w-5" /></div>
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-900">{record.title}</p>
+                <p className="mt-0.5 font-mono text-xs text-slate-500">{record.documentNumber}</p>
+              </div>
+            </div>
+
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
-              <Detail label="Version" value={doc.version} />
-              <Detail label="Owner" value={doc.owner} />
-              <Detail label="Effectivity Date" value={formatDate(doc.effectivityDate)} />
-              <Detail label="Review Date" value={formatDate(doc.reviewDate)} />
-              <Detail label="Status" value={doc.status} />
-              <Detail label="Classification" value={doc.classification} />
+              <Detail label="Document Type" value={record.documentType} />
+              <Detail label="Revision" value={record.revisionNumber} />
+              <Detail label="Effectivity Date" value={formatDate(record.effectivityDate)} />
+              <Detail label="Nature" value={record.nature} />
+              <Detail label="Status" value={record.status} />
+              <Detail label="Created By" value={record.createdBy ?? '—'} />
             </dl>
-            <div className="border-t border-slate-100 pt-3">
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Summary</p>
-              <p className="text-sm text-slate-700">{doc.summary}</p>
+
+            <div className="border-t border-slate-100 pt-4">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Contents</p>
+              <PolicyContents contents={record.contents} />
             </div>
 
-            {doc.requiresAcknowledgment && (
-              <div className={`rounded-lg border p-3 ${acknowledged ? 'border-green-200 bg-green-50' : 'border-gold-200 bg-gold-50'}`}>
-                {acknowledged ? (
-                  <p className="flex items-center gap-2 text-sm font-medium text-green-800"><CheckCircle2 className="h-4 w-4" /> Acknowledged.</p>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-gold-900">This policy requires formal acknowledgment.</p>
-                    <Button size="sm" onClick={() => { setAcknowledged(true); toast({ kind: 'success', title: 'Acknowledged' }); }}>Acknowledge</Button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div>
-              <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"><History className="h-3.5 w-3.5" /> Version History</p>
-              <ul className="space-y-1.5">
-                {doc.versionHistory.map((v) => (
-                  <li key={v.version} className="flex items-center justify-between rounded-lg border border-slate-100 p-2 text-sm">
-                    <span className="font-medium text-slate-700">v{v.version}</span>
-                    <span className="text-slate-500">{v.note}</span>
-                    <span className="text-xs text-slate-400">{formatDate(v.date)}</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Attachment</p>
+              <p className="mt-1 text-sm font-medium text-slate-700">{record.attachmentName ?? 'No DOCX attachment uploaded'}</p>
+              {record.attachmentSize != null && <p className="mt-0.5 text-xs text-slate-400">{formatFileSize(record.attachmentSize)}</p>}
             </div>
-
-            {related.length > 0 && (
-              <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Related Documents</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {related.map((r) => <Badge key={r.id}>{r.title}</Badge>)}
-                </div>
-              </div>
-            )}
 
             <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3 no-print">
-              <Button variant="outline" size="sm" onClick={() => toast({ kind: 'info', title: 'Simulated download', description: `${doc.title}.pdf would download in production.` })}><Download className="h-4 w-4" /> Download</Button>
-              <Button variant="outline" size="sm" onClick={() => setFavorite((f) => !f)}><Star className={`h-4 w-4 ${favorite ? 'fill-gold-500 text-gold-500' : ''}`} /> {favorite ? 'Favorited' : 'Favorite'}</Button>
+              <Button variant="outline" size="sm" disabled={!record.attachmentName || downloading} onClick={downloadAttachment}>
+                <Download className="h-4 w-4" /> {downloading ? 'Downloading…' : 'Download DOCX'}
+              </Button>
               <Button variant="outline" size="sm" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
             </div>
           </CardContent>
@@ -107,4 +132,60 @@ function Detail({ label, value }: { label: string; value: string }) {
       <dd className="mt-0.5 font-medium text-slate-700">{value}</dd>
     </div>
   );
+}
+
+const POLICY_SECTION_PATTERN = /\b(PURPOSE|INTRODUCTION|SCOPE|OBJECTIVES?|DEFINITIONS?|POLICIES|POLICY STATEMENT|GUIDELINES|PROCEDURES|IMPLEMENTATION|RESPONSIBILITIES|EFFECTIVITY|APPROVAL|REFERENCES|SIGNED|APPROVED)\s*:/gi;
+
+function PolicyContents({ contents }: { contents: string }) {
+  const normalized = contents
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const sections: Array<{ heading?: string; body: string }> = [];
+  let cursor = 0;
+  let heading: string | undefined;
+  let match: RegExpExecArray | null;
+  POLICY_SECTION_PATTERN.lastIndex = 0;
+
+  while ((match = POLICY_SECTION_PATTERN.exec(normalized)) !== null) {
+    const body = normalized.slice(cursor, match.index).trim();
+    if (body) sections.push({ heading, body });
+    heading = titleCase(match[1]);
+    cursor = POLICY_SECTION_PATTERN.lastIndex;
+  }
+
+  const remaining = normalized.slice(cursor).trim();
+  if (remaining) sections.push({ heading, body: remaining });
+  if (sections.length === 0 && normalized) sections.push({ body: normalized });
+
+  return (
+    <div className="space-y-4 text-sm leading-7 text-slate-700">
+      {sections.map((section, sectionIndex) => (
+        <section key={`${section.heading ?? 'contents'}-${sectionIndex}`} className="space-y-2">
+          {section.heading && <h3 className="font-semibold uppercase tracking-wide text-slate-900">{section.heading}</h3>}
+          {policyParagraphs(section.heading, section.body).map((paragraph, paragraphIndex) => (
+            <p key={paragraphIndex} className="whitespace-pre-line text-justify">{paragraph.trim()}</p>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function titleCase(value: string) {
+  return value.toLowerCase().replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function policyParagraphs(heading: string | undefined, body: string) {
+  const paragraphs = body.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  if (!heading || !/^(Policies|Guidelines|Procedures)$/.test(heading)) return paragraphs;
+  return paragraphs.flatMap((paragraph) => paragraph.split(/\s+(?=\d+\.\s)/).map((item) => item.trim()).filter(Boolean));
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
