@@ -217,6 +217,36 @@ async function seedOrganizationalStructure(connection) {
   }
 }
 
+async function seedPositionDrPl(connection) {
+  const levels = ['Department Secretary I', 'Department Secretary II', 'Department Secretary III', 'Department Secretary IV'];
+  const secretaryLevels = ['DS I', 'DS II', 'DS III', 'DS IV'];
+  const duties = [
+    ['Document Circulation/tracking', 60, 'Receives and/or routes documents, circulars, reports and other documents through available channels, including hardcopies, Zimbra local email, and email.', 'Working knowledge of the in-house system', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Document Circulation/tracking', 60, 'Logs document details for future tracking needs.', 'Records management skills', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Document Circulation/tracking', 60, 'Maintains scanned copies of routed documents to facilitate efficient tracing.', 'Records management skills; working knowledge of office equipment', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Document Circulation/tracking', 60, 'Prints and transmits copies of documents to all indicated recipients.', 'Working knowledge of office equipment', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Administrative Efficiency', 35, 'Takes dictation, transcribes, and types letters and reports.', 'Report writing skills; working knowledge of MS Word and MS Excel', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Administrative Efficiency', 35, 'Takes the department minutes of meetings.', 'Report writing skills', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Administrative Efficiency', 35, 'Receives and/or places telephone calls and messages from and to other departments and employees.', 'Verbal communication skills', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Administrative Efficiency', 35, 'Encodes data for monthly time-slip generation through the respective system channels, including Gate Pass and Travel Order, in preparation of payroll data.', 'Working knowledge of the in-house system', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Administrative Efficiency', 35, 'Tracks and controls Gas Slip issuance.', 'Working knowledge of the in-house system', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Administrative Efficiency', 35, 'Coordinates, monitors, and reminds the Department Manager of appointments.', 'Record keeping skills', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['Administrative Efficiency', 35, 'Maintains an efficient inventory level of office supplies needed by the Department and keeps records of the same.', 'Record keeping skills', 'DS I: 2 · DS II: 3 · DS III–IV: 4'],
+    ['QMS related responsibilities', 5, 'Conforms with the Quality Policy and related Quality Objectives.', 'ISO awareness', 'Level 3'],
+    ['QMS related responsibilities', 5, 'Conforms with related Quality Procedures and supporting documents.', 'ISO awareness', 'Level 3'],
+  ].map(([kra, kraWeight, description, competency, levelRequirement], index) => ({ id: `ISD-DS-${index + 1}`, kra, kraWeight, description, applicableLevels: secretaryLevels, competency, levelRequirement }));
+  await connection.execute(`MERGE INTO bes_position_dr_pl profile USING (
+      SELECT p.position_id FROM bes_positions p JOIN bes_departments d ON d.department_id=p.department_id
+      WHERE d.department_code='ISD' AND p.office_id IS NULL AND UPPER(p.position_title)='SECRETARY'
+    ) src ON (profile.position_id=src.position_id)
+    WHEN NOT MATCHED THEN INSERT (position_id,position_purpose,employment_level,reports_to,area_of_work,position_levels_json,duties_json,source_document)
+      VALUES (src.position_id,:purpose,:employmentLevel,:reportsTo,:areaOfWork,:positionLevels,:duties,:sourceDocument)`, {
+    purpose: 'Responsible for ensuring an orderly office and providing efficient and reliable secretarial services, including HR records management, handling confidential information, and keeping vital information and documents needed by the Department Manager in making operational decisions.',
+    employmentLevel: 'Rank and File', reportsTo: 'Department Manager', areaOfWork: 'Head Office',
+    positionLevels: JSON.stringify(levels), duties: JSON.stringify(duties), sourceDocument: 'Department Secretary-03272024.docx',
+  });
+}
+
 async function seedToolRegistry(connection) {
   await connection.execute(`DELETE FROM bes_task_subjects WHERE tool_code = 'HR Office'`);
   await connection.execute(`DELETE FROM bes_tool_access WHERE tool_code = 'HR Office'`);
@@ -800,6 +830,16 @@ export async function initializeDatabase() {
       created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
       updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
     )`);
+    await runDdl(connection, `CREATE TABLE bes_fleet_vehicle_models (
+      vehicle_uid VARCHAR2(80) PRIMARY KEY,
+      file_name VARCHAR2(255) NOT NULL,
+      mime_type VARCHAR2(120) DEFAULT 'model/gltf-binary' NOT NULL,
+      file_size NUMBER NOT NULL,
+      file_blob BLOB NOT NULL,
+      updated_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
+    )`);
     await runDdl(connection, `CREATE TABLE bes_bfm_facilities (
       facility_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       facility_uid VARCHAR2(80) NOT NULL UNIQUE,
@@ -973,9 +1013,124 @@ export async function initializeDatabase() {
       CONSTRAINT chk_bes_policy_task_status CHECK (workflow_status IN ('Received','Under Review','For Approval','Approved','Issued','Completed','Returned'))
     )`);
     await runDdl(connection, `CREATE INDEX ix_bes_policy_task_status ON bes_policy_task_processing (workflow_status, updated_at)`);
+    await runDdl(connection, `CREATE TABLE bes_performance_plans (
+      plan_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      employee_user_id NUMBER NOT NULL REFERENCES bes_users(user_id) ON DELETE CASCADE,
+      cycle_label VARCHAR2(120) NOT NULL,
+      period_start DATE NOT NULL,
+      period_end DATE NOT NULL,
+      plan_status VARCHAR2(30) DEFAULT 'DRAFT' NOT NULL,
+      created_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_perf_plan_status CHECK (plan_status IN ('DRAFT','ACTIVE','COMPLETED','REVIEWED')),
+      CONSTRAINT chk_bes_perf_plan_dates CHECK (period_end >= period_start)
+    )`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_perf_plan_employee_cycle ON bes_performance_plans (employee_user_id, UPPER(cycle_label))`);
+    await runDdl(connection, `CREATE TABLE bes_performance_targets (
+      target_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      plan_id NUMBER NOT NULL REFERENCES bes_performance_plans(plan_id) ON DELETE CASCADE,
+      target_description CLOB NOT NULL,
+      measure_type VARCHAR2(20) DEFAULT 'COUNT' NOT NULL,
+      target_value NUMBER(14,2) NOT NULL,
+      target_unit VARCHAR2(80) NOT NULL,
+      target_weight NUMBER(6,2) DEFAULT 0 NOT NULL,
+      due_date DATE,
+      actual_value NUMBER(14,2),
+      target_status VARCHAR2(30) DEFAULT 'NOT_STARTED' NOT NULL,
+      sort_order NUMBER DEFAULT 10 NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_perf_target_type CHECK (measure_type IN ('COUNT','PERCENTAGE','MILESTONE','COMPLIANCE')),
+      CONSTRAINT chk_bes_perf_target_value CHECK (target_value > 0),
+      CONSTRAINT chk_bes_perf_target_weight CHECK (target_weight >= 0 AND target_weight <= 100)
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_perf_target_plan ON bes_performance_targets (plan_id, sort_order, target_id)`);
+    await runDdl(connection, `CREATE TABLE bes_performance_accomplishments (
+      accomplishment_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      target_id NUMBER NOT NULL REFERENCES bes_performance_targets(target_id) ON DELETE CASCADE,
+      accomplishment_description CLOB NOT NULL,
+      accomplished_quantity NUMBER(14,2) NOT NULL,
+      accomplished_on DATE,
+      created_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_perf_accomp_qty CHECK (accomplished_quantity > 0)
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_perf_accomp_target ON bes_performance_accomplishments (target_id, created_at, accomplishment_id)`);
+    await runDdl(connection, `CREATE TABLE bes_performance_evidence (
+      evidence_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      accomplishment_id NUMBER NOT NULL REFERENCES bes_performance_accomplishments(accomplishment_id) ON DELETE CASCADE,
+      file_name VARCHAR2(255) NOT NULL,
+      mime_type VARCHAR2(200) DEFAULT 'application/octet-stream' NOT NULL,
+      file_size NUMBER NOT NULL,
+      file_blob BLOB NOT NULL,
+      uploaded_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_perf_evidence_accomp ON bes_performance_evidence (accomplishment_id, evidence_id)`);
+    await runDdl(connection, `CREATE TABLE bes_performance_assignments (
+      assignment_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      position_id NUMBER NOT NULL REFERENCES bes_positions(position_id) ON DELETE CASCADE,
+      employee_user_id NUMBER NOT NULL REFERENCES bes_users(user_id) ON DELETE CASCADE,
+      detail_order VARCHAR2(500),
+      effective_start DATE,
+      effective_end DATE,
+      assignment_mode VARCHAR2(20) DEFAULT 'INCLUDE' NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_perf_assignment_active CHECK (is_active IN ('Y','N')),
+      CONSTRAINT chk_bes_perf_assignment_mode CHECK (assignment_mode IN ('INCLUDE','EXCLUDE')),
+      CONSTRAINT chk_bes_perf_assignment_dates CHECK (effective_end IS NULL OR effective_start IS NULL OR effective_end >= effective_start)
+    )`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_perf_assignment ON bes_performance_assignments (position_id, employee_user_id)`);
+    await runDdl(connection, `CREATE INDEX ix_bes_perf_assignment_employee ON bes_performance_assignments (employee_user_id, is_active)`);
+    await addColumn(connection, `ALTER TABLE bes_performance_assignments ADD (assignment_mode VARCHAR2(20) DEFAULT 'INCLUDE' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_performance_assignments ADD (current_level NUMBER(1))`);
+    await dropConstraint(connection, 'BES_PERFORMANCE_ASSIGNMENTS', 'CHK_BES_PERF_ASSIGNMENT_MODE');
+    await runDdl(connection, `ALTER TABLE bes_performance_assignments ADD CONSTRAINT chk_bes_perf_assignment_mode CHECK (assignment_mode IN ('INCLUDE','EXCLUDE'))`);
+    await runDdl(connection, `CREATE TABLE bes_position_dr_pl (
+      position_id NUMBER PRIMARY KEY REFERENCES bes_positions(position_id) ON DELETE CASCADE,
+      position_purpose CLOB,
+      employment_level VARCHAR2(120),
+      reports_to VARCHAR2(180),
+      area_of_work VARCHAR2(180),
+      position_levels_json CLOB,
+      max_level NUMBER(3) DEFAULT 4 NOT NULL,
+      competency_notes_json CLOB,
+      categories_json CLOB,
+      duties_json CLOB,
+      source_document VARCHAR2(500),
+      updated_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
+    )`);
+    await addColumn(connection, `ALTER TABLE bes_position_dr_pl ADD (categories_json CLOB)`);
+    await addColumn(connection, `ALTER TABLE bes_position_dr_pl ADD (max_level NUMBER(3) DEFAULT 4 NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_position_dr_pl ADD (competency_notes_json CLOB)`);
+    await runDdl(connection, `CREATE TABLE bes_employee_skill_checks (
+      employee_user_id NUMBER NOT NULL REFERENCES bes_users(user_id) ON DELETE CASCADE,
+      position_id NUMBER NOT NULL REFERENCES bes_positions(position_id) ON DELETE CASCADE,
+      duty_id VARCHAR2(120) NOT NULL,
+      attained CHAR(1) DEFAULT 'N' NOT NULL,
+      remarks VARCHAR2(1000),
+      assessed_by_user_id NUMBER REFERENCES bes_users(user_id) ON DELETE SET NULL,
+      assessed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT pk_bes_employee_skill_checks PRIMARY KEY (employee_user_id,position_id,duty_id),
+      CONSTRAINT chk_bes_skill_attained CHECK (attained IN ('Y','N'))
+    )`);
+    await addColumn(connection, `ALTER TABLE bes_employee_skill_checks ADD (level_2 CHAR(1) DEFAULT 'N' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_employee_skill_checks ADD (level_3 CHAR(1) DEFAULT 'N' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_employee_skill_checks ADD (level_4 CHAR(1) DEFAULT 'N' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_employee_skill_checks ADD (levels_json CLOB)`);
     await createHroToolTaskTables(connection);
     await seedAccessControl(connection);
     await seedOrganizationalStructure(connection);
+    await seedPositionDrPl(connection);
     await seedToolRegistry(connection);
     await seedCalendarEvents(connection);
     await seedPolicyRecords(connection);

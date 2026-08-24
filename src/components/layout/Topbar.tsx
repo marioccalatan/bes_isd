@@ -9,26 +9,29 @@ import { useAuth } from '@/context/AuthContext';
 import { useData } from '@/context/DataContext';
 import { useUI } from '@/context/UIContext';
 import { useTheme, type ThemeMode } from '@/context/ThemeContext';
-import { useRolePreview, PREVIEWABLE_ROLES, DEPARTMENT_MANAGER_OPTIONS, ISD_PREVIEW_OPTIONS } from '@/context/RolePreviewContext';
+import { useRolePreview } from '@/context/RolePreviewContext';
+import { fetchOrgStructure, type OrgDepartment, type OrgPositionClass } from '@/lib/api';
 import { CURRENT_EMPLOYEE } from '@/lib/mockData';
 import { buildSearchResults, type SearchResult } from '@/lib/search';
 import { SERVICES } from '@/lib/services';
 import { cn, initials, timeAgo } from '@/lib/utils';
 import { canSeeAdministration } from '@/lib/permissions';
-import type { AppRole } from '@/lib/types';
+import type { AppRole, DepartmentId } from '@/lib/types';
 import { DropdownMenu, DropdownItem, DropdownSeparator, DropdownLabel } from '@/components/ui/dropdown';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 
 export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const navigate = useNavigate();
-  const { logout, user } = useAuth();
+  const { logout, token, user } = useAuth();
   const data = useData();
   const { setAboutOpen, startTour } = useUI();
   const { mode, resolvedTheme, accentTheme, accentThemes, setMode, setAccentTheme } = useTheme();
-  const { effectiveRole, isPreviewing, previewDepartmentId, previewLabel, setPreviewRole, setPreviewDepartmentManager, setPreviewPersona, returnToAdministrator } = useRolePreview();
+  const { effectiveRole, isPreviewing, previewDepartmentId, previewLabel, previewOffice, previewPosition, setPreviewPersona, returnToAdministrator } = useRolePreview();
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [previewDepartments, setPreviewDepartments] = useState<OrgDepartment[]>([]);
+  const [previewDepartmentsLoading, setPreviewDepartmentsLoading] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -63,6 +66,25 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const signedInAsAdministrator = canSeeAdministration(profileRole as AppRole) || (user?.roles ?? []).some((role) => role.startsWith('Administrator'));
   const showRolePreviewMenu = signedInAsAdministrator && !isPreviewing;
   const profilePhoto = user?.profilePhoto;
+
+  useEffect(() => {
+    if (!signedInAsAdministrator || !token) return;
+    let cancelled = false;
+    setPreviewDepartmentsLoading(true);
+    fetchOrgStructure(token)
+      .then((departments) => { if (!cancelled) setPreviewDepartments(departments); })
+      .catch(() => { if (!cancelled) setPreviewDepartments([]); })
+      .finally(() => { if (!cancelled) setPreviewDepartmentsLoading(false); });
+    return () => { cancelled = true; };
+  }, [signedInAsAdministrator, token]);
+
+  const previewRoleForClass = (employeeClass: OrgPositionClass): AppRole => ({
+    DEPARTMENT_MANAGER: 'Department Manager',
+    DEPARTMENT_SECRETARY: 'Department Secretary',
+    OFFICE_SECRETARY: 'Office Secretary',
+    SUPERVISOR: 'Supervisor',
+    RAF: 'Employee',
+  })[employeeClass] as AppRole;
 
   function goTo(to: string) {
     setSearchOpen(false);
@@ -206,53 +228,37 @@ export function Topbar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
             {showRolePreviewMenu && (
               <>
                 <DropdownLabel>View BES As (Role Preview)</DropdownLabel>
-                <p className="px-2.5 pb-0.5 pt-1.5 text-xs font-medium text-slate-500">Institutional Services Department</p>
-                {ISD_PREVIEW_OPTIONS.map((opt) => {
-                  const active = effectiveRole === opt.role && previewDepartmentId === opt.departmentId && previewLabel.includes(opt.office);
-                  return (
-                    <DropdownItem
-                      key={opt.id}
-                      onClick={() => { close(); setPreviewPersona(opt.role, opt.departmentId, `${opt.role} — ${opt.office}`, opt.office, opt.position); }}
-                      className={cn('pl-6', active ? 'bg-brand-50 text-brand-700' : '')}
-                    >
-                      <Eye className="h-4 w-4 text-slate-400" />
-                      <span className="min-w-0">
-                        <span className="block truncate">{opt.office}</span>
-                        <span className="block truncate text-[11px] text-slate-400">{opt.name} · {opt.position} · {opt.role}</span>
-                      </span>
-                    </DropdownItem>
-                  );
-                })}
-                {PREVIEWABLE_ROLES.map((role) => {
-                  if (role === 'Department Manager') {
-                    return (
-                      <div key={role}>
-                        <p className="px-2.5 pb-0.5 pt-1.5 text-xs font-medium text-slate-500">Department Manager</p>
-                        {DEPARTMENT_MANAGER_OPTIONS.map((opt) => {
-                          const active = effectiveRole === 'Department Manager' && previewDepartmentId === opt.departmentId;
-                          return (
-                            <DropdownItem
-                              key={opt.departmentId}
-                              onClick={() => { close(); setPreviewDepartmentManager(opt.departmentId); }}
-                              className={cn('pl-6', active ? 'bg-brand-50 text-brand-700' : '')}
-                            >
-                              <Eye className="h-4 w-4 text-slate-400" />
-                              <span className="min-w-0">
-                                <span className="block truncate">{opt.departmentName}</span>
-                                <span className="block truncate text-[11px] text-slate-400">{opt.managerName} · {opt.position}</span>
-                              </span>
-                            </DropdownItem>
-                          );
+                {previewDepartmentsLoading && <p className="px-2.5 py-3 text-xs text-slate-500">Loading departments and offices…</p>}
+                {!previewDepartmentsLoading && previewDepartments.length === 0 && <p className="px-2.5 py-3 text-xs text-slate-500">No department structure is available.</p>}
+                {previewDepartments.map((department) => (
+                  <div key={department.id} className="mt-1 first:mt-0">
+                    <p className="sticky top-0 z-10 border-y border-slate-200 bg-surface px-2.5 py-2 text-xs font-semibold text-brand-700">
+                      {department.name} <span className="font-normal text-slate-400">({department.code})</span>
+                    </p>
+                    {department.positions.length > 0 && <p className="px-3 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Department Level / No Office</p>}
+                    {department.positions.map((position) => {
+                      const role = previewRoleForClass(position.employeeClass);
+                      const office = 'Department Level / No Office';
+                      const active = effectiveRole === role && previewDepartmentId === department.code && previewOffice === office && previewPosition === position.title;
+                      return <DropdownItem key={`${department.id}-position-${position.id}`} onClick={() => { close(); setPreviewPersona(role, department.code as DepartmentId, `${role} — ${department.name}`, office, position.title); }} className={cn('pl-6', active && 'bg-brand-50 text-brand-700')}>
+                        <Eye className="h-4 w-4 shrink-0 text-slate-400" /><span className="min-w-0"><span className="block truncate">{position.title}</span><span className="block truncate text-[11px] text-slate-400">{role}</span></span>
+                      </DropdownItem>;
+                    })}
+                    {department.offices.map((office) => (
+                      <div key={office.id}>
+                        <p className="px-3 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{office.name}</p>
+                        {office.positions.length === 0 && <p className="px-6 py-1 text-[11px] italic text-slate-400">No positions configured</p>}
+                        {office.positions.map((position) => {
+                          const role = previewRoleForClass(position.employeeClass);
+                          const active = effectiveRole === role && previewDepartmentId === department.code && previewOffice === office.name && previewPosition === position.title;
+                          return <DropdownItem key={`${office.id}-position-${position.id}`} onClick={() => { close(); setPreviewPersona(role, department.code as DepartmentId, `${role} — ${office.name}`, office.name, position.title); }} className={cn('pl-6', active && 'bg-brand-50 text-brand-700')}>
+                            <Eye className="h-4 w-4 shrink-0 text-slate-400" /><span className="min-w-0"><span className="block truncate">{position.title}</span><span className="block truncate text-[11px] text-slate-400">{role}</span></span>
+                          </DropdownItem>;
                         })}
                       </div>
-                    );
-                  }
-                  return (
-                    <DropdownItem key={role} onClick={() => { close(); setPreviewRole(role); }} className={effectiveRole === role ? 'bg-brand-50 text-brand-700' : ''}>
-                      <Eye className="h-4 w-4 text-slate-400" /> {role}
-                    </DropdownItem>
-                  );
-                })}
+                    ))}
+                  </div>
+                ))}
               </>
             )}
             {isPreviewing && signedInAsAdministrator && (

@@ -14,6 +14,7 @@ import NotFound from './NotFound';
 import PoliciesIssuances from './PoliciesIssuances';
 import RecruitmentOnboarding from './RecruitmentOnboarding';
 import HumanResources from './HumanResources';
+import PerformanceManagement from './PerformanceManagement';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
 import { useRolePreview } from '@/context/RolePreviewContext';
@@ -58,7 +59,8 @@ export default function WorkspaceModule() {
   if (moduleId === 'recruitment') return <RecruitmentOnboarding module={mod} />;
   if (moduleId === 'human-resources') return <HumanResources module={mod} taskSubject="Human Resource" />;
   if (moduleId === 'employee-relations') return <HumanResources module={mod} taskSubject="Employee Relations" />;
-  if (['learning-development', 'performance-management', 'institutional-communications', 'member-programs', 'records-management', 'events-management'].includes(moduleId ?? '')) {
+  if (moduleId === 'performance-management') return <PerformanceManagement module={mod} />;
+  if (['learning-development', 'institutional-communications', 'member-programs', 'records-management', 'events-management'].includes(moduleId ?? '')) {
     return <HumanResources module={mod} taskSubject={mod.name} />;
   }
 

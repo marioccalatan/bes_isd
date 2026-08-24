@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ClipboardCheck, MapPin, Pencil, Plus, UserPlus, Users } from 'lucide-react';
+import { Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ClipboardCheck, FileSpreadsheet, MapPin, Pencil, Plus, Printer, UserPlus, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
@@ -21,6 +21,7 @@ const STATUSES: BfmTodoStatus[] = ['Pending', 'In Progress', 'Completed', 'Defer
 const emptyFacility = { name: '', type: 'Building', description: '', location: '' };
 const emptyPersonnel = { name: '', employeeNo: '', position: '', contact: '' };
 const emptyTodo = { title: '', description: '', category: 'General', frequency: 'As Needed', customDays: [] as number[], priority: 'Normal', dueDate: '', workerIds: [] as string[] };
+const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[character]!);
 
 export function BuildingFacilitiesOperations() {
   const { token } = useAuth();
@@ -38,6 +39,9 @@ export function BuildingFacilitiesOperations() {
   const [todoForm, setTodoForm] = useState(emptyTodo);
   const [statusTodo, setStatusTodo] = useState<BfmTodo | null>(null);
   const [statusForm, setStatusForm] = useState<{ status: BfmTodoStatus; workerId: string; note: string }>({ status: 'Completed', workerId: '', note: '' });
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportAction, setReportAction] = useState<'print' | 'excel'>('print');
+  const [reportFacilityIds, setReportFacilityIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +78,22 @@ export function BuildingFacilitiesOperations() {
     }
     return result;
   }, [data?.todos]);
+  const facilityById = useMemo(() => new Map((data?.facilities ?? []).map((facility) => [facility.id, facility])), [data?.facilities]);
+  const reportGroups = useMemo(() => (childrenByParent.get('ROOT') ?? []).map((root) => {
+    const children = childrenByParent.get(root.id) ?? [];
+    return { root, options: children.length ? children : [root] };
+  }), [childrenByParent]);
+  const allReportFacilityIds = useMemo(() => reportGroups.flatMap((group) => group.options.map((facility) => facility.id)), [reportGroups]);
+
+  function isWithinFacility(facilityId: string, ancestorId: string) {
+    let current = facilityById.get(facilityId);
+    while (current) { if (current.id === ancestorId) return true; current = current.parentId ? facilityById.get(current.parentId) : undefined; }
+    return false;
+  }
+
+  function countTodosWithin(facilityId: string) {
+    return (data?.todos ?? []).filter((todo) => isWithinFacility(todo.facilityId, facilityId)).length;
+  }
 
   const todoTemplates = useMemo(() => {
     const grouped = new Map<string, BfmTodo[]>();
@@ -208,6 +228,44 @@ export function BuildingFacilitiesOperations() {
     } finally { setSaving(false); }
   }
 
+  function openReport(action: 'print' | 'excel') {
+    setReportAction(action);
+    setReportFacilityIds(new Set(allReportFacilityIds));
+    setReportOpen(true);
+  }
+
+  function activityFrequencyTable() {
+    const selectedTodos = (data?.todos ?? []).filter((todo) => [...reportFacilityIds].some((facilityId) => isWithinFacility(todo.facilityId, facilityId)));
+    const selectedTodoIds = new Set(selectedTodos.map((todo) => todo.id));
+    let itemNumber = 0;
+    const renderFacilityReport = (facility: BfmFacility, depth = 0): string => {
+      const directTodos = (todosByFacility.get(facility.id) ?? []).filter((todo) => selectedTodoIds.has(todo.id)).sort((left, right) => left.title.localeCompare(right.title));
+      const childRows = (childrenByParent.get(facility.id) ?? []).map((child) => renderFacilityReport(child, depth + 1)).join('');
+      if (!directTodos.length && !childRows) return '';
+      const safeDepth = Math.min(depth, 4);
+      const todoRows = directTodos.map((todo) => { itemNumber += 1; return `<tr class="activity-row"><td>${itemNumber}</td><td>${escapeHtml(todo.title)}</td><td>${escapeHtml(todo.frequency)}</td></tr>`; }).join('');
+      return `<tr class="facility-row facility-level-${safeDepth}"><td colspan="3"><span style="padding-left:${safeDepth * 18}px">${depth ? '↳ ' : ''}${escapeHtml(facility.name)}</span></td></tr>${todoRows}${childRows}`;
+    };
+    const rows = (childrenByParent.get('ROOT') ?? []).map((facility) => renderFacilityReport(facility)).join('');
+    return `<table><thead><tr><th>No.</th><th>Activity</th><th>Frequency</th></tr></thead><tbody>${rows || '<tr><td colspan="3">No activities selected.</td></tr>'}</tbody></table>`;
+  }
+
+  function processReport() {
+    if (!reportFacilityIds.size) return;
+    const table = activityFrequencyTable();
+    if (reportAction === 'print') {
+      const printWindow = window.open('', '_blank', 'width=1000,height=800');
+      if (!printWindow) return;
+      printWindow.document.write(`<!doctype html><html><head><title>Building and Facilities Activities</title><style>@page{size:portrait;margin:12mm}body{font-family:Arial,sans-serif;color:#111}h1{font-size:20px;margin:0 0 14px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #999;padding:6px;text-align:left}th{background:#dfeee5}.facility-row td{background:#dcebe1;font-weight:700;border-top:2px solid #72927c}.facility-level-1 td{background:#e8f2eb}.facility-level-2 td{background:#f0f6f2}.facility-level-3 td,.facility-level-4 td{background:#f7faf8}.activity-row:nth-of-type(even){background:#fafafa}th:first-child,td:first-child{width:40px}th:last-child,td:last-child{width:130px}</style></head><body><h1>Building and Facilities — Activities and Frequency</h1>${table}</body></html>`);
+      printWindow.document.close(); printWindow.focus(); printWindow.print();
+    } else {
+      const workbook = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"><style>table{border-collapse:collapse}th,td{border:1px solid #999;padding:6px}th{background:#dfeee5}.facility-row td{background:#dcebe1;font-weight:bold}.facility-level-1 td{background:#e8f2eb}.facility-level-2 td{background:#f0f6f2}</style></head><body><h2>Building and Facilities — Activities and Frequency</h2>${table}</body></html>`;
+      const url = URL.createObjectURL(new Blob([workbook], { type: 'application/vnd.ms-excel' }));
+      const link = document.createElement('a'); link.href = url; link.download = 'building-facilities-activities-frequency.xls'; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    setReportOpen(false);
+  }
+
   function renderFacility(facility: BfmFacility, depth = 0): ReactNode {
     const children = childrenByParent.get(facility.id) ?? [];
     const todos = todosByFacility.get(facility.id) ?? [];
@@ -248,11 +306,20 @@ export function BuildingFacilitiesOperations() {
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div><p className="font-medium text-slate-800">Facility hierarchy and recurring work</p><p className="text-sm text-slate-500">Expand any facility to view nested areas and operational to-dos.</p></div>
       <div className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={() => openReport('print')}><Printer className="h-4 w-4" /> Print</Button>
+        <Button variant="outline" onClick={() => openReport('excel')}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button>
         <Button variant="outline" onClick={() => window.open('/workspace/building-facilities/maintenance', '_blank', 'noopener,noreferrer')}><CalendarDays className="h-4 w-4" /> Maintenance Page</Button>
         {data.canManage && <><Button variant="outline" onClick={() => setPersonnelOpen(true)}><UserPlus className="h-4 w-4" /> Add Personnel</Button><Button onClick={() => openAddFacility()}><Plus className="h-4 w-4" /> Add Facility</Button></>}
       </div>
     </div>
     <div className="space-y-3">{(childrenByParent.get('ROOT') ?? []).map((facility) => renderFacility(facility))}</div>
+
+    <Dialog open={reportOpen} onClose={() => setReportOpen(false)} title={reportAction === 'print' ? 'Print Activities and Frequency' : 'Export Activities and Frequency'} description="Select one or more facility groups. The report includes only activity names and frequencies in parent-child order." size="md" footer={<><Button variant="outline" onClick={() => setReportOpen(false)}>Cancel</Button><Button disabled={!reportFacilityIds.size} onClick={processReport}>{reportAction === 'print' ? <><Printer className="h-4 w-4" /> Print Selected</> : <><FileSpreadsheet className="h-4 w-4" /> Export Selected</>}</Button></>}>
+      <div className="space-y-4">
+        <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 font-semibold"><input type="checkbox" className="h-4 w-4 accent-emerald-600" checked={allReportFacilityIds.length > 0 && reportFacilityIds.size === allReportFacilityIds.length} onChange={(event) => setReportFacilityIds(event.target.checked ? new Set(allReportFacilityIds) : new Set())} />All facilities</label>
+        {reportGroups.map(({ root, options }) => <div key={root.id} className="rounded-lg border border-slate-200 p-3"><div className="mb-2 flex items-center justify-between gap-3"><p className="font-semibold">{root.name}</p><button type="button" className="text-xs font-semibold text-brand-700 hover:underline" onClick={() => setReportFacilityIds((current) => { const next = new Set(current); const allSelected = options.every((facility) => next.has(facility.id)); options.forEach((facility) => allSelected ? next.delete(facility.id) : next.add(facility.id)); return next; })}>{options.every((facility) => reportFacilityIds.has(facility.id)) ? 'Clear group' : 'Select group'}</button></div><div className="grid gap-2 sm:grid-cols-2">{options.map((facility) => <label key={facility.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-slate-50"><input type="checkbox" className="h-4 w-4 accent-emerald-600" checked={reportFacilityIds.has(facility.id)} onChange={() => setReportFacilityIds((current) => { const next = new Set(current); if (next.has(facility.id)) next.delete(facility.id); else next.add(facility.id); return next; })} /><span>{facility.name}</span><Badge>{countTodosWithin(facility.id)}</Badge></label>)}</div></div>)}
+      </div>
+    </Dialog>
 
     <Dialog open={!!facilityDialog} onClose={() => setFacilityDialog(null)} title={facilityDialog?.editing ? 'Edit Facility' : facilityDialog?.parent ? `Add under ${facilityDialog.parent.name}` : 'Add Facility'} footer={<div className="flex w-full items-center justify-between gap-2">{facilityDialog?.editing ? <Button variant="destructive" onClick={removeFacility} disabled={saving}>Delete Facility</Button> : <span />}<span className="flex gap-2"><Button variant="outline" onClick={() => setFacilityDialog(null)}>Cancel</Button><Button onClick={saveFacility} disabled={saving || !facilityForm.name.trim()}>{saving ? 'Saving…' : 'Save Facility'}</Button></span></div>}>
       <div className="grid gap-4 sm:grid-cols-2"><div className="sm:col-span-2"><Label required>Name</Label><Input value={facilityForm.name} onChange={(e) => setFacilityForm((v) => ({ ...v, name: e.target.value }))} /></div><div><Label>Type</Label><Select value={facilityForm.type} onChange={(e) => setFacilityForm((v) => ({ ...v, type: e.target.value }))}>{FACILITY_TYPES.map((value) => <option key={value}>{value}</option>)}</Select></div><div><Label>Location</Label><Input value={facilityForm.location} onChange={(e) => setFacilityForm((v) => ({ ...v, location: e.target.value }))} /></div><div className="sm:col-span-2"><Label>Information</Label><Textarea value={facilityForm.description} onChange={(e) => setFacilityForm((v) => ({ ...v, description: e.target.value }))} /></div></div>

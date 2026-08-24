@@ -66,12 +66,12 @@ const readBody = async (req, maxChars = 8_000_000) => {
   for await (const chunk of req) { raw += chunk; if (raw.length > maxChars) throw Object.assign(new Error(`Request body exceeds the ${Math.round(maxChars / 1_000_000)} MB limit.`), { statusCode: 413 }); }
   return raw ? JSON.parse(raw) : {};
 };
-const readBinaryBody = async (req, maxBytes = 25 * 1024 * 1024) => {
+const readBinaryBody = async (req, maxBytes = 25 * 1024 * 1024, label = 'File') => {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > maxBytes) throw Object.assign(new Error('DOCX file exceeds the 25 MB limit.'), { statusCode: 413 });
+    if (size > maxBytes) throw Object.assign(new Error(`${label} exceeds the ${Math.round(maxBytes / 1024 / 1024)} MB limit.`), { statusCode: 413 });
     chunks.push(chunk);
   }
   return Buffer.concat(chunks, size);
@@ -471,7 +471,7 @@ async function createSession(connection, userId, rememberMe) {
 
 async function currentSessionUser(connection, token) {
   if (!token) return null;
-  const found = await connection.execute(`SELECT u.user_id, u.username, u.department_code, u.app_role
+  const found = await connection.execute(`SELECT u.user_id, u.username, u.department_code, u.unit_name, u.position_title, u.app_role
     FROM bes_users u
     JOIN bes_auth_sessions s ON s.user_id = u.user_id
     WHERE s.session_hash = :hash
@@ -480,7 +480,17 @@ async function currentSessionUser(connection, token) {
   return found.rows[0] ?? null;
 }
 
-const isTaskModerator = (user) => ['Department Manager', 'Department Secretary', 'Office Secretary', 'Administrator'].includes(user?.APP_ROLE);
+const isTaskModerator = (user) => ['Department Manager', 'Department Secretary', 'Supervisor', 'Office Secretary', 'Administrator'].includes(user?.APP_ROLE);
+const isPerformanceManager = (user) => ['Department Manager', 'Supervisor', 'Administrator'].includes(user?.APP_ROLE);
+const isDepartmentPerformanceManager = (user) => user?.APP_ROLE === 'Department Manager';
+const isOfficePerformanceManager = (user) => user?.APP_ROLE === 'Supervisor';
+const canAccessPerformanceEmployee = (user, employee, manage = false) => {
+  if (!user || !employee) return false;
+  if (user.APP_ROLE === 'Administrator') return true;
+  if (isDepartmentPerformanceManager(user)) return employee.DEPARTMENT_CODE === user.DEPARTMENT_CODE;
+  if (isOfficePerformanceManager(user)) return employee.DEPARTMENT_CODE === user.DEPARTMENT_CODE && employee.UNIT_NAME === user.UNIT_NAME;
+  return !manage && Number(employee.EMPLOYEE_USER_ID ?? employee.USER_ID) === Number(user.USER_ID);
+};
 
 const DB_SYNC_TABLES = [
   'BES_USERS',
@@ -503,6 +513,11 @@ const DB_SYNC_TABLES = [
   'BES_HRO_RECRUITMENT_POSITIONS',
   'BES_POLICY_RECORDS',
   'BES_POLICY_TASK_PROCESSING',
+  'BES_PERFORMANCE_PLANS',
+  'BES_PERFORMANCE_TARGETS',
+  'BES_PERFORMANCE_ASSIGNMENTS',
+  'BES_POSITION_DR_PL',
+  'BES_EMPLOYEE_SKILL_CHECKS',
   'BES_FLEET_STORE',
   'BES_BFM_FACILITIES',
   'BES_BFM_PERSONNEL',
@@ -522,6 +537,11 @@ const DB_SYNC_TABLES = [
   'BES_HRO_EM_TASK_PROCESSING',
 ];
 const DB_SYNC_DELETE_ORDER = [
+  'BES_EMPLOYEE_SKILL_CHECKS',
+  'BES_POSITION_DR_PL',
+  'BES_PERFORMANCE_ASSIGNMENTS',
+  'BES_PERFORMANCE_TARGETS',
+  'BES_PERFORMANCE_PLANS',
   'BES_BFM_PROJECTS',
   'BES_BFM_WORK_DETAILS',
   'BES_BFM_ACTIVITY',
@@ -569,6 +589,9 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_DEPARTMENTS',
   'BES_OFFICES',
   'BES_POSITIONS',
+  'BES_POSITION_DR_PL',
+  'BES_PERFORMANCE_ASSIGNMENTS',
+  'BES_EMPLOYEE_SKILL_CHECKS',
   'BES_TOOL_ACCESS',
   'BES_TASK_SUBJECTS',
   'BES_MODULE_REGISTRY',
@@ -581,6 +604,8 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_HRO_RECRUITMENT_POSITIONS',
   'BES_POLICY_RECORDS',
   'BES_POLICY_TASK_PROCESSING',
+  'BES_PERFORMANCE_PLANS',
+  'BES_PERFORMANCE_TARGETS',
   'BES_FLEET_STORE',
   'BES_BFM_FACILITIES',
   'BES_BFM_PERSONNEL',
@@ -1204,25 +1229,45 @@ async function handle(req, res) {
       return json(res, 200, { ok: true });
     }
     if (req.method === 'GET' && req.url === '/api/admin/org-structure') {
-      const admin = await requireAdministrator(bearerToken(req));
-      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
       const structure = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, bearerToken(req));
+        if (!user) return null;
         const departments = await c.execute(`SELECT department_id, department_code, department_name FROM bes_departments WHERE is_active='Y' ORDER BY department_name`);
         const offices = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name FROM bes_offices WHERE is_active='Y' ORDER BY office_name`);
         const positions = await c.execute(`SELECT position_id, department_id, office_id, position_title, employee_class FROM bes_positions WHERE is_active='Y' ORDER BY position_title`);
-        return departments.rows.map((department) => ({
+        const ownAssignments = !isPerformanceManager(user) ? await c.execute(`SELECT position_id FROM bes_performance_assignments
+          WHERE employee_user_id=:userId AND is_active='Y' AND assignment_mode='INCLUDE'`, { userId: user.USER_ID }) : { rows: [] };
+        const ownPositionIds = new Set(ownAssignments.rows.map((assignment) => assignment.POSITION_ID));
+        const visiblePositions = !isPerformanceManager(user) ? positions.rows.filter((position) => ownPositionIds.has(position.POSITION_ID) || position.POSITION_TITLE === user.POSITION_TITLE) : positions.rows;
+        const employeeDepartmentIds = new Set(visiblePositions.map((position) => position.DEPARTMENT_ID ?? offices.rows.find((office) => office.OFFICE_ID === position.OFFICE_ID)?.DEPARTMENT_ID).filter(Boolean));
+        const visibleDepartments = user.APP_ROLE === 'Administrator' ? departments.rows
+          : !isPerformanceManager(user) ? departments.rows.filter((department) => employeeDepartmentIds.has(department.DEPARTMENT_ID))
+          : departments.rows.filter((department) => department.DEPARTMENT_CODE === user.DEPARTMENT_CODE);
+        const visibleOfficeIds = new Set();
+        if (isOfficePerformanceManager(user) || !isPerformanceManager(user)) {
+          offices.rows.filter((office) => office.OFFICE_NAME === user.UNIT_NAME).forEach((office) => visibleOfficeIds.add(office.OFFICE_ID));
+          if (!isPerformanceManager(user)) visiblePositions.forEach((position) => { if (position.OFFICE_ID) visibleOfficeIds.add(position.OFFICE_ID); });
+          let changed = true;
+          while (changed) {
+            changed = false;
+            offices.rows.forEach((office) => { if (visibleOfficeIds.has(office.PARENT_OFFICE_ID) && !visibleOfficeIds.has(office.OFFICE_ID)) { visibleOfficeIds.add(office.OFFICE_ID); changed = true; } });
+          }
+        }
+        const visibleOffices = (isOfficePerformanceManager(user) || !isPerformanceManager(user)) ? offices.rows.filter((office) => visibleOfficeIds.has(office.OFFICE_ID)) : offices.rows;
+        return visibleDepartments.map((department) => ({
           id: String(department.DEPARTMENT_ID), code: department.DEPARTMENT_CODE, name: department.DEPARTMENT_NAME,
-          positions: positions.rows.filter((position) => position.DEPARTMENT_ID === department.DEPARTMENT_ID && !position.OFFICE_ID).map((position) => ({
+          positions: visiblePositions.filter((position) => position.DEPARTMENT_ID === department.DEPARTMENT_ID && !position.OFFICE_ID).map((position) => ({
             id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS,
           })),
-          offices: offices.rows.filter((office) => office.DEPARTMENT_ID === department.DEPARTMENT_ID).map((office) => ({
+          offices: visibleOffices.filter((office) => office.DEPARTMENT_ID === department.DEPARTMENT_ID).map((office) => ({
             id: String(office.OFFICE_ID), name: office.OFFICE_NAME, parentOfficeId: office.PARENT_OFFICE_ID ? String(office.PARENT_OFFICE_ID) : null,
-            positions: positions.rows.filter((position) => position.OFFICE_ID === office.OFFICE_ID).map((position) => ({
+            positions: visiblePositions.filter((position) => position.OFFICE_ID === office.OFFICE_ID).map((position) => ({
               id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS,
             })),
           })),
         }));
       });
+      if (!structure) return json(res, 401, { error: 'Session expired.' });
       return json(res, 200, { departments: structure });
     }
     if (['POST', 'PUT'].includes(req.method ?? '') && req.url === '/api/admin/org-structure') {
@@ -1272,16 +1317,445 @@ async function handle(req, res) {
       });
       return json(res, 200, { ok: true });
     }
+    if (req.method === 'GET' && req.url === '/api/position-dr-pl') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const profiles = await c.execute(`SELECT position_id, position_purpose, employment_level, reports_to, area_of_work,
+            position_levels_json, max_level, competency_notes_json, categories_json, duties_json, source_document FROM bes_position_dr_pl ORDER BY position_id`);
+        return profiles.rows.map((profile) => {
+          let positionLevels = [];
+          let categories = [];
+          let competencyNotes = [];
+          let duties = [];
+          try { positionLevels = JSON.parse(String(profile.POSITION_LEVELS_JSON || '[]')); } catch { positionLevels = []; }
+          try { categories = JSON.parse(String(profile.CATEGORIES_JSON || '[]')); } catch { categories = []; }
+          try { competencyNotes = JSON.parse(String(profile.COMPETENCY_NOTES_JSON || '[]')); } catch { competencyNotes = []; }
+          if (!competencyNotes.length) competencyNotes = [
+            { level: 2, name: 'Basic', description: 'Basic/general understanding of the field to perform job duties.' },
+            { level: 3, name: 'Proficient', description: 'Sufficient understanding and experience to perform job duties. Can generalize basic principles to effectively function in both predictable and new situations.' },
+            { level: 4, name: 'Advanced', description: 'Broad and deep understanding and skills, with substantial experience in this area. Can apply the competency regularly and display this competency in complex, varied situations.' },
+          ];
+          try { duties = JSON.parse(String(profile.DUTIES_JSON || '[]')); } catch { duties = []; }
+          if (!categories.length) categories = [...new Set(duties.map((duty) => duty.kra).filter(Boolean))];
+          return { positionId: String(profile.POSITION_ID), purpose: profile.POSITION_PURPOSE || '', employmentLevel: profile.EMPLOYMENT_LEVEL || '',
+            reportsTo: profile.REPORTS_TO || '', areaOfWork: profile.AREA_OF_WORK || '', positionLevels, maxLevel: Number(profile.MAX_LEVEL) || 4, competencyNotes, categories, duties, sourceDocument: profile.SOURCE_DOCUMENT };
+        });
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { profiles: result });
+    }
+    const positionDrPlUpdateMatch = req.url.match(/^\/api\/position-dr-pl\/(\d+)$/);
+    if (req.method === 'PUT' && positionDrPlUpdateMatch) {
+      const token = bearerToken(req);
+      const positionId = Number(positionDrPlUpdateMatch[1]);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        const maxLevel = Number(body.maxLevel);
+        if (!Number.isInteger(maxLevel) || maxLevel < 2 || maxLevel > 20) throw Object.assign(new Error('Max Level must be an integer from 2 to 20.'), { statusCode: 400 });
+        const purpose = normalize(body.purpose);
+        const employmentLevel = normalize(body.employmentLevel);
+        const reportsTo = normalize(body.reportsTo);
+        const areaOfWork = normalize(body.areaOfWork);
+        if (!purpose || !employmentLevel || !reportsTo || !areaOfWork) throw Object.assign(new Error('All position details are required.'), { statusCode: 400 });
+        const competencyNotes = Array.isArray(body.competencyNotes) ? body.competencyNotes.map((note) => ({ level: Number(note.level), name: normalize(note.name), description: normalize(note.description) })).filter((note) => Number.isInteger(note.level) && note.level >= 2 && note.level <= maxLevel && note.name && note.description) : [];
+        const categories = Array.isArray(body.categories) ? [...new Set(body.categories.map((item) => normalize(item)).filter(Boolean))] : [];
+        const duties = Array.isArray(body.duties) ? body.duties.filter((duty) => duty && normalize(duty.id) && normalize(duty.kra) && normalize(duty.description)).map((duty) => ({
+          id: normalize(duty.id), kra: normalize(duty.kra), kraWeight: Number(duty.kraWeight) || 0, description: normalize(duty.description),
+          applicableLevels: Array.isArray(duty.applicableLevels) ? duty.applicableLevels.map((item) => normalize(item)).filter(Boolean) : [],
+          competency: normalize(duty.competency), levelRequirement: normalize(duty.levelRequirement),
+        })) : [];
+        await c.execute(`UPDATE bes_position_dr_pl SET position_purpose=:purpose, employment_level=:employmentLevel, reports_to=:reportsTo, area_of_work=:areaOfWork, max_level=:maxLevel, competency_notes_json=:competencyNotes, categories_json=:categories, duties_json=:duties, updated_by_user_id=:updatedBy, updated_at=SYSTIMESTAMP WHERE position_id=:positionId`, {
+          purpose, employmentLevel, reportsTo, areaOfWork, maxLevel, competencyNotes: JSON.stringify(competencyNotes), categories: JSON.stringify(categories), duties: JSON.stringify(duties), updatedBy: user.USER_ID, positionId,
+        });
+        const saved = await c.execute(`SELECT position_id, position_purpose, employment_level, reports_to, area_of_work, position_levels_json, source_document FROM bes_position_dr_pl WHERE position_id=:positionId`, { positionId });
+        if (!saved.rows.length) throw Object.assign(new Error('Position DR / PL record was not found.'), { statusCode: 404 });
+        let positionLevels = [];
+        try { positionLevels = JSON.parse(String(saved.rows[0].POSITION_LEVELS_JSON || '[]')); } catch { positionLevels = []; }
+        await c.commit();
+        const profile = saved.rows[0];
+        return { positionId: String(positionId), purpose, employmentLevel, reportsTo, areaOfWork, positionLevels, maxLevel, competencyNotes, categories, duties, sourceDocument: profile.SOURCE_DOCUMENT };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { profile: result });
+    }
+    if (req.method === 'GET' && req.url === '/api/performance-assignments') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const assignments = await c.execute(`SELECT a.assignment_id, a.position_id, a.employee_user_id, a.detail_order, a.effective_start, a.effective_end, a.assignment_mode, a.current_level,
+            u.department_code, u.unit_name FROM bes_performance_assignments a JOIN bes_users u ON u.user_id=a.employee_user_id
+          WHERE a.is_active='Y' ORDER BY a.created_at`);
+        assignments.rows = assignments.rows.filter((assignment) => canAccessPerformanceEmployee(user, assignment));
+        return assignments.rows.map((assignment) => ({
+          id: String(assignment.ASSIGNMENT_ID), positionId: String(assignment.POSITION_ID), employeeUserId: String(assignment.EMPLOYEE_USER_ID),
+          detailOrder: assignment.DETAIL_ORDER, effectiveStart: localDateOnly(assignment.EFFECTIVE_START) || null, effectiveEnd: localDateOnly(assignment.EFFECTIVE_END) || null,
+          mode: assignment.ASSIGNMENT_MODE || 'INCLUDE', currentLevel: assignment.CURRENT_LEVEL == null ? null : Number(assignment.CURRENT_LEVEL),
+        }));
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { assignments: result });
+    }
+    if (req.method === 'POST' && req.url === '/api/performance-assignments') {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        const positionId = Number(body.positionId);
+        const employeeUserId = Number(body.employeeUserId);
+        const detailOrder = nullableNormalize(body.detailOrder);
+        const effectiveStart = nullableNormalize(body.effectiveStart);
+        const effectiveEnd = nullableNormalize(body.effectiveEnd);
+        const currentLevel = Number(body.currentLevel);
+        if (!positionId || !employeeUserId) throw Object.assign(new Error('Position and employee are required.'), { statusCode: 400 });
+        if (![1, 2, 3, 4].includes(currentLevel)) throw Object.assign(new Error('Current level must be 1, 2, 3, or 4.'), { statusCode: 400 });
+        if ([effectiveStart, effectiveEnd].some((date) => date && !/^\d{4}-\d{2}-\d{2}$/.test(date))) throw Object.assign(new Error('Effective dates must be valid dates.'), { statusCode: 400 });
+        await c.execute(`MERGE INTO bes_performance_assignments a
+          USING (SELECT :positionId position_id, :employeeUserId employee_user_id FROM dual) src
+          ON (a.position_id=src.position_id AND a.employee_user_id=src.employee_user_id)
+          WHEN MATCHED THEN UPDATE SET detail_order=:detailOrder, current_level=:currentLevel,
+            effective_start=CASE WHEN :effectiveStart IS NULL THEN NULL ELSE TO_DATE(:effectiveStart,'YYYY-MM-DD') END,
+            effective_end=CASE WHEN :effectiveEnd IS NULL THEN NULL ELSE TO_DATE(:effectiveEnd,'YYYY-MM-DD') END,
+            assignment_mode='INCLUDE', is_active='Y', updated_at=SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (position_id,employee_user_id,detail_order,current_level,effective_start,effective_end,assignment_mode,created_by_user_id)
+            VALUES (:positionId,:employeeUserId,:detailOrder,:currentLevel,
+              CASE WHEN :effectiveStart IS NULL THEN NULL ELSE TO_DATE(:effectiveStart,'YYYY-MM-DD') END,
+              CASE WHEN :effectiveEnd IS NULL THEN NULL ELSE TO_DATE(:effectiveEnd,'YYYY-MM-DD') END,'INCLUDE',:createdByUserId)`, {
+          positionId, employeeUserId, detailOrder, currentLevel, effectiveStart, effectiveEnd, createdByUserId: user.USER_ID,
+        });
+        const saved = await c.execute(`SELECT assignment_id FROM bes_performance_assignments WHERE position_id=:positionId AND employee_user_id=:employeeUserId`, { positionId, employeeUserId });
+        await c.commit();
+        return { id: String(saved.rows[0].ASSIGNMENT_ID), positionId: String(positionId), employeeUserId: String(employeeUserId), detailOrder, effectiveStart, effectiveEnd, mode: 'INCLUDE', currentLevel };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 201, { assignment: result });
+    }
+    const performanceAssignmentDeleteMatch = url.pathname.match(/^\/api\/performance-assignments\/(\d+)\/(\d+)$/);
+    if (req.method === 'DELETE' && performanceAssignmentDeleteMatch) {
+      const token = bearerToken(req);
+      const positionId = Number(performanceAssignmentDeleteMatch[1]);
+      const employeeUserId = Number(performanceAssignmentDeleteMatch[2]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        await c.execute(`MERGE INTO bes_performance_assignments a USING (SELECT :positionId position_id, :employeeUserId employee_user_id FROM dual) src
+          ON (a.position_id=src.position_id AND a.employee_user_id=src.employee_user_id)
+          WHEN MATCHED THEN UPDATE SET assignment_mode='EXCLUDE', is_active='Y', updated_at=SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (position_id,employee_user_id,assignment_mode,is_active,created_by_user_id)
+            VALUES (:positionId,:employeeUserId,'EXCLUDE','Y',:createdByUserId)`, { positionId, employeeUserId, createdByUserId: user.USER_ID });
+        const saved = await c.execute(`SELECT assignment_id FROM bes_performance_assignments WHERE position_id=:positionId AND employee_user_id=:employeeUserId`, { positionId, employeeUserId });
+        await c.commit();
+        return { id: String(saved.rows[0].ASSIGNMENT_ID), positionId: String(positionId), employeeUserId: String(employeeUserId), detailOrder: null, effectiveStart: null, effectiveEnd: null, mode: 'EXCLUDE' };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { assignment: result });
+    }
+    if (req.method === 'GET' && req.url === '/api/employee-skill-checks') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const checks = await c.execute(`SELECT c.employee_user_id, c.position_id, c.duty_id, c.attained, c.level_2, c.level_3, c.level_4, c.levels_json, c.remarks, c.assessed_at,
+            u.department_code, u.unit_name FROM bes_employee_skill_checks c JOIN bes_users u ON u.user_id=c.employee_user_id
+          ORDER BY c.employee_user_id,c.position_id,c.duty_id`);
+        checks.rows = checks.rows.filter((check) => canAccessPerformanceEmployee(user, check));
+        return checks.rows.map((check) => { let levels = []; try { levels = JSON.parse(String(check.LEVELS_JSON || '[]')); } catch { levels = []; }
+          if (!levels.length) levels = [2, 3, 4].filter((level) => check[`LEVEL_${level}`] === 'Y');
+          return { employeeUserId: String(check.EMPLOYEE_USER_ID), positionId: String(check.POSITION_ID), dutyId: check.DUTY_ID,
+            attained: levels.length > 0, level2: levels.includes(2), level3: levels.includes(3), level4: levels.includes(4), levels,
+            remarks: check.REMARKS, assessedAt: localIso(check.ASSESSED_AT) || null }; });
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { checks: result });
+    }
+    if (req.method === 'PUT' && req.url === '/api/employee-skill-checks') {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        const employeeUserId = Number(body.employeeUserId);
+        const positionId = Number(body.positionId);
+        const dutyId = normalize(body.dutyId);
+        const levels = Array.isArray(body.levels) ? [...new Set(body.levels.map(Number).filter((level) => Number.isInteger(level) && level >= 2 && level <= 20))] : [];
+        const level2 = levels.includes(2) ? 'Y' : 'N';
+        const level3 = levels.includes(3) ? 'Y' : 'N';
+        const level4 = levels.includes(4) ? 'Y' : 'N';
+        const attained = level2 === 'Y' || level3 === 'Y' || level4 === 'Y' ? 'Y' : 'N';
+        const remarks = nullableNormalize(body.remarks);
+        if (!employeeUserId || !positionId || !dutyId) throw Object.assign(new Error('Employee, position, and duty are required.'), { statusCode: 400 });
+        await c.execute(`MERGE INTO bes_employee_skill_checks check_row USING (SELECT :employeeUserId employee_user_id, :positionId position_id, :dutyId duty_id FROM dual) src
+          ON (check_row.employee_user_id=src.employee_user_id AND check_row.position_id=src.position_id AND check_row.duty_id=src.duty_id)
+          WHEN MATCHED THEN UPDATE SET attained=:attained, level_2=:level2, level_3=:level3, level_4=:level4, levels_json=:levelsJson, remarks=:remarks, assessed_by_user_id=:assessedBy,
+            assessed_at=SYSTIMESTAMP, updated_at=SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (employee_user_id,position_id,duty_id,attained,level_2,level_3,level_4,levels_json,remarks,assessed_by_user_id,assessed_at)
+            VALUES (:employeeUserId,:positionId,:dutyId,:attained,:level2,:level3,:level4,:levelsJson,:remarks,:assessedBy,SYSTIMESTAMP)`, {
+          employeeUserId, positionId, dutyId, attained, level2, level3, level4, levelsJson: JSON.stringify(levels), remarks, assessedBy: user.USER_ID,
+        });
+        await c.commit();
+        return { employeeUserId: String(employeeUserId), positionId: String(positionId), dutyId, attained: attained === 'Y',
+          level2: level2 === 'Y', level3: level3 === 'Y', level4: level4 === 'Y', levels, remarks, assessedAt: new Date().toISOString() };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { check: result });
+    }
+    if (req.method === 'GET' && req.url === '/api/performance-plans') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const plans = await c.execute(`SELECT p.plan_id, p.employee_user_id, p.cycle_label, p.period_start, p.period_end, p.plan_status,
+            u.employee_no, u.first_name, u.middle_name, u.last_name, u.suffix, u.department_code, u.unit_name
+          FROM bes_performance_plans p JOIN bes_users u ON u.user_id=p.employee_user_id
+          ORDER BY p.period_start DESC, u.last_name, u.first_name`);
+        const targets = await c.execute(`SELECT target_id, plan_id, target_description, measure_type, target_value, target_unit,
+            target_weight, due_date, actual_value, target_status
+          FROM bes_performance_targets ORDER BY plan_id, sort_order, target_id`);
+        const accomplishments = await c.execute(`SELECT accomplishment_id, target_id, accomplishment_description, accomplished_quantity, accomplished_on, created_at
+          FROM bes_performance_accomplishments ORDER BY target_id, created_at, accomplishment_id`);
+        const evidence = await c.execute(`SELECT evidence_id, accomplishment_id, file_name, mime_type, file_size
+          FROM bes_performance_evidence ORDER BY accomplishment_id, evidence_id`);
+        return plans.rows.filter((plan) => canAccessPerformanceEmployee(user, plan)).map((plan) => ({
+          id: String(plan.PLAN_ID), employeeUserId: String(plan.EMPLOYEE_USER_ID), employeeNo: plan.EMPLOYEE_NO,
+          employeeName: [plan.FIRST_NAME, plan.MIDDLE_NAME, plan.LAST_NAME, plan.SUFFIX].filter(Boolean).join(' '),
+          cycleLabel: plan.CYCLE_LABEL, periodStart: localDateOnly(plan.PERIOD_START), periodEnd: localDateOnly(plan.PERIOD_END), status: plan.PLAN_STATUS,
+          targets: targets.rows.filter((target) => target.PLAN_ID === plan.PLAN_ID).map((target) => ({
+            id: String(target.TARGET_ID), description: target.TARGET_DESCRIPTION, measureType: target.MEASURE_TYPE,
+            targetValue: Number(target.TARGET_VALUE), unit: target.TARGET_UNIT, weight: Number(target.TARGET_WEIGHT),
+            dueDate: localDateOnly(target.DUE_DATE) || null, actualValue: target.ACTUAL_VALUE == null ? null : Number(target.ACTUAL_VALUE), status: target.TARGET_STATUS,
+            accomplishments: accomplishments.rows.filter((item) => item.TARGET_ID === target.TARGET_ID).map((item) => ({
+              id: String(item.ACCOMPLISHMENT_ID), description: item.ACCOMPLISHMENT_DESCRIPTION, quantity: Number(item.ACCOMPLISHED_QUANTITY),
+              accomplishedOn: localDateOnly(item.ACCOMPLISHED_ON) || null, createdAt: item.CREATED_AT,
+              evidence: evidence.rows.filter((file) => file.ACCOMPLISHMENT_ID === item.ACCOMPLISHMENT_ID).map((file) => ({ id: String(file.EVIDENCE_ID), name: file.FILE_NAME, mimeType: file.MIME_TYPE, size: Number(file.FILE_SIZE) })),
+            })),
+          })),
+        }));
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { plans: result });
+    }
+    if (req.method === 'POST' && req.url === '/api/performance-plans') {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        const employeeUserId = Number(body.employeeUserId);
+        const cycleLabel = normalize(body.cycleLabel);
+        const periodStart = normalize(body.periodStart);
+        const periodEnd = normalize(body.periodEnd);
+        if (!employeeUserId || !cycleLabel || !/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) throw Object.assign(new Error('Employee, cycle, and valid period dates are required.'), { statusCode: 400 });
+        await c.execute(`INSERT INTO bes_performance_plans (employee_user_id,cycle_label,period_start,period_end,created_by_user_id)
+          VALUES (:employeeUserId,:cycleLabel,TO_DATE(:periodStart,'YYYY-MM-DD'),TO_DATE(:periodEnd,'YYYY-MM-DD'),:createdByUserId)`, {
+          employeeUserId, cycleLabel, periodStart, periodEnd, createdByUserId: user.USER_ID,
+        });
+        const created = await c.execute(`SELECT p.plan_id, u.employee_no, u.first_name, u.middle_name, u.last_name, u.suffix
+          FROM bes_performance_plans p JOIN bes_users u ON u.user_id=p.employee_user_id
+          WHERE p.employee_user_id=:employeeUserId AND UPPER(p.cycle_label)=UPPER(:cycleLabel)`, { employeeUserId, cycleLabel });
+        await c.commit();
+        const plan = created.rows[0];
+        return { id: String(plan.PLAN_ID), employeeUserId: String(employeeUserId), employeeNo: plan.EMPLOYEE_NO,
+          employeeName: [plan.FIRST_NAME, plan.MIDDLE_NAME, plan.LAST_NAME, plan.SUFFIX].filter(Boolean).join(' '),
+          cycleLabel, periodStart, periodEnd, status: 'DRAFT', targets: [] };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 201, { plan: result });
+    }
+    const performancePlanUpdateMatch = url.pathname.match(/^\/api\/performance-plans\/(\d+)$/);
+    if (req.method === 'PATCH' && performancePlanUpdateMatch) {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        const planId = Number(performancePlanUpdateMatch[1]);
+        const cycleLabel = normalize(body.cycleLabel);
+        const periodStart = normalize(body.periodStart);
+        const periodEnd = normalize(body.periodEnd);
+        const status = normalize(body.status).toUpperCase();
+        if (!cycleLabel || !/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd) || !['DRAFT','ACTIVE','COMPLETED','REVIEWED'].includes(status)) {
+          throw Object.assign(new Error('Cycle, valid period dates, and a valid plan status are required.'), { statusCode: 400 });
+        }
+        const owner = await c.execute(`SELECT p.employee_user_id, u.employee_no, u.first_name, u.middle_name, u.last_name, u.suffix, u.department_code, u.unit_name
+          FROM bes_performance_plans p JOIN bes_users u ON u.user_id=p.employee_user_id WHERE p.plan_id=:planId`, { planId });
+        const employee = owner.rows[0];
+        if (!employee) throw Object.assign(new Error('Performance plan was not found.'), { statusCode: 404 });
+        if (!canAccessPerformanceEmployee(user, employee, true)) throw Object.assign(new Error('You are not allowed to edit this performance plan.'), { statusCode: 403 });
+        await c.execute(`UPDATE bes_performance_plans SET cycle_label=:cycleLabel,
+          period_start=TO_DATE(:periodStart,'YYYY-MM-DD'), period_end=TO_DATE(:periodEnd,'YYYY-MM-DD'),
+          plan_status=:status, updated_at=SYSTIMESTAMP WHERE plan_id=:planId`, { planId, cycleLabel, periodStart, periodEnd, status });
+        await c.commit();
+        return { id: String(planId), employeeUserId: String(employee.EMPLOYEE_USER_ID), employeeNo: employee.EMPLOYEE_NO,
+          employeeName: [employee.FIRST_NAME, employee.MIDDLE_NAME, employee.LAST_NAME, employee.SUFFIX].filter(Boolean).join(' '),
+          cycleLabel, periodStart, periodEnd, status, targets: [] };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { plan: result });
+    }
+    const performanceTargetMatch = url.pathname.match(/^\/api\/performance-plans\/(\d+)\/targets$/);
+    if (req.method === 'POST' && performanceTargetMatch) {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        const planId = Number(performanceTargetMatch[1]);
+        const description = normalize(body.description);
+        const measureType = normalize(body.measureType).toUpperCase();
+        const targetValue = Number(body.targetValue);
+        const unit = normalize(body.unit);
+        const weight = Number(body.weight);
+        const dueDate = nullableNormalize(body.dueDate);
+        if (!description || !['COUNT','PERCENTAGE','MILESTONE','COMPLIANCE'].includes(measureType) || !(targetValue > 0) || !unit || !(weight >= 0 && weight <= 100)) throw Object.assign(new Error('Description, measurement, positive target, unit, and a 0–100 weight are required.'), { statusCode: 400 });
+        const weightResult = await c.execute(`SELECT NVL(SUM(target_weight),0) total_weight FROM bes_performance_targets WHERE plan_id=:planId`, { planId });
+        if (Number(weightResult.rows[0]?.TOTAL_WEIGHT ?? 0) + weight > 100) throw Object.assign(new Error('Target weights for a plan cannot exceed 100%.'), { statusCode: 400 });
+        const inserted = await c.execute(`INSERT INTO bes_performance_targets (plan_id,target_description,measure_type,target_value,target_unit,target_weight,due_date,sort_order)
+          VALUES (:planId,:description,:measureType,:targetValue,:unit,:weight,CASE WHEN :dueDate IS NULL THEN NULL ELSE TO_DATE(:dueDate,'YYYY-MM-DD') END,
+            (SELECT NVL(MAX(sort_order),0)+10 FROM bes_performance_targets WHERE plan_id=:planId)) RETURNING target_id INTO :targetId`, {
+          planId, description, measureType, targetValue, unit, weight, dueDate,
+          targetId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+        });
+        await c.commit();
+        return { id: String(inserted.outBinds.targetId[0]), description, measureType, targetValue, unit, weight, dueDate, actualValue: null, status: 'NOT_STARTED' };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 201, { target: result });
+    }
+    const performanceTargetUpdateMatch = url.pathname.match(/^\/api\/performance-plans\/(\d+)\/targets\/(\d+)$/);
+    if (req.method === 'PATCH' && performanceTargetUpdateMatch) {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        if (!isPerformanceManager(user)) throw Object.assign(new Error('Supervisor or administrator access is required.'), { statusCode: 403 });
+        const planId = Number(performanceTargetUpdateMatch[1]);
+        const targetId = Number(performanceTargetUpdateMatch[2]);
+        const description = normalize(body.description);
+        const measureType = normalize(body.measureType).toUpperCase();
+        const targetValue = Number(body.targetValue);
+        const unit = normalize(body.unit);
+        const weight = Number(body.weight);
+        const dueDate = nullableNormalize(body.dueDate);
+        if (!description || !['COUNT','PERCENTAGE','MILESTONE','COMPLIANCE'].includes(measureType) || !(targetValue > 0) || !unit || !(weight >= 0 && weight <= 100)) throw Object.assign(new Error('Description, measurement, positive target, unit, and a 0–100 weight are required.'), { statusCode: 400 });
+        const weightResult = await c.execute(`SELECT NVL(SUM(target_weight),0) total_weight FROM bes_performance_targets WHERE plan_id=:planId AND target_id<>:targetId`, { planId, targetId });
+        if (Number(weightResult.rows[0]?.TOTAL_WEIGHT ?? 0) + weight > 100) throw Object.assign(new Error('Target weights for a plan cannot exceed 100%.'), { statusCode: 400 });
+        const updated = await c.execute(`UPDATE bes_performance_targets SET target_description=:description, measure_type=:measureType, target_value=:targetValue,
+          target_unit=:unit, target_weight=:weight, due_date=CASE WHEN :dueDate IS NULL THEN NULL ELSE TO_DATE(:dueDate,'YYYY-MM-DD') END, updated_at=SYSTIMESTAMP
+          WHERE plan_id=:planId AND target_id=:targetId`, { description, measureType, targetValue, unit, weight, dueDate, planId, targetId });
+        if (!updated.rowsAffected) throw Object.assign(new Error('Performance target was not found.'), { statusCode: 404 });
+        const current = await c.execute(`SELECT actual_value, target_status FROM bes_performance_targets WHERE target_id=:targetId`, { targetId });
+        await c.commit();
+        return { id: String(targetId), description, measureType, targetValue, unit, weight, dueDate, actualValue: current.rows[0]?.ACTUAL_VALUE == null ? null : Number(current.rows[0].ACTUAL_VALUE), status: current.rows[0]?.TARGET_STATUS ?? 'NOT_STARTED' };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { target: result });
+    }
+    const performanceAccomplishmentMatch = url.pathname.match(/^\/api\/performance-targets\/(\d+)\/accomplishments$/);
+    if (req.method === 'POST' && performanceAccomplishmentMatch) {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const targetId = Number(performanceAccomplishmentMatch[1]);
+        const owner = await c.execute(`SELECT p.employee_user_id, u.department_code, u.unit_name
+          FROM bes_performance_targets t JOIN bes_performance_plans p ON p.plan_id=t.plan_id JOIN bes_users u ON u.user_id=p.employee_user_id
+          WHERE t.target_id=:targetId`, { targetId });
+        if (!owner.rows[0]) throw Object.assign(new Error('Performance target was not found.'), { statusCode: 404 });
+        if (!canAccessPerformanceEmployee(user, owner.rows[0])) throw Object.assign(new Error('You are not allowed to add an accomplishment for this employee.'), { statusCode: 403 });
+        const description = normalize(body.description);
+        const quantity = Number(body.quantity);
+        const accomplishedOn = nullableNormalize(body.accomplishedOn);
+        if (!description || !(quantity > 0)) throw Object.assign(new Error('Description and a positive accomplished quantity are required.'), { statusCode: 400 });
+        const inserted = await c.execute(`INSERT INTO bes_performance_accomplishments (target_id,accomplishment_description,accomplished_quantity,accomplished_on,created_by_user_id)
+          VALUES (:targetId,:description,:quantity,CASE WHEN :accomplishedOn IS NULL THEN NULL ELSE TO_DATE(:accomplishedOn,'YYYY-MM-DD') END,:userId)
+          RETURNING accomplishment_id INTO :accomplishmentId`, { targetId, description: { val: description, type: oracledb.CLOB }, quantity, accomplishedOn, userId: user.USER_ID, accomplishmentId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
+        await c.commit();
+        return { id: String(inserted.outBinds.accomplishmentId[0]), description, quantity, accomplishedOn, evidence: [] };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 201, { accomplishment: result });
+    }
+    const performanceEvidenceUploadMatch = url.pathname.match(/^\/api\/performance-accomplishments\/(\d+)\/evidence$/);
+    if (req.method === 'POST' && performanceEvidenceUploadMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      let originalName = '';
+      try { originalName = decodeURIComponent(normalize(req.headers['x-file-name'])); } catch { return json(res, 400, { error: 'The evidence filename is invalid.' }); }
+      const fileName = safeFileName(originalName || 'evidence-file');
+      const mimeType = normalize(req.headers['content-type']) || 'application/octet-stream';
+      const file = await readBinaryBody(req);
+      if (!file.length) return json(res, 400, { error: 'The evidence file is empty.' });
+      const accomplishmentId = Number(performanceEvidenceUploadMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const owner = await c.execute(`SELECT p.employee_user_id, u.department_code, u.unit_name
+          FROM bes_performance_accomplishments a JOIN bes_performance_targets t ON t.target_id=a.target_id
+          JOIN bes_performance_plans p ON p.plan_id=t.plan_id JOIN bes_users u ON u.user_id=p.employee_user_id
+          WHERE a.accomplishment_id=:accomplishmentId`, { accomplishmentId });
+        if (!owner.rows[0]) throw Object.assign(new Error('Accomplishment was not found.'), { statusCode: 404 });
+        if (!canAccessPerformanceEmployee(user, owner.rows[0])) throw Object.assign(new Error('You are not allowed to attach evidence for this employee.'), { statusCode: 403 });
+        const inserted = await c.execute(`INSERT INTO bes_performance_evidence (accomplishment_id,file_name,mime_type,file_size,file_blob,uploaded_by_user_id)
+          VALUES (:accomplishmentId,:fileName,:mimeType,:fileSize,:fileBlob,:userId)
+          RETURNING evidence_id INTO :evidenceId`, { accomplishmentId, fileName, mimeType, fileSize: file.length, fileBlob: { val: file, type: oracledb.BLOB }, userId: user.USER_ID, evidenceId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
+        await c.commit();
+        return { id: String(inserted.outBinds.evidenceId[0]), name: fileName, mimeType, size: file.length };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 201, { evidence: result });
+    }
+    const performanceEvidenceDownloadMatch = url.pathname.match(/^\/api\/performance-evidence\/(\d+)$/);
+    if (req.method === 'GET' && performanceEvidenceDownloadMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT e.file_name,e.mime_type,e.file_size,e.file_blob,p.employee_user_id,u.department_code,u.unit_name
+          FROM bes_performance_evidence e JOIN bes_performance_accomplishments a ON a.accomplishment_id=e.accomplishment_id
+          JOIN bes_performance_targets t ON t.target_id=a.target_id JOIN bes_performance_plans p ON p.plan_id=t.plan_id
+          JOIN bes_users u ON u.user_id=p.employee_user_id WHERE e.evidence_id=:evidenceId`, { evidenceId: Number(performanceEvidenceDownloadMatch[1]) });
+        const row = found.rows[0];
+        if (!row) return false;
+        if (!canAccessPerformanceEmployee(user, row)) throw Object.assign(new Error('You are not allowed to download this evidence file.'), { statusCode: 403 });
+        row.FILE_BUFFER = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData();
+        return row;
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Evidence file was not found.' });
+      res.writeHead(200, { 'content-type': result.MIME_TYPE || 'application/octet-stream', 'content-length': String(result.FILE_BUFFER.length), 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeFileName(result.FILE_NAME))}`, 'cache-control': 'private, no-store' });
+      return res.end(result.FILE_BUFFER);
+    }
     if (req.method === 'GET' && req.url === '/api/users/directory') {
       const token = bearerToken(req);
       if (!token) return json(res, 401, { error: 'Session required.' });
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        return c.execute(`SELECT user_id, employee_no, username, email, first_name, middle_name, last_name, suffix, position_title, department_code
+        const directory = await c.execute(`SELECT user_id, employee_no, username, email, first_name, middle_name, last_name, suffix, position_title, department_code, unit_name
           FROM bes_users
           WHERE account_status = 'ACTIVE'
           ORDER BY last_name, first_name, employee_no`);
+        directory.rows = directory.rows.filter((employee) => canAccessPerformanceEmployee(user, employee));
+        return directory;
       });
       if (!result) return json(res, 401, { error: 'Session expired.' });
       return json(res, 200, {
@@ -1295,6 +1769,7 @@ async function handle(req, res) {
           name: [row.FIRST_NAME, row.MIDDLE_NAME, row.LAST_NAME, row.SUFFIX].filter(Boolean).join(' '),
           position: row.POSITION_TITLE,
           departmentCode: row.DEPARTMENT_CODE,
+          unitName: row.UNIT_NAME,
         })),
       });
     }
@@ -2233,6 +2708,61 @@ async function handle(req, res) {
       let vehicles = [];
       try { vehicles = payload ? JSON.parse(String(payload)) : []; } catch { vehicles = []; }
       return json(res, 200, { vehicles, updatedAt: localIso(result.rows[0]?.UPDATED_AT) });
+    }
+    const fleetModelMatch = url.pathname.match(/^\/api\/fleet\/vehicles\/([^/]+)\/model$/);
+    if (req.method === 'PUT' && fleetModelMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const vehicleUid = decodeURIComponent(fleetModelMatch[1]);
+      let originalName = '';
+      try { originalName = decodeURIComponent(normalize(req.headers['x-file-name'])); } catch { return json(res, 400, { error: 'The GLB filename is invalid.' }); }
+      if (!originalName.toLowerCase().endsWith('.glb')) return json(res, 400, { error: 'Only GLB 3D model files can be uploaded.' });
+      const file = await readBinaryBody(req, 150 * 1024 * 1024, 'GLB model');
+      if (file.length < 12 || file.toString('ascii', 0, 4) !== 'glTF') return json(res, 400, { error: 'The selected file is not a valid GLB model.' });
+      const fileName = safeFileName(originalName);
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`MERGE INTO bes_fleet_vehicle_models target USING (SELECT :vehicleUid vehicle_uid FROM dual) source
+          ON (target.vehicle_uid=source.vehicle_uid)
+          WHEN MATCHED THEN UPDATE SET file_name=:fileName,mime_type='model/gltf-binary',file_size=:fileSize,file_blob=:fileBlob,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (vehicle_uid,file_name,mime_type,file_size,file_blob,updated_by_user_id)
+            VALUES (:vehicleUid,:fileName,'model/gltf-binary',:fileSize,:fileBlob,:userId)`, {
+          vehicleUid, fileName, fileSize: file.length, fileBlob: { val: file, type: oracledb.BLOB }, userId: user.USER_ID,
+        });
+        await c.commit();
+      });
+      return json(res, 200, { model: { name: fileName, type: 'model/gltf-binary', size: file.length } });
+    }
+    if (req.method === 'GET' && fleetModelMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const vehicleUid = decodeURIComponent(fleetModelMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const found = await c.execute(`SELECT file_name,mime_type,file_size,file_blob FROM bes_fleet_vehicle_models WHERE vehicle_uid=:vehicleUid`, { vehicleUid });
+        const row = found.rows[0];
+        if (!row) return false;
+        const body = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData();
+        return { ...row, BODY: body };
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'No 3D model is attached to this vehicle.' });
+      res.writeHead(200, { 'content-type': result.MIME_TYPE || 'model/gltf-binary', 'content-length': result.FILE_SIZE, 'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(result.FILE_NAME)}`, 'cache-control': 'private, max-age=300' });
+      return res.end(result.BODY);
+    }
+    if (req.method === 'DELETE' && fleetModelMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const vehicleUid = decodeURIComponent(fleetModelMatch[1]);
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`DELETE FROM bes_fleet_vehicle_models WHERE vehicle_uid=:vehicleUid`, { vehicleUid });
+        await c.commit();
+      });
+      return json(res, 200, { ok: true });
     }
     if (req.method === 'PUT' && req.url === '/api/fleet/vehicles') {
       const token = bearerToken(req);

@@ -130,7 +130,9 @@ export default function ToolDetail() {
   return (
     <div>
       <PageHeader title={tool.name} description={tool.description} crumbs={[
-        { label: `${deptId} Workspace`, to: `/workspace/preview/${deptId}` },
+        deptId === 'ISD'
+          ? { label: 'My Workspace', to: '/workspace' }
+          : { label: `${deptId} Workspace`, to: `/workspace/preview/${deptId}` },
         { label: tool.code },
       ]} />
       <Tabs tabs={tabs} value={tab} onChange={(value) => { setTab(value); setSearch(''); }} className="mb-5" />

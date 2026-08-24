@@ -44,6 +44,83 @@ export interface DirectoryUser {
   email: string;
   position?: string | null;
   departmentCode?: string | null;
+  unitName?: string | null;
+}
+
+export interface PerformanceTarget {
+  id: string;
+  description: string;
+  measureType: 'COUNT' | 'PERCENTAGE' | 'MILESTONE' | 'COMPLIANCE';
+  targetValue: number;
+  unit: string;
+  weight: number;
+  dueDate?: string | null;
+  actualValue?: number | null;
+  status: string;
+  accomplishments?: PerformanceAccomplishment[];
+}
+
+export interface PerformanceEvidence { id: string; name: string; mimeType: string; size: number }
+export interface PerformanceAccomplishment { id: string; description: string; quantity: number; accomplishedOn?: string | null; createdAt?: string; evidence: PerformanceEvidence[] }
+
+export interface PerformancePlan {
+  id: string;
+  employeeUserId: string;
+  employeeName: string;
+  employeeNo: string;
+  cycleLabel: string;
+  periodStart: string;
+  periodEnd: string;
+  status: string;
+  targets: PerformanceTarget[];
+}
+
+export interface PerformanceAssignment {
+  id: string;
+  positionId: string;
+  employeeUserId: string;
+  detailOrder?: string | null;
+  effectiveStart?: string | null;
+  effectiveEnd?: string | null;
+  mode: 'INCLUDE' | 'EXCLUDE';
+  currentLevel?: number | null;
+}
+
+export interface EmployeeSkillCheck {
+  employeeUserId: string;
+  positionId: string;
+  dutyId: string;
+  attained: boolean;
+  level2: boolean;
+  level3: boolean;
+  level4: boolean;
+  levels?: number[];
+  remarks?: string | null;
+  assessedAt?: string | null;
+}
+
+export interface PositionDuty {
+  id: string;
+  kra: string;
+  kraWeight: number;
+  description: string;
+  applicableLevels: string[];
+  competency: string;
+  levelRequirement: string;
+}
+
+export interface PositionDrPl {
+  positionId: string;
+  purpose: string;
+  employmentLevel: string;
+  reportsTo: string;
+  areaOfWork: string;
+  positionLevels: string[];
+  maxLevel: number;
+  competencyNotes: { level: number; name: string; description: string }[];
+  categories?: string[];
+  sourceDocument?: string | null;
+  duties: PositionDuty[];
 }
 
 export interface RolePermissionConfig {
@@ -232,6 +309,96 @@ export interface PolicyRecordInput {
   originalDocumentNumber?: string;
 }
 
+export async function fetchPerformancePlans(token: string) {
+  const result = await apiRequest<{ plans: PerformancePlan[] }>('/api/performance-plans', { headers: { authorization: `Bearer ${token}` } });
+  return result.plans;
+}
+
+export async function createPerformancePlan(token: string, input: { employeeUserId: string; cycleLabel: string; periodStart: string; periodEnd: string }) {
+  return apiRequest<{ plan: PerformancePlan }>('/api/performance-plans', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function updatePerformancePlan(token: string, planId: string, input: { cycleLabel: string; periodStart: string; periodEnd: string; status: string }) {
+  return apiRequest<{ plan: PerformancePlan }>(`/api/performance-plans/${encodeURIComponent(planId)}`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function createPerformanceTarget(token: string, planId: string, input: { description: string; measureType: PerformanceTarget['measureType']; targetValue: number; unit: string; weight: number; dueDate?: string }) {
+  return apiRequest<{ target: PerformanceTarget }>(`/api/performance-plans/${encodeURIComponent(planId)}/targets`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function updatePerformanceTarget(token: string, planId: string, targetId: string, input: { description: string; measureType: PerformanceTarget['measureType']; targetValue: number; unit: string; weight: number; dueDate?: string }) {
+  return apiRequest<{ target: PerformanceTarget }>(`/api/performance-plans/${encodeURIComponent(planId)}/targets/${encodeURIComponent(targetId)}`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function createPerformanceAccomplishment(token: string, targetId: string, input: { description: string; quantity: number; accomplishedOn?: string }) {
+  return apiRequest<{ accomplishment: PerformanceAccomplishment }>(`/api/performance-targets/${encodeURIComponent(targetId)}/accomplishments`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function uploadPerformanceEvidence(token: string, accomplishmentId: string, file: File) {
+  const response = await fetch(`/api/performance-accomplishments/${encodeURIComponent(accomplishmentId)}/evidence`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name) }, body: file });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Unable to upload evidence.');
+  return body as { evidence: PerformanceEvidence };
+}
+
+export async function downloadPerformanceEvidence(token: string, evidenceId: string, fileName: string) {
+  const response = await fetch(`/api/performance-evidence/${encodeURIComponent(evidenceId)}`, { headers: { authorization: `Bearer ${token}` } });
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'Unable to download evidence.'); }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = fileName; anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function fetchPerformanceAssignments(token: string) {
+  const result = await apiRequest<{ assignments: PerformanceAssignment[] }>('/api/performance-assignments', { headers: { authorization: `Bearer ${token}` } });
+  return result.assignments;
+}
+
+export async function createPerformanceAssignment(token: string, input: { positionId: string; employeeUserId: string; currentLevel: string; detailOrder?: string; effectiveStart?: string; effectiveEnd?: string }) {
+  return apiRequest<{ assignment: PerformanceAssignment }>('/api/performance-assignments', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function removePerformanceEmployee(token: string, positionId: string, employeeUserId: string) {
+  return apiRequest<{ assignment: PerformanceAssignment }>(`/api/performance-assignments/${encodeURIComponent(positionId)}/${encodeURIComponent(employeeUserId)}`, {
+    method: 'DELETE', headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+export async function fetchPositionDrPl(token: string) {
+  const result = await apiRequest<{ profiles: PositionDrPl[] }>('/api/position-dr-pl', { headers: { authorization: `Bearer ${token}` } });
+  return result.profiles;
+}
+
+export async function updatePositionDrPl(token: string, positionId: string, input: { purpose: string; employmentLevel: string; reportsTo: string; areaOfWork: string; maxLevel: number; competencyNotes: { level: number; name: string; description: string }[]; categories: string[]; duties: PositionDuty[] }) {
+  return apiRequest<{ profile: PositionDrPl }>(`/api/position-dr-pl/${encodeURIComponent(positionId)}`, {
+    method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function fetchEmployeeSkillChecks(token: string) {
+  const result = await apiRequest<{ checks: EmployeeSkillCheck[] }>('/api/employee-skill-checks', { headers: { authorization: `Bearer ${token}` } });
+  return result.checks;
+}
+
+export async function updateEmployeeSkillCheck(token: string, input: { employeeUserId: string; positionId: string; dutyId: string; levels: number[]; remarks?: string }) {
+  return apiRequest<{ check: EmployeeSkillCheck }>('/api/employee-skill-checks', {
+    method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
 export async function deleteOrgEntity(token: string, entity: 'office', id: string) {
   return apiRequest<{ ok: true }>(`/api/admin/org-structure/${entity}/${encodeURIComponent(id)}`, {
     method: 'DELETE', headers: { authorization: `Bearer ${token}` },
@@ -249,6 +416,30 @@ export async function saveFleetVehicles<T>(token: string, vehicles: T[]) {
   return apiRequest<{ ok: true }>('/api/fleet/vehicles', {
     method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ vehicles }),
   });
+}
+
+export async function uploadFleetVehicleModel(token: string, vehicleId: string, file: File) {
+  const response = await fetch(`/api/fleet/vehicles/${encodeURIComponent(vehicleId)}/model`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': file.type || 'model/gltf-binary', 'x-file-name': encodeURIComponent(file.name) },
+    body: file,
+  });
+  const result = await response.json().catch(() => ({})) as { model?: { name: string; type: string; size: number }; error?: string };
+  if (!response.ok || !result.model) throw new Error(result.error || `Unable to upload the 3D model (${response.status}).`);
+  return result.model;
+}
+
+export async function fetchFleetVehicleModel(token: string, vehicleId: string) {
+  const response = await fetch(`/api/fleet/vehicles/${encodeURIComponent(vehicleId)}/model`, { headers: { authorization: `Bearer ${token}` } });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(result.error || `Unable to load the 3D model (${response.status}).`);
+  }
+  return response.blob();
+}
+
+export async function deleteFleetVehicleModel(token: string, vehicleId: string) {
+  return apiRequest<{ ok: true }>(`/api/fleet/vehicles/${encodeURIComponent(vehicleId)}/model`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
 }
 
 export interface BfmFacility {
