@@ -418,6 +418,95 @@ export async function saveFleetVehicles<T>(token: string, vehicles: T[]) {
   });
 }
 
+export async function fetchFleetVehicleModels<T>(token: string) {
+  const result = await apiRequest<{ models: T }>('/api/fleet/models', { headers: { authorization: `Bearer ${token}` } });
+  return result.models;
+}
+
+export async function saveFleetVehicleModels<T>(token: string, models: T[]) {
+  return apiRequest<{ ok: true }>('/api/fleet/models', {
+    method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ models }),
+  });
+}
+
+export interface CsrRequest {
+  id: string;
+  dateRequested: string;
+  programType: string;
+  requestee: string;
+  designation: string;
+  organization: string;
+  sector: string;
+  location: string;
+  barangay: string;
+  municipality: string;
+  district: string;
+  projectDetails: string;
+  projectRequirement: string;
+  status: 'For evaluation' | 'Pending' | 'Completed';
+  evaluationResult: '' | 'Within CSR Policy' | 'Not Within CSR Policy';
+  evaluatedBy: string;
+  dateApproved: string;
+  amountFunding: string;
+  updatedAt?: string;
+}
+
+export interface BarangayLocation {
+  municipality: string;
+  barangay: string;
+  district: string;
+}
+
+export interface CsrProjectEvent {
+  id: string;
+  date: string;
+  projectEvent: string;
+  inspectedBy: string;
+  createdAt?: string;
+}
+
+export async function fetchBarangayLocations(token: string) {
+  const result = await apiRequest<{ locations: BarangayLocation[] }>('/api/member-programs/locations', { headers: { authorization: `Bearer ${token}` } });
+  return result.locations;
+}
+
+export async function fetchCsrSectors(token: string) {
+  const result = await apiRequest<{ sectors: string[] }>('/api/member-programs/csr-sectors', { headers: { authorization: `Bearer ${token}` } });
+  return result.sectors;
+}
+
+export async function createCsrSector(token: string, sector: string) {
+  return apiRequest<{ sector: string }>('/api/member-programs/csr-sectors', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ sector }),
+  });
+}
+
+export async function fetchCsrRequests(token: string) {
+  const result = await apiRequest<{ requests: CsrRequest[] }>('/api/member-programs/csr', { headers: { authorization: `Bearer ${token}` } });
+  return result.requests;
+}
+
+export async function saveCsrRequest(token: string, request: Omit<CsrRequest, 'id' | 'updatedAt'>, id?: string) {
+  return apiRequest<{ id?: string; ok?: true }>(id ? `/api/member-programs/csr/${encodeURIComponent(id)}` : '/api/member-programs/csr', {
+    method: id ? 'PATCH' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(request),
+  });
+}
+
+export async function deleteCsrRequest(token: string, id: string) {
+  return apiRequest<{ ok: true }>(`/api/member-programs/csr/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function fetchCsrProjectEvents(token: string, csrId: string) {
+  const result = await apiRequest<{ events: CsrProjectEvent[] }>(`/api/member-programs/csr/${encodeURIComponent(csrId)}/events`, { headers: { authorization: `Bearer ${token}` } });
+  return result.events;
+}
+
+export async function addCsrProjectEvent(token: string, csrId: string, event: Omit<CsrProjectEvent, 'id' | 'createdAt'>) {
+  return apiRequest<{ id: string }>(`/api/member-programs/csr/${encodeURIComponent(csrId)}/events`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(event),
+  });
+}
+
 export async function uploadFleetVehicleModel(token: string, vehicleId: string, file: File) {
   const response = await fetch(`/api/fleet/vehicles/${encodeURIComponent(vehicleId)}/model`, {
     method: 'PUT',
@@ -529,7 +618,11 @@ export async function fetchBfmOperations(token: string) {
   return apiRequest<BfmOperationsData>('/api/bfm/operations', { headers: { authorization: `Bearer ${token}` } });
 }
 
-export async function createBfmFacility(token: string, input: { parentId?: string; name: string; type: string; description: string; location: string }) {
+export async function fetchBfmProjects(token: string) {
+  return apiRequest<BfmOperationsData>('/api/bfm/projects', { headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function createBfmFacility(token: string, input: { parentId?: string; name: string; type: string; description: string; location: string; scope?: 'Operations' | 'Projects' }) {
   return apiRequest<BfmOperationsData>('/api/bfm/facilities', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
 }
 
@@ -538,6 +631,18 @@ export async function updateBfmFacility(token: string, facilityId: string, input
 }
 export async function deleteBfmFacility(token: string, facilityId: string) {
   return apiRequest<BfmOperationsData>(`/api/bfm/facilities/${encodeURIComponent(facilityId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function createBfmProjectFacility(token: string, input: { parentId?: string; name: string; type: string; description: string; location: string }) {
+  return createBfmFacility(token, { ...input, scope: 'Projects' });
+}
+
+export async function updateBfmProjectFacility(token: string, facilityId: string, input: { name: string; type: string; description: string; location: string }) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/facilities/${encodeURIComponent(facilityId)}`, { method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ ...input, scope: 'Projects' }) });
+}
+
+export async function deleteBfmProjectFacility(token: string, facilityId: string) {
+  return apiRequest<BfmOperationsData>(`/api/bfm/facilities/${encodeURIComponent(facilityId)}?scope=Projects`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
 }
 
 export async function createBfmPersonnel(token: string, input: { name: string; employeeNo: string; position: string; contact: string }) {
@@ -572,6 +677,28 @@ export async function updateBfmProject(token: string, projectId: string, input: 
 }
 export async function deleteBfmProject(token: string, projectId: string) {
   return apiRequest<BfmOperationsData>(`/api/bfm/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export interface BfmProjectFolder { id: string; name: string; createdAt: string }
+export interface BfmProjectResource { id: string; folderId?: string; type: 'file' | 'link'; name: string; relativePath: string; url: string; mimeType: string; size?: number; createdAt: string }
+
+export async function fetchBfmProjectResources(token: string, projectId: string) {
+  return apiRequest<{ folders: BfmProjectFolder[]; resources: BfmProjectResource[] }>(`/api/bfm/projects/${encodeURIComponent(projectId)}/resources`, { headers: { authorization: `Bearer ${token}` } });
+}
+export async function createBfmProjectFolder(token: string, projectId: string, name: string) {
+  return apiRequest<{ id: string; name: string }>(`/api/bfm/projects/${encodeURIComponent(projectId)}/folders`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ name }) });
+}
+export async function createBfmProjectLink(token: string, projectId: string, input: { name: string; url: string; folderId?: string }) {
+  return apiRequest<{ id: string }>(`/api/bfm/projects/${encodeURIComponent(projectId)}/links`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function uploadBfmProjectFile(token: string, projectId: string, file: File, options: { folderName?: string; relativePath?: string } = {}) {
+  const response = await fetch(`/api/bfm/projects/${encodeURIComponent(projectId)}/files`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name), 'x-folder-name': encodeURIComponent(options.folderName || ''), 'x-relative-path': encodeURIComponent(options.relativePath || '') }, body: file });
+  const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || 'Unable to upload project file.'); return body as { id: string };
+}
+export async function downloadBfmProjectFile(token: string, resource: BfmProjectResource) {
+  const response = await fetch(`/api/bfm/project-resources/${encodeURIComponent(resource.id)}`, { headers: { authorization: `Bearer ${token}` } });
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'Unable to download project file.'); }
+  const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = resource.name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export type PolicyTaskStatus = 'Received' | 'Under Review' | 'For Approval' | 'Approved' | 'Issued' | 'Completed' | 'Returned';

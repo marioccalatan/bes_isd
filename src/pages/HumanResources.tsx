@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { HroTaskProcessingDrawer } from '@/components/shared/HroTaskProcessingDrawer';
+import { MemberProgramsCsr } from '@/components/member-programs/MemberProgramsCsr';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Toolbar } from '@/components/shared/Toolbar';
 import { Badge, StatusBadge } from '@/components/ui/badge';
@@ -87,18 +88,18 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   return (
     <div>
       <PageHeader title={module.name} description={module.description} crumbs={[{ label: 'My Workspace', to: '/workspace' }, { label: module.name }]} />
-      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {module.id !== 'member-programs' && <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {module.stats.map((stat) => <Card key={stat.label} className="p-4"><p className="text-xs text-slate-500">{stat.label}</p><p className="mt-1 text-xl font-bold text-slate-900">{stat.value}</p></Card>)}
-      </div>
+      </div>}
 
       <Tabs
-        tabs={[{ value: 'tasks', label: 'Tasks', count: tasks.length }, { value: 'records', label: 'Records', count: module.records.length }]}
+        tabs={[{ value: 'tasks', label: 'Tasks', count: tasks.length }, { value: 'records', label: 'Records', count: module.records.length }, ...(module.id === 'member-programs' ? [{ value: 'csr', label: 'CSR' }] : [])]}
         value={tab}
         onChange={(value) => { setTab(value); setSearch(''); }}
         className="mb-5"
       />
 
-      <Card>
+      {tab === 'csr' ? <MemberProgramsCsr /> : <Card>
         <CardHeader>
           <CardTitle>{tab === 'tasks' ? `${module.name} Tasks` : `${module.name} Records`}</CardTitle>
           <p className="text-sm text-slate-500">{tab === 'tasks' ? (taskSubject ? `Live My Work tasks whose subject is ${taskSubject}.` : 'Live My Work tasks assigned to the Human Resource Office.') : `${module.name} operational records.`}</p>
@@ -117,7 +118,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
             <DataTable columns={recordColumns} rows={visibleRecords} getRowId={(record) => record.id} onRowClick={setSelectedRecord} cardTitle={(record) => record.title} />
           )}
         </CardContent>
-      </Card>
+      </Card>}
 
       <HroTaskProcessingDrawer
         open={!!selectedTask}

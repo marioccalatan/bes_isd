@@ -10,7 +10,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Label, Select, Textarea } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { fetchBfmOperations, updateBfmProject, type BfmOperationsData, type BfmProject } from '@/lib/api';
+import { fetchBfmProjects, updateBfmProject, type BfmOperationsData, type BfmProject } from '@/lib/api';
 
 type ViewMode = 'Daily' | 'Weekly' | 'Monthly' | 'Quarterly' | 'Yearly';
 type Cell = { start: Date; end: Date; top: string; bottom: string };
@@ -33,7 +33,7 @@ export default function BuildingProgramOfWorks() {
   const [notesProject, setNotesProject] = useState<BfmProject | null>(null); const [notesDraft, setNotesDraft] = useState('');
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const reportControls = data ? <BfmProjectReportControls facilities={data.facilities} projects={data.projects} includeDateFilter /> : null;
-  useEffect(() => { fetchBfmOperations(token).then(setData).catch((error) => toast({ kind: 'error', title: 'Unable to load Program of Works', description: error instanceof Error ? error.message : 'Please try again.' })); }, [token, toast]);
+  useEffect(() => { fetchBfmProjects(token).then(setData).catch((error) => toast({ kind: 'error', title: 'Unable to load Program of Works', description: error instanceof Error ? error.message : 'Please try again.' })); }, [token, toast]);
   const cells = useMemo(() => viewCells(mode, anchor), [mode, anchor]); const rangeStart = cells[0]?.start; const rangeEnd = cells[cells.length - 1]?.end;
   const facilityById = useMemo(() => new Map((data?.facilities ?? []).map((item) => [item.id, item])), [data?.facilities]);
   const facilityPath = (facilityId: string) => { const names: string[] = []; let item = facilityById.get(facilityId); while (item) { names.unshift(item.name); item = item.parentId ? facilityById.get(item.parentId) : undefined; } return names.join(' › '); };

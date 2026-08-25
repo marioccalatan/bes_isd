@@ -134,6 +134,27 @@ const attachmentList = (value) => {
     return [];
   }
 };
+const csrRequestJson = (row) => ({
+  id: row.CSR_UID,
+  dateRequested: localDateOnly(row.DATE_REQUESTED),
+  programType: row.PROGRAM_TYPE || '',
+  requestee: row.REQUESTEE || '',
+  designation: row.DESIGNATION || '',
+  organization: row.ORGANIZATION || '',
+  sector: row.SECTOR || '',
+  location: row.LOCATION || '',
+  barangay: row.BARANGAY || '',
+  municipality: row.MUNICIPALITY || '',
+  district: row.DISTRICT || '',
+  projectDetails: row.PROJECT_DETAILS || '',
+  projectRequirement: row.PROJECT_REQUIREMENT || '',
+  status: row.REQUEST_STATUS || 'For evaluation',
+  evaluationResult: row.EVALUATION_RESULT || '',
+  evaluatedBy: row.EVALUATED_BY || '',
+  dateApproved: localDateOnly(row.DATE_APPROVED) || '',
+  amountFunding: row.AMOUNT_FUNDING == null ? '' : String(row.AMOUNT_FUNDING),
+  updatedAt: localIso(row.UPDATED_AT),
+});
 const jsonArray = (value) => {
   if (!value) return [];
   try {
@@ -240,11 +261,11 @@ const policyTaskProcessing = (row) => ({
   updatedAt: localIso(row.UPDATED_AT),
 });
 
-async function loadBuildingFacilitiesOperations(connection) {
+async function loadBuildingFacilitiesOperations(connection, facilityScope = 'Operations') {
   const [facilities, personnel, todos, assignments, activity, workDetails, projects] = await Promise.all([
     connection.execute(`SELECT f.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name
       FROM bes_bfm_facilities f LEFT JOIN bes_users u ON u.user_id=f.updated_by_user_id
-      WHERE f.is_active='Y' ORDER BY f.sort_order, f.facility_name`),
+      WHERE f.is_active='Y' AND f.facility_scope=:facilityScope ORDER BY f.sort_order, f.facility_name`, { facilityScope }),
     connection.execute(`SELECT p.*, u.username updated_by_username, u.first_name updated_by_first_name, u.last_name updated_by_last_name
       FROM bes_bfm_personnel p LEFT JOIN bes_users u ON u.user_id=p.updated_by_user_id
       WHERE p.is_active='Y' ORDER BY p.personnel_name`),
@@ -2695,6 +2716,160 @@ async function handle(req, res) {
       });
       return json(res, 200, { ok: true });
     }
+    if (req.method === 'GET' && req.url === '/api/member-programs/locations') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        return c.execute(`SELECT municipality,barangay,district FROM bes_barangay_locations ORDER BY municipality,barangay`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { locations: result.rows.map((row) => ({ municipality: row.MUNICIPALITY, barangay: row.BARANGAY, district: row.DISTRICT })) });
+    }
+    if (req.method === 'GET' && req.url === '/api/member-programs/csr-sectors') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        return c.execute(`SELECT sector_name FROM bes_csr_sectors UNION SELECT sector FROM bes_csr_requests WHERE sector IS NOT NULL ORDER BY sector_name`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { sectors: result.rows.map((row) => row.SECTOR_NAME).filter(Boolean) });
+    }
+    if (req.method === 'POST' && req.url === '/api/member-programs/csr-sectors') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req, 10_000); const sector = normalize(body.sector);
+      if (!sector) return json(res, 400, { error: 'Sector name is required.' });
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`MERGE INTO bes_csr_sectors target USING (SELECT :sector sector_name FROM dual) source ON (UPPER(target.sector_name)=UPPER(source.sector_name)) WHEN NOT MATCHED THEN INSERT (sector_name,created_by_user_id) VALUES (source.sector_name,:userId)`, { sector, userId: user.USER_ID });
+        await c.commit();
+      });
+      return json(res, 201, { sector });
+    }
+    if (req.method === 'GET' && req.url === '/api/member-programs/csr') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        return c.execute(`SELECT * FROM bes_csr_requests ORDER BY date_requested DESC, csr_id DESC`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { requests: result.rows.map(csrRequestJson) });
+    }
+    if (req.method === 'POST' && req.url === '/api/member-programs/csr') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req, 100_000);
+      if (!normalize(body.dateRequested) || !normalize(body.programType) || !normalize(body.requestee)) return json(res, 400, { error: 'Date Requested, Program Type, and Requestee are required.' });
+      if (!['For evaluation','Pending','Completed'].includes(normalize(body.status))) return json(res, 400, { error: 'Invalid CSR status.' });
+      if (normalize(body.evaluationResult) && !['Within CSR Policy','Not Within CSR Policy'].includes(normalize(body.evaluationResult))) return json(res, 400, { error: 'Invalid evaluation result.' });
+      const csrUid = `CSR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`INSERT INTO bes_csr_requests (csr_uid,date_requested,program_type,requestee,designation,organization,sector,location,barangay,municipality,district,project_details,project_requirement,request_status,evaluation_result,evaluated_by,date_approved,amount_funding,created_by_user_id,updated_by_user_id)
+          VALUES (:csrRequestUid,TO_DATE(:csrDateRequested,'YYYY-MM-DD'),:csrProgramType,:csrRequestee,:csrDesignation,:csrOrganization,:csrSector,:csrLocation,:csrBarangay,:csrMunicipality,:csrDistrict,:csrProjectDetails,:csrProjectRequirement,:csrRequestStatus,:csrEvaluationResult,:csrEvaluatedBy,TO_DATE(:csrDateApproved,'YYYY-MM-DD'),:csrAmountFunding,:csrActorUserId,:csrActorUserId)`, {
+          csrRequestUid: csrUid,
+          csrDateRequested: normalize(body.dateRequested),
+          csrProgramType: normalize(body.programType),
+          csrRequestee: normalize(body.requestee),
+          csrDesignation: nullableNormalize(body.designation),
+          csrOrganization: nullableNormalize(body.organization),
+          csrSector: nullableNormalize(body.sector),
+          csrLocation: nullableNormalize(body.location),
+          csrBarangay: nullableNormalize(body.barangay),
+          csrMunicipality: nullableNormalize(body.municipality),
+          csrDistrict: nullableNormalize(body.district),
+          csrProjectDetails: nullableNormalize(body.projectDetails),
+          csrProjectRequirement: nullableNormalize(body.projectRequirement),
+          csrRequestStatus: normalize(body.status),
+          csrEvaluationResult: nullableNormalize(body.evaluationResult),
+          csrEvaluatedBy: nullableNormalize(body.evaluatedBy),
+          csrDateApproved: nullableNormalize(body.dateApproved),
+          csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null,
+          csrActorUserId: user.USER_ID,
+        }); await c.commit();
+      });
+      return json(res, 201, { id: csrUid });
+    }
+    const csrEventsMatch = url.pathname.match(/^\/api\/member-programs\/csr\/([^/]+)\/events$/);
+    if (req.method === 'GET' && csrEventsMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const csrUid = decodeURIComponent(csrEventsMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        return c.execute(`SELECT event.event_uid,event.event_date,event.project_event,event.inspected_by,event.created_at
+          FROM bes_csr_events event JOIN bes_csr_requests request ON request.csr_id=event.csr_id
+          WHERE request.csr_uid=:csrUid ORDER BY event.event_date DESC,event.event_id DESC`, { csrUid });
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { events: result.rows.map((row) => ({ id: row.EVENT_UID, date: localDateOnly(row.EVENT_DATE), projectEvent: row.PROJECT_EVENT || '', inspectedBy: row.INSPECTED_BY || '', createdAt: localIso(row.CREATED_AT) })) });
+    }
+    if (req.method === 'POST' && csrEventsMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const csrUid = decodeURIComponent(csrEventsMatch[1]); const body = await readBody(req, 50_000);
+      if (!normalize(body.date) || !normalize(body.projectEvent) || !normalize(body.inspectedBy)) return json(res, 400, { error: 'Date, Project Event, and Inspected By are required.' });
+      const eventUid = `CSRE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        const inserted = await c.execute(`INSERT INTO bes_csr_events (event_uid,csr_id,event_date,project_event,inspected_by,created_by_user_id)
+          SELECT :eventUid,request.csr_id,TO_DATE(:eventDate,'YYYY-MM-DD'),:projectEvent,:inspectedBy,:userId FROM bes_csr_requests request WHERE request.csr_uid=:csrUid`, {
+          eventUid, eventDate: normalize(body.date), projectEvent: normalize(body.projectEvent), inspectedBy: normalize(body.inspectedBy), userId: user.USER_ID, csrUid,
+        });
+        if (!inserted.rowsAffected) throw Object.assign(new Error('CSR request was not found.'), { statusCode: 404 });
+        await c.commit();
+      });
+      return json(res, 201, { id: eventUid });
+    }
+    const csrMatch = url.pathname.match(/^\/api\/member-programs\/csr\/([^/]+)$/);
+    if (req.method === 'PATCH' && csrMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const csrUid = decodeURIComponent(csrMatch[1]); const body = await readBody(req, 100_000);
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`UPDATE bes_csr_requests SET date_requested=TO_DATE(:csrDateRequested,'YYYY-MM-DD'),program_type=:csrProgramType,requestee=:csrRequestee,designation=:csrDesignation,organization=:csrOrganization,sector=:csrSector,location=:csrLocation,barangay=:csrBarangay,municipality=:csrMunicipality,district=:csrDistrict,project_details=:csrProjectDetails,project_requirement=:csrProjectRequirement,request_status=:csrRequestStatus,evaluation_result=:csrEvaluationResult,evaluated_by=:csrEvaluatedBy,date_approved=TO_DATE(:csrDateApproved,'YYYY-MM-DD'),amount_funding=:csrAmountFunding,updated_by_user_id=:csrActorUserId,updated_at=SYSTIMESTAMP WHERE csr_uid=:csrRequestUid`, {
+          csrRequestUid: csrUid, csrDateRequested: normalize(body.dateRequested), csrProgramType: normalize(body.programType), csrRequestee: normalize(body.requestee), csrDesignation: nullableNormalize(body.designation), csrOrganization: nullableNormalize(body.organization), csrSector: nullableNormalize(body.sector), csrLocation: nullableNormalize(body.location), csrBarangay: nullableNormalize(body.barangay), csrMunicipality: nullableNormalize(body.municipality), csrDistrict: nullableNormalize(body.district), csrProjectDetails: nullableNormalize(body.projectDetails), csrProjectRequirement: nullableNormalize(body.projectRequirement), csrRequestStatus: normalize(body.status), csrEvaluationResult: nullableNormalize(body.evaluationResult), csrEvaluatedBy: nullableNormalize(body.evaluatedBy), csrDateApproved: nullableNormalize(body.dateApproved), csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null, csrActorUserId: user.USER_ID,
+        }); await c.commit();
+      });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'DELETE' && csrMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const csrUid = decodeURIComponent(csrMatch[1]);
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`DELETE FROM bes_csr_requests WHERE csr_uid=:csrUid`, { csrUid }); await c.commit(); });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && req.url === '/api/fleet/models') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        return c.execute(`SELECT payload, updated_at FROM bes_fleet_store WHERE data_key='MODEL_LIBRARY'`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      const payload = result.rows[0]?.PAYLOAD;
+      let models = [];
+      try { models = payload ? JSON.parse(String(payload)) : []; } catch { models = []; }
+      return json(res, 200, { models, updatedAt: localIso(result.rows[0]?.UPDATED_AT) });
+    }
+    if (req.method === 'PUT' && req.url === '/api/fleet/models') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req, 2_000_000);
+      if (!Array.isArray(body.models)) return json(res, 400, { error: 'Vehicle models must be an array.' });
+      const payload = JSON.stringify(body.models);
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`MERGE INTO bes_fleet_store target USING (SELECT 'MODEL_LIBRARY' data_key FROM dual) source
+          ON (target.data_key=source.data_key)
+          WHEN MATCHED THEN UPDATE SET payload=:payload,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (data_key,payload,updated_by_user_id) VALUES ('MODEL_LIBRARY',:payload,:userId)`, {
+          payload: { val: payload, type: oracledb.CLOB }, userId: user.USER_ID,
+        });
+        await c.commit();
+      });
+      return json(res, 200, { ok: true });
+    }
     if (req.method === 'GET' && req.url === '/api/fleet/vehicles') {
       const token = bearerToken(req);
       if (!token) return json(res, 401, { error: 'Session required.' });
@@ -2795,6 +2970,18 @@ async function handle(req, res) {
       });
       return result ? json(res, 200, result) : json(res, 401, { error: 'Session expired.' });
     }
+    if (req.method === 'GET' && req.url === '/api/bfm/projects') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const adminRole = await c.execute(`SELECT COUNT(*) role_count FROM bes_user_roles
+          WHERE user_id=:userId AND role_code='Administrator' AND is_active='Y'`, { userId: user.USER_ID });
+        return { ...(await loadBuildingFacilitiesOperations(c, 'Projects')), canManage: user.APP_ROLE === 'Administrator' || Number(adminRole.rows[0]?.ROLE_COUNT || 0) > 0 };
+      });
+      return result ? json(res, 200, result) : json(res, 401, { error: 'Session expired.' });
+    }
     if (req.method === 'POST' && req.url === '/api/bfm/facilities') {
       const token = bearerToken(req);
       const admin = await requireAdministrator(token);
@@ -2805,22 +2992,23 @@ async function handle(req, res) {
       const parentId = nullableNormalize(body.parentId);
       const description = nullableNormalize(body.description);
       const location = nullableNormalize(body.location);
+      const facilityScope = body.scope === 'Projects' ? 'Projects' : 'Operations';
       if (!name) return json(res, 400, { error: 'Facility name is required.' });
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
         if (parentId) {
-          const parent = await c.execute(`SELECT facility_uid FROM bes_bfm_facilities WHERE facility_uid=:parentId AND is_active='Y'`, { parentId });
+          const parent = await c.execute(`SELECT facility_uid FROM bes_bfm_facilities WHERE facility_uid=:parentId AND facility_scope=:facilityScope AND is_active='Y'`, { parentId, facilityScope });
           if (!parent.rows[0]) throw Object.assign(new Error('Parent facility not found.'), { statusCode: 404 });
         }
         const facilityUid = `BFM-FAC-${Date.now()}`;
         await c.execute(`INSERT INTO bes_bfm_facilities
-          (facility_uid,parent_facility_uid,facility_name,facility_type,description,location,sort_order,created_by_user_id,updated_by_user_id)
+          (facility_uid,parent_facility_uid,facility_name,facility_type,description,location,sort_order,facility_scope,created_by_user_id,updated_by_user_id)
           VALUES (:facilityUid,:parentId,:name,:type,:description,:location,
             (SELECT NVL(MAX(sort_order),0)+10 FROM bes_bfm_facilities WHERE NVL(parent_facility_uid,'-')=NVL(:parentId,'-')),
-            :userId,:userId)`, { facilityUid, parentId, name, type, description, location, userId: user.USER_ID });
+            :facilityScope,:userId,:userId)`, { facilityUid, parentId, name, type, description, location, facilityScope, userId: user.USER_ID });
         await c.commit();
-        return loadBuildingFacilitiesOperations(c);
+        return loadBuildingFacilitiesOperations(c, facilityScope);
       });
       return result ? json(res, 201, result) : json(res, 401, { error: 'Session expired.' });
     }
@@ -2835,16 +3023,17 @@ async function handle(req, res) {
       const type = normalize(body.type) || 'Facility';
       const description = nullableNormalize(body.description);
       const location = nullableNormalize(body.location);
+      const facilityScope = body.scope === 'Projects' ? 'Projects' : 'Operations';
       if (!name) return json(res, 400, { error: 'Facility name is required.' });
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
         const updated = await c.execute(`UPDATE bes_bfm_facilities SET facility_name=:name,facility_type=:type,
           description=:description,location=:location,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
-          WHERE facility_uid=:facilityUid AND is_active='Y'`, { name, type, description, location, userId: user.USER_ID, facilityUid });
+          WHERE facility_uid=:facilityUid AND facility_scope=:facilityScope AND is_active='Y'`, { name, type, description, location, userId: user.USER_ID, facilityUid, facilityScope });
         if (!updated.rowsAffected) return false;
         await c.commit();
-        return loadBuildingFacilitiesOperations(c);
+        return loadBuildingFacilitiesOperations(c, facilityScope);
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
       return result ? json(res, 200, result) : json(res, 404, { error: 'Facility not found.' });
@@ -2854,13 +3043,14 @@ async function handle(req, res) {
       const admin = await requireAdministrator(token);
       if (!admin) return json(res, 403, { error: 'Administrator access is required to delete facilities.' });
       const facilityUid = decodeURIComponent(bfmFacilityMatch[1]);
+      const facilityScope = url.searchParams.get('scope') === 'Projects' ? 'Projects' : 'Operations';
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        const removed = await c.execute(`DELETE FROM bes_bfm_facilities WHERE facility_uid=:facilityUid`, { facilityUid });
+        const removed = await c.execute(`DELETE FROM bes_bfm_facilities WHERE facility_uid=:facilityUid AND facility_scope=:facilityScope`, { facilityUid, facilityScope });
         if (!removed.rowsAffected) return false;
         await c.commit();
-        return loadBuildingFacilitiesOperations(c);
+        return loadBuildingFacilitiesOperations(c, facilityScope);
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
       return result ? json(res, 200, result) : json(res, 404, { error: 'Facility not found.' });
@@ -3088,13 +3278,13 @@ async function handle(req, res) {
           (project_uid,facility_uid,project_title,description,category,priority,project_status,start_date,target_date,budget_amount,budget_status,assigned_personnel,created_by_user_id,updated_by_user_id)
           SELECT :projectUid,:facilityId,:title,:description,:category,:priority,:projectStatus,
             CASE WHEN :startDate IS NULL THEN NULL ELSE TO_DATE(:startDate,'YYYY-MM-DD') END,TO_DATE(:targetDate,'YYYY-MM-DD'),:budgetAmount,:budgetStatus,:workerIds,:userId,:userId
-          FROM dual WHERE EXISTS (SELECT 1 FROM bes_bfm_facilities WHERE facility_uid=:facilityId AND is_active='Y')`, {
+          FROM dual WHERE EXISTS (SELECT 1 FROM bes_bfm_facilities WHERE facility_uid=:facilityId AND facility_scope='Projects' AND is_active='Y')`, {
           projectUid, facilityId, title, description: nullableNormalize(body.description), category: normalize(body.category) || 'General',
           priority, projectStatus: status, startDate: /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : null,
           targetDate, budgetAmount: { val: budgetAmount, type: oracledb.NUMBER }, budgetStatus, workerIds: { val: JSON.stringify(Array.isArray(body.workerIds) ? body.workerIds : []), type: oracledb.CLOB }, userId: user.USER_ID,
         });
         await c.commit();
-        return loadBuildingFacilitiesOperations(c);
+        return loadBuildingFacilitiesOperations(c, 'Projects');
       });
       return result ? json(res, 201, result) : json(res, 401, { error: 'Session expired.' });
     }
@@ -3133,7 +3323,7 @@ async function handle(req, res) {
         });
         if (!updated.rowsAffected) return false;
         await c.commit();
-        return loadBuildingFacilitiesOperations(c);
+        return loadBuildingFacilitiesOperations(c, 'Projects');
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
       return result ? json(res, 200, result) : json(res, 404, { error: 'Project not found.' });
@@ -3149,10 +3339,91 @@ async function handle(req, res) {
         const removed = await c.execute(`DELETE FROM bes_bfm_projects WHERE project_uid=:projectUid`, { projectUid });
         if (!removed.rowsAffected) return false;
         await c.commit();
-        return loadBuildingFacilitiesOperations(c);
+        return loadBuildingFacilitiesOperations(c, 'Projects');
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
       return result ? json(res, 200, result) : json(res, 404, { error: 'Project not found.' });
+    }
+    const bfmProjectResourcesMatch = url.pathname.match(/^\/api\/bfm\/projects\/([^/]+)\/resources$/);
+    if (req.method === 'GET' && bfmProjectResourcesMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const projectUid = decodeURIComponent(bfmProjectResourcesMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        const project = await c.execute(`SELECT project_uid FROM bes_bfm_projects WHERE project_uid=:projectUid AND is_active='Y'`, { projectUid });
+        if (!project.rows[0]) return false;
+        const [folders, resources] = await Promise.all([
+          c.execute(`SELECT folder_uid,folder_name,created_at FROM bes_bfm_project_folders WHERE project_uid=:projectUid ORDER BY folder_name`, { projectUid }),
+          c.execute(`SELECT resource_uid,folder_uid,resource_type,resource_name,relative_path,external_url,mime_type,file_size,created_at
+            FROM bes_bfm_project_resources WHERE project_uid=:projectUid ORDER BY resource_name`, { projectUid }),
+        ]);
+        return {
+          folders: folders.rows.map((row) => ({ id: row.FOLDER_UID, name: row.FOLDER_NAME, createdAt: localIso(row.CREATED_AT) })),
+          resources: resources.rows.map((row) => ({ id: row.RESOURCE_UID, folderId: row.FOLDER_UID || undefined, type: row.RESOURCE_TYPE === 'LINK' ? 'link' : 'file', name: row.RESOURCE_NAME, relativePath: row.RELATIVE_PATH || '', url: row.EXTERNAL_URL || '', mimeType: row.MIME_TYPE || '', size: row.FILE_SIZE == null ? undefined : Number(row.FILE_SIZE), createdAt: localIso(row.CREATED_AT) })),
+        };
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      return result ? json(res, 200, result) : json(res, 404, { error: 'Project not found.' });
+    }
+    const bfmProjectFoldersMatch = url.pathname.match(/^\/api\/bfm\/projects\/([^/]+)\/folders$/);
+    if (req.method === 'POST' && bfmProjectFoldersMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const projectUid = decodeURIComponent(bfmProjectFoldersMatch[1]); const body = await readBody(req, 20_000); const folderName = normalize(body.name);
+      if (!folderName) return json(res, 400, { error: 'Folder name is required.' });
+      const folderUid = `BFM-FLD-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        const inserted = await c.execute(`INSERT INTO bes_bfm_project_folders (folder_uid,project_uid,folder_name,created_by_user_id)
+          SELECT :folderUid,:projectUid,:folderName,:actorUserId FROM dual WHERE EXISTS (SELECT 1 FROM bes_bfm_projects WHERE project_uid=:projectUid AND is_active='Y')`, { folderUid, projectUid, folderName, actorUserId: user.USER_ID });
+        if (!inserted.rowsAffected) throw Object.assign(new Error('Project not found.'), { statusCode: 404 }); await c.commit();
+      });
+      return json(res, 201, { id: folderUid, name: folderName });
+    }
+    const bfmProjectLinksMatch = url.pathname.match(/^\/api\/bfm\/projects\/([^/]+)\/links$/);
+    if (req.method === 'POST' && bfmProjectLinksMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const projectUid = decodeURIComponent(bfmProjectLinksMatch[1]); const body = await readBody(req, 30_000);
+      const resourceName = normalize(body.name); const externalUrl = normalize(body.url); const folderUid = nullableNormalize(body.folderId);
+      if (!resourceName || !/^https?:\/\//i.test(externalUrl)) return json(res, 400, { error: 'Link name and a valid http(s) URL are required.' });
+      const resourceUid = `BFM-RES-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`INSERT INTO bes_bfm_project_resources (resource_uid,project_uid,folder_uid,resource_type,resource_name,external_url,created_by_user_id)
+          VALUES (:resourceUid,:projectUid,:folderUid,'LINK',:resourceName,:externalUrl,:actorUserId)`, { resourceUid, projectUid, folderUid, resourceName, externalUrl, actorUserId: user.USER_ID }); await c.commit();
+      });
+      return json(res, 201, { id: resourceUid });
+    }
+    const bfmProjectFilesMatch = url.pathname.match(/^\/api\/bfm\/projects\/([^/]+)\/files$/);
+    if (req.method === 'POST' && bfmProjectFilesMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const projectUid = decodeURIComponent(bfmProjectFilesMatch[1]); let originalName = ''; let relativePath = ''; let folderName = '';
+      try { originalName = decodeURIComponent(normalize(req.headers['x-file-name'])); relativePath = decodeURIComponent(normalize(req.headers['x-relative-path'])); folderName = decodeURIComponent(normalize(req.headers['x-folder-name'])); } catch { return json(res, 400, { error: 'The file or folder name is invalid.' }); }
+      if (!originalName) return json(res, 400, { error: 'File name is required.' });
+      const file = await readBinaryBody(req, 25 * 1024 * 1024, 'Project file'); if (!file.length) return json(res, 400, { error: 'The selected file is empty.' });
+      const resourceUid = `BFM-RES-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`; const mimeType = normalize(req.headers['content-type']) || 'application/octet-stream';
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        let folderUid = null;
+        if (folderName) {
+          const found = await c.execute(`SELECT folder_uid FROM bes_bfm_project_folders WHERE project_uid=:projectUid AND folder_name=:folderName`, { projectUid, folderName });
+          folderUid = found.rows[0]?.FOLDER_UID || `BFM-FLD-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          if (!found.rows[0]) await c.execute(`INSERT INTO bes_bfm_project_folders (folder_uid,project_uid,folder_name,created_by_user_id) VALUES (:folderUid,:projectUid,:folderName,:actorUserId)`, { folderUid, projectUid, folderName, actorUserId: user.USER_ID });
+        }
+        await c.execute(`INSERT INTO bes_bfm_project_resources (resource_uid,project_uid,folder_uid,resource_type,resource_name,relative_path,mime_type,file_size,file_blob,created_by_user_id)
+          VALUES (:resourceUid,:projectUid,:folderUid,'FILE',:resourceName,:relativePath,:mimeType,:fileSize,:fileBlob,:actorUserId)`, { resourceUid, projectUid, folderUid, resourceName: safeFileName(originalName), relativePath: nullableNormalize(relativePath), mimeType, fileSize: file.length, fileBlob: file, actorUserId: user.USER_ID }); await c.commit();
+      });
+      return json(res, 201, { id: resourceUid });
+    }
+    const bfmProjectResourceMatch = url.pathname.match(/^\/api\/bfm\/project-resources\/([^/]+)$/);
+    if (req.method === 'GET' && bfmProjectResourceMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const resourceUid = decodeURIComponent(bfmProjectResourceMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        const found = await c.execute(`SELECT resource_name,mime_type,file_size,file_blob FROM bes_bfm_project_resources WHERE resource_uid=:resourceUid AND resource_type='FILE'`, { resourceUid }); const row = found.rows[0];
+        if (!row) return false; return { ...row, BODY: Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData() };
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' }); if (!result) return json(res, 404, { error: 'File not found.' });
+      res.writeHead(200, { 'content-type': result.MIME_TYPE || 'application/octet-stream', 'content-length': result.FILE_SIZE, 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(result.RESOURCE_NAME)}`, 'cache-control': 'private, no-store' }); return res.end(result.BODY);
     }
     if (req.method === 'GET' && req.url === '/api/calendar/events') {
       const token = bearerToken(req);

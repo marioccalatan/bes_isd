@@ -12,17 +12,18 @@ import { VehicleModelViewer, type ModelAnnotation, type VehicleModelViewerHandle
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { deleteFleetVehicleModel, fetchFleetVehicleModel, fetchFleetVehicles, fetchOrgStructure, saveFleetVehicles, uploadFleetVehicleModel, type OrgDepartment } from '@/lib/api';
+import { deleteFleetVehicleModel, fetchFleetVehicleModel, fetchFleetVehicleModels, fetchFleetVehicles, fetchOrgStructure, saveFleetVehicleModels, saveFleetVehicles, uploadFleetVehicleModel, type OrgDepartment } from '@/lib/api';
 
 type FleetFile = { name: string; type: string; dataUrl: string };
 type FleetModelFile = { name: string; type: string; size?: number; dataUrl?: string };
+type FleetVehicleModel = { id: string; type: string; brand: string; model: string; model3d: FleetModelFile };
 type CheckItem = { id: string; label: string; checked: boolean; notes: string; photos: FleetFile[] };
 export type FleetChecklistTemplateItem = { id: string; label: string };
 export type FleetInspectionEntry = { id: string; activity: string; status: string; findings: string; actionTaken: string; recommendation: string; notes: string; annotations?: ModelAnnotation[]; snapshot?: FleetFile; photos?: FleetFile[] };
 export type FleetInspection = { id: string; date: string; inspectedBy: string; entries: FleetInspectionEntry[]; convertedTaskId?: string };
 export type FleetScheduleRecurrence = { frequency: 'Annual'; month: number; startWeek: number; endWeek: number };
 export type FleetSchedule = { id: string; type: 'Inspection' | 'Maintenance' | 'Preventive Maintenance' | 'Registration Renewal'; startDate: string; endDate: string; status: 'Scheduled' | 'In Progress' | 'Completed' | 'Overdue'; recurrence?: FleetScheduleRecurrence; checklist: CheckItem[]; documents: FleetFile[] };
-export type FleetVehicle = { id: string; type: string; brand: string; model: string; yearAcquired: string; plateNumber: string; propertyNumber: string; color: string; fuel: string; odometer: string; custodian: string; assignedDepartment?: string; assignedOffice: string; acquisitionCost: string; registrationExpiry: string; notes: string; image?: FleetFile; model3d?: FleetModelFile; preventiveChecklist?: FleetChecklistTemplateItem[]; inspectionStatuses?: string[]; inspections?: FleetInspection[]; schedules: FleetSchedule[] };
+export type FleetVehicle = { id: string; modelLibraryId?: string; type: string; brand: string; model: string; yearAcquired: string; plateNumber: string; propertyNumber: string; color: string; fuel: string; odometer: string; custodian: string; assignedDepartment?: string; assignedOffice: string; acquisitionCost: string; registrationExpiry: string; notes: string; image?: FleetFile; model3d?: FleetModelFile; preventiveChecklist?: FleetChecklistTemplateItem[]; inspectionStatuses?: string[]; inspections?: FleetInspection[]; schedules: FleetSchedule[] };
 type Schedule = FleetSchedule;
 type SummarySortKey = 'vehicle' | 'plate' | 'department' | 'type' | 'preventive' | 'registration';
 
@@ -34,7 +35,7 @@ const defaultInspectionStatuses = ['No Problem', 'For Replacement', 'Schedule Re
 const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const newInspectionEntry = (): FleetInspectionEntry => ({ id: `INSP-ITEM-${Date.now()}-${Math.random().toString(36).slice(2)}`, activity: inspectionActivities[0], status: defaultInspectionStatuses[0], findings: '', actionTaken: '', recommendation: '', notes: '' });
 const emptyInspection = { date: today, inspectedBy: '', entries: [newInspectionEntry()] };
-const emptyVehicle = { type: 'Car', brand: '', model: '', yearAcquired: '', plateNumber: '', propertyNumber: '', color: '', fuel: 'Gasoline', odometer: '', custodian: '', assignedDepartment: 'ISD', assignedOffice: 'General Services Office', acquisitionCost: '', registrationExpiry: '', notes: '' };
+const emptyVehicle = { modelLibraryId: '', type: 'Car', brand: '', model: '', yearAcquired: '', plateNumber: '', propertyNumber: '', color: '', fuel: 'Gasoline', odometer: '', custodian: '', assignedDepartment: 'ISD', assignedOffice: 'General Services Office', acquisitionCost: '', registrationExpiry: '', notes: '' };
 
 export function loadFleetVehicles(): FleetVehicle[] {
   try { return JSON.parse(localStorage.getItem(FLEET_STORAGE_KEY) || '[]') as FleetVehicle[]; } catch { return []; }
@@ -98,6 +99,12 @@ export function VehicleFleetManagement() {
   const [orgDepartments, setOrgDepartments] = useState<OrgDepartment[]>([]);
   const [oracleReady, setOracleReady] = useState(false);
   const [vehicles, setVehicles] = useState<FleetVehicle[]>(loadFleetVehicles);
+  const [vehicleModels, setVehicleModels] = useState<FleetVehicleModel[]>([]);
+  const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
+  const [modelLibraryForm, setModelLibraryForm] = useState({ type: 'Car', brand: '', model: '' });
+  const [modelLibraryFile, setModelLibraryFile] = useState<File>();
+  const [savingModelLibrary, setSavingModelLibrary] = useState(false);
+  const modelLibraryInputRef = useRef<HTMLInputElement | null>(null);
   const lastLocalMutationRef = useRef(0);
   const applyingServerUpdateRef = useRef(false);
   const [selectedId, setSelectedId] = useState<string>('');
@@ -153,6 +160,8 @@ export function VehicleFleetManagement() {
     : departments.map((department) => ({ id: department.id, name: department.name, shortName: department.shortName, units: department.units })), [departments, orgDepartments]);
   const registryDepartments = useMemo(() => [...new Set(vehicles.map((vehicle) => vehicle.assignedDepartment || 'Unassigned'))].sort(), [vehicles]);
   const registryVehicleTypes = useMemo(() => [...new Set(vehicles.map((vehicle) => vehicle.type || 'Other'))].sort(), [vehicles]);
+  const modelLibraryBrands = useMemo(() => [...new Set(vehicleModels.map((item) => item.brand))].sort(), [vehicleModels]);
+  const modelsForSelectedBrand = useMemo(() => vehicleModels.filter((item) => item.brand === vehicleForm.brand).sort((a, b) => a.model.localeCompare(b.model)), [vehicleModels, vehicleForm.brand]);
   const filteredVehicles = useMemo(() => vehicles.filter((vehicle) => registryFilterMode === 'all'
     || (registryFilterMode === 'department' ? (vehicle.assignedDepartment || 'Unassigned') === registryFilterValue : (vehicle.type || 'Other') === registryFilterValue)), [vehicles, registryFilterMode, registryFilterValue]);
   const summaryVehicles = useMemo(() => [...vehicles].sort((left, right) => {
@@ -174,13 +183,20 @@ export function VehicleFleetManagement() {
     let objectUrl = '';
     setSelectedModelUrl(selected?.model3d?.dataUrl || '');
     if (!token || !selected?.model3d || selected.model3d.dataUrl) return;
-    fetchFleetVehicleModel(token, selected.id).then((blob) => {
+    fetchFleetVehicleModel(token, selected.modelLibraryId || selected.id).then((blob) => {
       if (cancelled) return;
       objectUrl = URL.createObjectURL(blob);
       setSelectedModelUrl(objectUrl);
     }).catch((error) => console.warn('Unable to load the vehicle 3D model.', error));
     return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [selected?.id, selected?.model3d?.name, token]);
+  }, [selected?.id, selected?.modelLibraryId, selected?.model3d?.name, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) return;
+    fetchFleetVehicleModels<FleetVehicleModel[]>(token).then((models) => { if (!cancelled) setVehicleModels(models); }).catch((error) => console.warn('Unable to load the vehicle model library.', error));
+    return () => { cancelled = true; };
+  }, [token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -240,7 +256,8 @@ export function VehicleFleetManagement() {
     const vehicleId = editingVehicleId || `VEH-${Date.now()}`;
     setSavingVehicle(true);
     try {
-      let model = vehicleModel3d;
+      const selectedLibraryModel = vehicleModels.find((item) => item.id === vehicleForm.modelLibraryId);
+      let model = selectedLibraryModel?.model3d ?? vehicleModel3d;
       if (vehicleModel3dFile) {
         if (!token) throw new Error('Your session has expired. Please sign in and try again.');
         model = await uploadFleetVehicleModel(token, vehicleId, vehicleModel3dFile);
@@ -265,7 +282,7 @@ export function VehicleFleetManagement() {
   function openEditVehicle(vehicle: FleetVehicle) {
     setSelectedId(vehicle.id); setEditingVehicleId(vehicle.id);
     setVehicleForm({
-      type: vehicle.type, brand: vehicle.brand, model: vehicle.model, yearAcquired: vehicle.yearAcquired,
+      modelLibraryId: vehicle.modelLibraryId ?? '', type: vehicle.type, brand: vehicle.brand, model: vehicle.model, yearAcquired: vehicle.yearAcquired,
       plateNumber: vehicle.plateNumber, propertyNumber: vehicle.propertyNumber, color: vehicle.color,
       fuel: vehicle.fuel, odometer: vehicle.odometer, custodian: vehicle.custodian,
       assignedDepartment: vehicle.assignedDepartment ?? 'ISD', assignedOffice: vehicle.assignedOffice,
@@ -487,6 +504,24 @@ export function VehicleFleetManagement() {
     setVehicleModel3d({ name: file.name, type: file.type || 'model/gltf-binary', size: file.size });
     setVehicleModel3dFile(file);
   }
+  function openModelLibrary() {
+    setModelLibraryForm({ type: 'Car', brand: '', model: '' }); setModelLibraryFile(undefined); if (modelLibraryInputRef.current) modelLibraryInputRef.current.value = ''; setModelLibraryOpen(true);
+  }
+  async function saveModelLibraryItem() {
+    if (!token || !modelLibraryForm.brand.trim() || !modelLibraryForm.model.trim() || !modelLibraryFile) return;
+    if (!modelLibraryFile.name.toLowerCase().endsWith('.glb')) { toast({ kind: 'error', title: 'Unsupported 3D model', description: 'Please attach a GLB (.glb) file.' }); return; }
+    const duplicate = vehicleModels.some((item) => item.brand.toLowerCase() === modelLibraryForm.brand.trim().toLowerCase() && item.model.toLowerCase() === modelLibraryForm.model.trim().toLowerCase());
+    if (duplicate) { toast({ kind: 'error', title: 'Vehicle model already exists', description: 'Edit or use the existing brand-model entry.' }); return; }
+    setSavingModelLibrary(true);
+    try {
+      const id = `MODEL-${Date.now()}`;
+      const model3d = await uploadFleetVehicleModel(token, id, modelLibraryFile);
+      const next = [...vehicleModels, { id, type: modelLibraryForm.type, brand: modelLibraryForm.brand.trim(), model: modelLibraryForm.model.trim(), model3d }];
+      await saveFleetVehicleModels(token, next); setVehicleModels(next);
+      setModelLibraryForm({ type: 'Car', brand: '', model: '' }); setModelLibraryFile(undefined); if (modelLibraryInputRef.current) modelLibraryInputRef.current.value = '';
+      toast({ kind: 'success', title: 'Vehicle model added', description: `${modelLibraryForm.brand.trim()} ${modelLibraryForm.model.trim()} is now available to all fleet vehicles.` });
+    } catch (error) { toast({ kind: 'error', title: 'Vehicle model was not saved', description: error instanceof Error ? error.message : 'Please try again.' }); } finally { setSavingModelLibrary(false); }
+  }
 
   const metricCards = useMemo(() => [
     { label: 'Fleet Size', value: vehicles.length, icon: Car, tone: 'text-brand-700 bg-brand-50' },
@@ -496,7 +531,7 @@ export function VehicleFleetManagement() {
   ], [vehicles.length, due, overdue, compliance]);
 
   return <div className="space-y-5">
-    <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => setSummaryOpen(true)}><List className="h-4 w-4" /> Summary View</Button><Button variant="outline" onClick={() => window.open('/workspace/vehicle-fleet/maintenance-schedule', '_blank', 'noopener,noreferrer')}><CalendarRange className="h-4 w-4" /> Maintenance Schedule <ExternalLink className="h-3.5 w-3.5" /></Button></div>
+    <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={openModelLibrary}><Car className="h-4 w-4" /> Add Vehicle Model</Button><Button variant="outline" onClick={() => setSummaryOpen(true)}><List className="h-4 w-4" /> Summary View</Button><Button variant="outline" onClick={() => window.open('/workspace/vehicle-fleet/maintenance-schedule', '_blank', 'noopener,noreferrer')}><CalendarRange className="h-4 w-4" /> Maintenance Schedule <ExternalLink className="h-3.5 w-3.5" /></Button></div>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{metricCards.map(({ label, value, icon: Icon, tone }) => <Card key={label} className="flex items-center gap-3 p-4"><span className={`rounded-lg p-2 ${tone}`}><Icon className="h-5 w-5" /></span><div><p className="text-xs text-slate-500">{label}</p><p className="text-2xl font-bold text-slate-900">{value}</p></div></Card>)}</div>
     <div className="grid gap-5 lg:grid-cols-[300px_1fr]">
       <Card className="min-h-[360px] p-4" onClick={() => setSelectedId('')}><div className="mb-3 flex items-center justify-between"><div><h3 className="font-semibold">Vehicle Registry</h3><p className="text-xs text-slate-500">Click to select · double-click to edit</p></div><Button size="sm" onClick={(event) => { event.stopPropagation(); openAddVehicle(); }}><Plus className="h-4 w-4" /> Add</Button></div>
@@ -516,12 +551,15 @@ export function VehicleFleetManagement() {
     <Dialog open={summaryOpen} onClose={() => setSummaryOpen(false)} title="Vehicle Fleet Schedule Summary" description="All vehicles with their next preventive maintenance and registration renewal schedules." size="xl" footer={<div className="flex w-full flex-wrap items-center justify-between gap-2"><div className="flex gap-2"><Button variant="outline" onClick={printFleetSummary}><Printer className="h-4 w-4" /> Print</Button><Button variant="outline" onClick={exportFleetSummary}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button></div><Button onClick={() => setSummaryOpen(false)}>Close</Button></div>}>
       {vehicles.length === 0 ? <div className="rounded-lg border border-dashed p-10 text-center text-sm text-slate-500">No vehicles registered.</div> : <div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[960px] text-sm"><thead className="bg-slate-50"><tr><th className="w-12 px-3 py-2 text-left">No.</th><th className="px-3 py-2 text-left"><SummarySortButton label="Vehicle" sortKey="vehicle" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Plate No." sortKey="plate" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Department" sortKey="department" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Vehicle Type" sortKey="type" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Preventive Maintenance" sortKey="preventive" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Registration Renewal" sortKey="registration" sort={summarySort} onSort={toggleSummarySort} /></th></tr></thead><tbody className="divide-y divide-slate-100">{summaryVehicles.map((vehicle, index) => { const row = fleetSummaryRow(vehicle); return <tr key={vehicle.id}><td className="px-3 py-3 text-slate-500">{index + 1}</td><td className="px-3 py-3 font-medium">{row.vehicle}</td><td className="px-3 py-3">{row.plate}</td><td className="px-3 py-3">{assignmentDepartments.find((department) => department.id === row.department)?.name ?? row.department}</td><td className="px-3 py-3">{row.type}</td><td className="px-3 py-3 text-xs text-slate-600">{row.preventive}</td><td className="px-3 py-3 text-xs text-slate-600">{row.registration}</td></tr>; })}</tbody></table></div>}
     </Dialog>
+    <Dialog open={modelLibraryOpen} onClose={() => { if (!savingModelLibrary) setModelLibraryOpen(false); }} title="Vehicle Model Library" description="Add each brand-model once and attach its shared GLB file for use by every matching fleet vehicle." size="lg" footer={<><Button variant="outline" disabled={savingModelLibrary} onClick={() => setModelLibraryOpen(false)}>Close</Button><Button disabled={savingModelLibrary || !modelLibraryForm.brand.trim() || !modelLibraryForm.model.trim() || !modelLibraryFile} onClick={() => void saveModelLibraryItem()}>{savingModelLibrary ? 'Uploading…' : 'Add Vehicle Model'}</Button></>}>
+      <div className="space-y-5"><div className="grid gap-4 rounded-xl border border-slate-200 p-4 sm:grid-cols-2"><Field label="Vehicle Type"><Select value={modelLibraryForm.type} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, type: event.target.value })}>{['Car','Truck','Motorcycle','Van','Bus','Utility Vehicle','Heavy Equipment','Other'].map((value) => <option key={value}>{value}</option>)}</Select></Field><Field label="Brand" required><Input value={modelLibraryForm.brand} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, brand: event.target.value })} placeholder="e.g. ISUZU" /></Field><Field label="Model" required><Input value={modelLibraryForm.model} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, model: event.target.value })} placeholder="e.g. MUX" /></Field><div><Label required>3D Model (GLB)</Label><Input ref={modelLibraryInputRef} type="file" accept=".glb,model/gltf-binary" onChange={(event) => setModelLibraryFile(event.target.files?.[0])} /></div></div><div><h4 className="mb-2 font-semibold">Available Brand-Models</h4>{vehicleModels.length === 0 ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No shared vehicle models yet.</div> : <div className="divide-y overflow-hidden rounded-lg border border-slate-200">{[...vehicleModels].sort((a, b) => a.brand.localeCompare(b.brand) || a.model.localeCompare(b.model)).map((item) => <div key={item.id} className="flex items-center justify-between gap-3 px-4 py-3"><div><p className="font-medium">{item.brand} {item.model}</p><p className="text-xs text-slate-500">{item.type} · {item.model3d.name}{item.model3d.size ? ` · ${(item.model3d.size / 1024 / 1024).toFixed(1)} MB` : ''}</p></div><Badge>Shared GLB</Badge></div>)}</div>}</div></div>
+    </Dialog>
     <Dialog open={vehicleOpen} onClose={() => { if (!savingVehicle) setVehicleOpen(false); }} title={editingVehicleId ? 'Edit Vehicle' : 'Add Vehicle'} description={editingVehicleId ? 'Update vehicle assignment, identity, registration, and operating details.' : 'Register a car, truck, motorcycle, or other fleet asset.'} size="lg" footer={<div className="flex w-full items-center justify-between gap-2">{editingVehicleId ? <Button variant="destructive" disabled={savingVehicle} onClick={() => setVehicleDeleteOpen(true)}>Delete Vehicle</Button> : <span />}<div className="flex gap-2"><Button variant="outline" disabled={savingVehicle} onClick={() => setVehicleOpen(false)}>Cancel</Button><Button disabled={savingVehicle || !vehicleForm.brand || !vehicleForm.model || !vehicleForm.plateNumber} onClick={() => void saveVehicle()}>{savingVehicle ? 'Saving…' : editingVehicleId ? 'Save Changes' : 'Save Vehicle'}</Button></div></div>}>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Vehicle Type"><Select value={vehicleForm.type} onChange={(e) => setVehicleForm({...vehicleForm,type:e.target.value})}>{['Car','Truck','Motorcycle','Van','Bus','Utility Vehicle','Heavy Equipment','Other'].map(v=><option key={v}>{v}</option>)}</Select></Field>
+        <Field label="Vehicle Type"><Select value={vehicleForm.type} disabled={Boolean(vehicleForm.modelLibraryId)} onChange={(e) => setVehicleForm({...vehicleForm,type:e.target.value})}>{['Car','Truck','Motorcycle','Van','Bus','Utility Vehicle','Heavy Equipment','Other'].map(v=><option key={v}>{v}</option>)}</Select></Field>
         <Field label="Plate Number" required><Input value={vehicleForm.plateNumber} onChange={(e)=>setVehicleForm({...vehicleForm,plateNumber:e.target.value})}/></Field>
-        <Field label="Brand" required><Input value={vehicleForm.brand} onChange={(e)=>setVehicleForm({...vehicleForm,brand:e.target.value})}/></Field>
-        <Field label="Model" required><Input value={vehicleForm.model} onChange={(e)=>setVehicleForm({...vehicleForm,model:e.target.value})}/></Field>
+        <Field label="Brand" required><Select value={vehicleForm.brand} onChange={(event) => setVehicleForm({ ...vehicleForm, modelLibraryId: '', brand: event.target.value, model: '', type: vehicleModels.find((item) => item.brand === event.target.value)?.type ?? vehicleForm.type })}><option value="">Select brand</option>{vehicleForm.brand && !modelLibraryBrands.includes(vehicleForm.brand) && <option value={vehicleForm.brand}>{vehicleForm.brand} — legacy</option>}{modelLibraryBrands.map((brand) => <option key={brand}>{brand}</option>)}</Select></Field>
+        <Field label="Model" required><Select value={vehicleForm.modelLibraryId} disabled={!vehicleForm.brand} onChange={(event) => { const item = vehicleModels.find((model) => model.id === event.target.value); if (item) setVehicleForm({ ...vehicleForm, modelLibraryId: item.id, brand: item.brand, model: item.model, type: item.type }); }}><option value="">{vehicleForm.model && !vehicleForm.modelLibraryId ? `${vehicleForm.model} — legacy` : 'Select model'}</option>{modelsForSelectedBrand.map((item) => <option key={item.id} value={item.id}>{item.model}</option>)}</Select></Field>
         <Field label="Year Acquired"><Input type="number" value={vehicleForm.yearAcquired} onChange={(e)=>setVehicleForm({...vehicleForm,yearAcquired:e.target.value})}/></Field>
         <Field label="Property Number"><Input value={vehicleForm.propertyNumber} onChange={(e)=>setVehicleForm({...vehicleForm,propertyNumber:e.target.value})}/></Field>
         <Field label="Accountable Person"><Input value={vehicleForm.custodian} onChange={(e)=>setVehicleForm({...vehicleForm,custodian:e.target.value})}/></Field>
@@ -532,7 +570,7 @@ export function VehicleFleetManagement() {
         <Field label="Color"><Input value={vehicleForm.color} onChange={(e)=>setVehicleForm({...vehicleForm,color:e.target.value})}/></Field>
         <Field label="Registration Expiry"><Input type="date" value={vehicleForm.registrationExpiry} onChange={(e)=>setVehicleForm({...vehicleForm,registrationExpiry:e.target.value})}/></Field>
         <div className="sm:col-span-2"><Label>Vehicle Image</Label><Input type="file" accept="image/*" onChange={(e)=>void setImage(e)}/></div>
-        <div className="sm:col-span-2"><Label>3D Vehicle Model (GLB)</Label><Input key={vehicleModel3d?.name ?? 'no-model'} type="file" accept=".glb,model/gltf-binary" onChange={(event) => void setModel3d(event)} />{vehicleModel3d && <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"><div className="min-w-0"><p className="truncate text-sm font-medium">{vehicleModel3d.name}</p><p className="text-xs text-slate-500">GLB model attached{vehicleModel3d.size ? ` · ${(vehicleModel3d.size / 1024 / 1024).toFixed(1)} MB` : ''}</p></div><Button type="button" size="sm" variant="ghost" onClick={() => { setVehicleModel3d(undefined); setVehicleModel3dFile(undefined); }}><Trash2 className="h-4 w-4 text-red-600" /> Remove</Button></div>}<p className="mt-1 text-xs text-slate-500">The GLB is uploaded separately and is no longer embedded in the vehicle record.</p></div>
+        <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-3"><Label>Shared 3D Vehicle Model</Label><p className="mt-1 text-sm text-slate-600">{vehicleForm.modelLibraryId ? `${vehicleModels.find((item) => item.id === vehicleForm.modelLibraryId)?.model3d.name ?? 'GLB model'} from the Vehicle Model Library` : vehicleModel3d ? `${vehicleModel3d.name} — legacy vehicle-specific model` : 'Select a Brand and Model above. Its shared GLB will be used automatically.'}</p></div>
         <div className="sm:col-span-2"><Label>Notes</Label><Textarea value={vehicleForm.notes} onChange={(e)=>setVehicleForm({...vehicleForm,notes:e.target.value})}/></div>
       </div>
     </Dialog>
