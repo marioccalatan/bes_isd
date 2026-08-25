@@ -164,6 +164,33 @@ const jsonArray = (value) => {
     return [];
   }
 };
+const fleetModelLookupIds = async (connection, requestedId) => {
+  const ids = [requestedId];
+  const stored = await connection.execute(`SELECT data_key,payload FROM bes_fleet_store WHERE data_key IN ('VEHICLES','MODEL_LIBRARY')`);
+  const payloads = new Map(stored.rows.map((row) => [row.DATA_KEY, jsonArray(row.PAYLOAD)]));
+  const vehicles = payloads.get('VEHICLES') ?? [];
+  const models = payloads.get('MODEL_LIBRARY') ?? [];
+  const vehicle = vehicles.find((item) => normalize(item?.id) === requestedId);
+  const directModel = models.find((item) => normalize(item?.id) === requestedId);
+  const linkedId = normalize(vehicle?.modelLibraryId);
+  if (linkedId) ids.push(linkedId);
+  const matchingModel = directModel ?? models.find((item) => vehicle
+    && normalize(item?.brand).toLowerCase() === normalize(vehicle?.brand).toLowerCase()
+    && normalize(item?.model).toLowerCase() === normalize(vehicle?.model).toLowerCase());
+  if (matchingModel?.id) ids.push(normalize(matchingModel.id));
+  return [...new Set(ids.filter(Boolean))];
+};
+const loadFleetModelBlob = async (connection, requestedId) => {
+  const lookupIds = await fleetModelLookupIds(connection, requestedId);
+  for (const lookupId of lookupIds) {
+    const found = await connection.execute(`SELECT vehicle_uid,file_name,mime_type,file_size,file_blob FROM bes_fleet_vehicle_models WHERE vehicle_uid=:lookupId`, { lookupId });
+    const row = found.rows[0];
+    if (!row) continue;
+    const body = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData();
+    return { ...row, BODY: body };
+  }
+  return false;
+};
 const safeFileName = (value) => normalize(value).replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '_') || 'attachment';
 const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const isDocxBuffer = (file) => file.length >= 4
@@ -540,6 +567,10 @@ const DB_SYNC_TABLES = [
   'BES_POSITION_DR_PL',
   'BES_EMPLOYEE_SKILL_CHECKS',
   'BES_FLEET_STORE',
+  'BES_CSR_SECTORS',
+  'BES_BARANGAY_LOCATIONS',
+  'BES_CSR_REQUESTS',
+  'BES_CSR_EVENTS',
   'BES_BFM_FACILITIES',
   'BES_BFM_PERSONNEL',
   'BES_BFM_TODOS',
@@ -558,6 +589,10 @@ const DB_SYNC_TABLES = [
   'BES_HRO_EM_TASK_PROCESSING',
 ];
 const DB_SYNC_DELETE_ORDER = [
+  'BES_CSR_EVENTS',
+  'BES_CSR_REQUESTS',
+  'BES_CSR_SECTORS',
+  'BES_BARANGAY_LOCATIONS',
   'BES_EMPLOYEE_SKILL_CHECKS',
   'BES_POSITION_DR_PL',
   'BES_PERFORMANCE_ASSIGNMENTS',
@@ -628,6 +663,10 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_PERFORMANCE_PLANS',
   'BES_PERFORMANCE_TARGETS',
   'BES_FLEET_STORE',
+  'BES_CSR_SECTORS',
+  'BES_BARANGAY_LOCATIONS',
+  'BES_CSR_REQUESTS',
+  'BES_CSR_EVENTS',
   'BES_BFM_FACILITIES',
   'BES_BFM_PERSONNEL',
   'BES_BFM_TODOS',
@@ -654,9 +693,13 @@ const DB_SYNC_KEY_OVERRIDES = new Map([
   ['BES_TASK_SUBJECTS', ['TOOL_CODE', 'TASK_SUBJECT']],
   ['BES_TOOL_ACCESS', ['TOOL_CODE', 'DEPARTMENT_CODE', 'OFFICE_NAME', 'POSITION_NAME']],
   ['BES_USER_ROLES', ['USER_ID', 'ROLE_CODE', 'SCOPE_DEPARTMENT_CODE', 'SCOPE_UNIT_NAME']],
+  ['BES_CSR_SECTORS', ['SECTOR_NAME']],
+  ['BES_BARANGAY_LOCATIONS', ['MUNICIPALITY', 'BARANGAY']],
+  ['BES_CSR_REQUESTS', ['CSR_UID']],
+  ['BES_CSR_EVENTS', ['EVENT_UID']],
 ]);
 const DB_SYNC_CASE_INSENSITIVE_KEYS = new Set([
-  'DEPARTMENT_NAME', 'OFFICE_NAME', 'POSITION_TITLE', 'POSITION_NAME', 'TASK_SUBJECT',
+  'DEPARTMENT_NAME', 'OFFICE_NAME', 'POSITION_TITLE', 'POSITION_NAME', 'TASK_SUBJECT', 'SECTOR_NAME', 'MUNICIPALITY', 'BARANGAY',
 ]);
 
 const oracleConnectString = (details) => {
@@ -937,6 +980,22 @@ async function remapPositionScopeIds(source, destination, rows) {
   });
 }
 
+async function remapCsrEventRequestIds(source, destination, rows) {
+  if (!rows.length) return rows;
+  const [sourceRequests, destinationRequests] = await Promise.all([
+    source.execute(`SELECT csr_id, csr_uid FROM bes_csr_requests`),
+    destination.execute(`SELECT csr_id, csr_uid FROM bes_csr_requests`),
+  ]);
+  const sourceUids = new Map(sourceRequests.rows.map((row) => [String(row.CSR_ID), row.CSR_UID]));
+  const destinationIds = new Map(destinationRequests.rows.map((row) => [row.CSR_UID, row.CSR_ID]));
+  return rows.map((row) => {
+    const requestUid = sourceUids.get(String(row.CSR_ID));
+    const destinationId = requestUid ? destinationIds.get(requestUid) : null;
+    if (destinationId == null) throw Object.assign(new Error(`CSR event ${row.EVENT_UID ?? row.EVENT_ID} references a CSR request that is not present in the destination.`), { statusCode: 400 });
+    return { ...row, CSR_ID: destinationId };
+  });
+}
+
 async function pushOracleSchema(targetDetails, requestedTables) {
   const selected = Array.isArray(requestedTables)
     ? [...new Set(requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)))]
@@ -999,6 +1058,7 @@ async function copyOracleTables(source, destination, selected, direction) {
       const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
       sourceResult.rows = await materializeOracleLobs(sourceResult.rows, columnMetadata);
       if (table === 'BES_POSITIONS') sourceResult.rows = await remapPositionScopeIds(source, destination, sourceResult.rows);
+      if (table === 'BES_CSR_EVENTS') sourceResult.rows = await remapCsrEventRequestIds(source, destination, sourceResult.rows);
       const immutableColumns = new Set([...syncKeyColumns, ...primaryKeyColumns]);
       const updateColumns = columns.filter((column) => !immutableColumns.has(column));
       const usesLogicalKey = syncKeyColumns.some((column) => !primaryKeyColumns.includes(column));
@@ -2916,31 +2976,22 @@ async function handle(req, res) {
       let result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        const found = await c.execute(`SELECT file_name,mime_type,file_size,file_blob FROM bes_fleet_vehicle_models WHERE vehicle_uid=:vehicleUid`, { vehicleUid });
-        const row = found.rows[0];
-        if (!row) return false;
-        const body = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData();
-        return { ...row, BODY: body };
+        return loadFleetModelBlob(c, vehicleUid);
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
       if (!result && getDatabaseRuntimeStatus().activeDatabase === 'server') {
-        const localModel = await withLocalConnection(async (c) => {
-          const found = await c.execute(`SELECT file_name,mime_type,file_size,file_blob FROM bes_fleet_vehicle_models WHERE vehicle_uid=:vehicleUid`, { vehicleUid });
-          const row = found.rows[0];
-          if (!row) return false;
-          const body = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData();
-          return { ...row, BODY: body };
-        });
+        const localModel = await withLocalConnection((c) => loadFleetModelBlob(c, vehicleUid));
         if (localModel) {
+          const modelStorageUid = localModel.VEHICLE_UID || vehicleUid;
           await withConnection(async (c) => {
             const user = await currentSessionUser(c, token);
             if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
-            await c.execute(`MERGE INTO bes_fleet_vehicle_models target USING (SELECT :vehicleUid vehicle_uid FROM dual) source
+            await c.execute(`MERGE INTO bes_fleet_vehicle_models target USING (SELECT :modelStorageUid vehicle_uid FROM dual) source
               ON (target.vehicle_uid=source.vehicle_uid)
               WHEN MATCHED THEN UPDATE SET file_name=:fileName,mime_type=:mimeType,file_size=:fileSize,file_blob=:fileBlob,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
               WHEN NOT MATCHED THEN INSERT (vehicle_uid,file_name,mime_type,file_size,file_blob,updated_by_user_id)
-                VALUES (:vehicleUid,:fileName,:mimeType,:fileSize,:fileBlob,:userId)`, {
-              vehicleUid, fileName: localModel.FILE_NAME, mimeType: localModel.MIME_TYPE || 'model/gltf-binary', fileSize: localModel.FILE_SIZE,
+                VALUES (:modelStorageUid,:fileName,:mimeType,:fileSize,:fileBlob,:userId)`, {
+              modelStorageUid, fileName: localModel.FILE_NAME, mimeType: localModel.MIME_TYPE || 'model/gltf-binary', fileSize: localModel.FILE_SIZE,
               fileBlob: { val: localModel.BODY, type: oracledb.BLOB }, userId: user.USER_ID,
             });
             await c.commit();
