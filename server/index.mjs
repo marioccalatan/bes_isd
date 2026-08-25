@@ -2913,7 +2913,7 @@ async function handle(req, res) {
       const token = bearerToken(req);
       if (!token) return json(res, 401, { error: 'Session required.' });
       const vehicleUid = decodeURIComponent(fleetModelMatch[1]);
-      const result = await withConnection(async (c) => {
+      let result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
         const found = await c.execute(`SELECT file_name,mime_type,file_size,file_blob FROM bes_fleet_vehicle_models WHERE vehicle_uid=:vehicleUid`, { vehicleUid });
@@ -2923,6 +2923,31 @@ async function handle(req, res) {
         return { ...row, BODY: body };
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result && getDatabaseRuntimeStatus().activeDatabase === 'server') {
+        const localModel = await withLocalConnection(async (c) => {
+          const found = await c.execute(`SELECT file_name,mime_type,file_size,file_blob FROM bes_fleet_vehicle_models WHERE vehicle_uid=:vehicleUid`, { vehicleUid });
+          const row = found.rows[0];
+          if (!row) return false;
+          const body = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData();
+          return { ...row, BODY: body };
+        });
+        if (localModel) {
+          await withConnection(async (c) => {
+            const user = await currentSessionUser(c, token);
+            if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+            await c.execute(`MERGE INTO bes_fleet_vehicle_models target USING (SELECT :vehicleUid vehicle_uid FROM dual) source
+              ON (target.vehicle_uid=source.vehicle_uid)
+              WHEN MATCHED THEN UPDATE SET file_name=:fileName,mime_type=:mimeType,file_size=:fileSize,file_blob=:fileBlob,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+              WHEN NOT MATCHED THEN INSERT (vehicle_uid,file_name,mime_type,file_size,file_blob,updated_by_user_id)
+                VALUES (:vehicleUid,:fileName,:mimeType,:fileSize,:fileBlob,:userId)`, {
+              vehicleUid, fileName: localModel.FILE_NAME, mimeType: localModel.MIME_TYPE || 'model/gltf-binary', fileSize: localModel.FILE_SIZE,
+              fileBlob: { val: localModel.BODY, type: oracledb.BLOB }, userId: user.USER_ID,
+            });
+            await c.commit();
+          });
+          result = localModel;
+        }
+      }
       if (!result) return json(res, 404, { error: 'No 3D model is attached to this vehicle.' });
       res.writeHead(200, { 'content-type': result.MIME_TYPE || 'model/gltf-binary', 'content-length': result.FILE_SIZE, 'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(result.FILE_NAME)}`, 'cache-control': 'private, max-age=300' });
       return res.end(result.BODY);
