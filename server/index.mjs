@@ -141,6 +141,7 @@ const csrRequestJson = (row) => ({
   requestee: row.REQUESTEE || '',
   designation: row.DESIGNATION || '',
   organization: row.ORGANIZATION || '',
+  registrationDetails: row.REGISTRATION_DETAILS || '',
   sector: row.SECTOR || '',
   location: row.LOCATION || '',
   barangay: row.BARANGAY || '',
@@ -149,10 +150,13 @@ const csrRequestJson = (row) => ({
   projectDetails: row.PROJECT_DETAILS || '',
   projectRequirement: row.PROJECT_REQUIREMENT || '',
   status: row.REQUEST_STATUS || 'For evaluation',
-  evaluationResult: row.EVALUATION_RESULT || '',
+  approvalStatus: row.APPROVAL_STATUS || 'For Evaluation',
+  evaluationResult: normalize(row.EVALUATION_RESULT) ? normalize(row.EVALUATION_RESULT).split('|').filter(Boolean) : [],
   evaluatedBy: row.EVALUATED_BY || '',
   dateApproved: localDateOnly(row.DATE_APPROVED) || '',
   amountFunding: row.AMOUNT_FUNDING == null ? '' : String(row.AMOUNT_FUNDING),
+  pjrs: row.PJRS || '',
+  actualProjectCost: row.ACTUAL_PROJECT_COST == null ? '' : String(row.ACTUAL_PROJECT_COST),
   updatedAt: localIso(row.UPDATED_AT),
 });
 const jsonArray = (value) => {
@@ -163,6 +167,12 @@ const jsonArray = (value) => {
   } catch {
     return [];
   }
+};
+const CSR_EVALUATION_RESULTS = ['Within CSR Policy', 'Not Within CSR Policy'];
+const csrEvaluationResults = (body) => {
+  if (normalize(body.status) !== 'Completed') return [];
+  const values = Array.isArray(body.evaluationResult) ? body.evaluationResult : [body.evaluationResult];
+  return [...new Set(values.map(normalize).filter(Boolean))];
 };
 const fleetModelLookupIds = async (connection, requestedId) => {
   const ids = [requestedId];
@@ -571,6 +581,11 @@ const DB_SYNC_TABLES = [
   'BES_BARANGAY_LOCATIONS',
   'BES_CSR_REQUESTS',
   'BES_CSR_EVENTS',
+  'BES_CSR_ATTACHMENTS',
+  'BES_MEMBER_PROGRAMS',
+  'BES_MEMBER_OPS_PROGRAMS',
+  'BES_MEMBER_OPS_ACTIVITIES',
+  'BES_MEMBER_OPS_SCHEDULES',
   'BES_BFM_FACILITIES',
   'BES_BFM_PERSONNEL',
   'BES_BFM_TODOS',
@@ -589,6 +604,11 @@ const DB_SYNC_TABLES = [
   'BES_HRO_EM_TASK_PROCESSING',
 ];
 const DB_SYNC_DELETE_ORDER = [
+  'BES_MEMBER_OPS_SCHEDULES',
+  'BES_MEMBER_OPS_ACTIVITIES',
+  'BES_MEMBER_OPS_PROGRAMS',
+  'BES_MEMBER_PROGRAMS',
+  'BES_CSR_ATTACHMENTS',
   'BES_CSR_EVENTS',
   'BES_CSR_REQUESTS',
   'BES_CSR_SECTORS',
@@ -667,6 +687,11 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_BARANGAY_LOCATIONS',
   'BES_CSR_REQUESTS',
   'BES_CSR_EVENTS',
+  'BES_CSR_ATTACHMENTS',
+  'BES_MEMBER_PROGRAMS',
+  'BES_MEMBER_OPS_PROGRAMS',
+  'BES_MEMBER_OPS_ACTIVITIES',
+  'BES_MEMBER_OPS_SCHEDULES',
   'BES_BFM_FACILITIES',
   'BES_BFM_PERSONNEL',
   'BES_BFM_TODOS',
@@ -697,10 +722,24 @@ const DB_SYNC_KEY_OVERRIDES = new Map([
   ['BES_BARANGAY_LOCATIONS', ['MUNICIPALITY', 'BARANGAY']],
   ['BES_CSR_REQUESTS', ['CSR_UID']],
   ['BES_CSR_EVENTS', ['EVENT_UID']],
+  ['BES_CSR_ATTACHMENTS', ['ATTACHMENT_UID']],
+  ['BES_MEMBER_PROGRAMS', ['PROGRAM_UID']],
+  ['BES_MEMBER_OPS_PROGRAMS', ['PROGRAM_UID']],
+  ['BES_MEMBER_OPS_ACTIVITIES', ['ACTIVITY_UID']],
+  ['BES_MEMBER_OPS_SCHEDULES', ['ACTIVITY_UID', 'WEEKDAY_NAME']],
 ]);
 const DB_SYNC_CASE_INSENSITIVE_KEYS = new Set([
   'DEPARTMENT_NAME', 'OFFICE_NAME', 'POSITION_TITLE', 'POSITION_NAME', 'TASK_SUBJECT', 'SECTOR_NAME', 'MUNICIPALITY', 'BARANGAY',
 ]);
+const DB_SYNC_DEPENDENCIES = new Map([
+  ['BES_MEMBER_OPS_ACTIVITIES', ['BES_MEMBER_OPS_PROGRAMS']],
+  ['BES_MEMBER_OPS_SCHEDULES', ['BES_MEMBER_OPS_PROGRAMS', 'BES_MEMBER_OPS_ACTIVITIES']],
+]);
+function expandSyncSelection(requestedTables) {
+  const selected = new Set(Array.isArray(requestedTables) ? requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)) : []);
+  for (const table of [...selected]) for (const dependency of DB_SYNC_DEPENDENCIES.get(table) ?? []) selected.add(dependency);
+  return [...selected];
+}
 
 const oracleConnectString = (details) => {
   const host = normalize(details.host);
@@ -996,10 +1035,25 @@ async function remapCsrEventRequestIds(source, destination, rows) {
   });
 }
 
+function parentFirstRows(rows, idColumn, parentColumn) {
+  const remaining = [...rows]; const ordered = []; const inserted = new Set();
+  while (remaining.length) {
+    const index = remaining.findIndex((row) => row[parentColumn] == null || inserted.has(String(row[parentColumn])) || !remaining.some((candidate) => String(candidate[idColumn]) === String(row[parentColumn])));
+    const [row] = remaining.splice(index < 0 ? 0 : index, 1); ordered.push(row); inserted.add(String(row[idColumn]));
+  }
+  return ordered;
+}
+
+async function remapUserReferenceIds(source, destination, rows, columns) {
+  if (!rows.length || !columns.length) return rows;
+  const [sourceUsers, destinationUsers] = await Promise.all([source.execute(`SELECT user_id,username FROM bes_users`), destination.execute(`SELECT user_id,username FROM bes_users`)]);
+  const usernameBySourceId = new Map(sourceUsers.rows.map((row) => [String(row.USER_ID), normalize(row.USERNAME).toLowerCase()]));
+  const destinationIdByUsername = new Map(destinationUsers.rows.map((row) => [normalize(row.USERNAME).toLowerCase(), row.USER_ID]));
+  return rows.map((row) => ({ ...row, ...Object.fromEntries(columns.map((column) => { const username = row[column] == null ? null : usernameBySourceId.get(String(row[column])); return [column, username ? destinationIdByUsername.get(username) ?? null : null]; })) }));
+}
+
 async function pushOracleSchema(targetDetails, requestedTables) {
-  const selected = Array.isArray(requestedTables)
-    ? [...new Set(requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)))]
-    : [];
+  const selected = expandSyncSelection(requestedTables);
   if (selected.length === 0) throw Object.assign(new Error('Select at least one BES table for schema push.'), { statusCode: 400 });
   const target = await oracledb.getConnection(oracleTargetConfig(targetDetails));
   try {
@@ -1057,8 +1111,18 @@ async function copyOracleTables(source, destination, selected, direction) {
       syncStage = 'reading source rows';
       const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
       sourceResult.rows = await materializeOracleLobs(sourceResult.rows, columnMetadata);
+      let memberProgramParents = null;
       if (table === 'BES_POSITIONS') sourceResult.rows = await remapPositionScopeIds(source, destination, sourceResult.rows);
-      if (table === 'BES_CSR_EVENTS') sourceResult.rows = await remapCsrEventRequestIds(source, destination, sourceResult.rows);
+      if (table === 'BES_CSR_EVENTS' || table === 'BES_CSR_ATTACHMENTS') sourceResult.rows = await remapCsrEventRequestIds(source, destination, sourceResult.rows);
+      if (table === 'BES_MEMBER_OPS_PROGRAMS') sourceResult.rows = parentFirstRows(sourceResult.rows, 'PROGRAM_UID', 'PARENT_PROGRAM_UID');
+      if (['BES_MEMBER_PROGRAMS','BES_MEMBER_OPS_PROGRAMS','BES_MEMBER_OPS_ACTIVITIES'].includes(table)) {
+        sourceResult.rows = await remapUserReferenceIds(source, destination, sourceResult.rows, columns.filter((column) => ['CREATED_BY_USER_ID','UPDATED_BY_USER_ID'].includes(column)));
+      }
+      if (table === 'BES_MEMBER_PROGRAMS') {
+        const uidBySourceId = new Map(sourceResult.rows.map((row) => [String(row.PROGRAM_ID), row.PROGRAM_UID]));
+        memberProgramParents = sourceResult.rows.map((row) => ({ programUid: row.PROGRAM_UID, parentUid: row.PARENT_PROGRAM_ID == null ? null : uidBySourceId.get(String(row.PARENT_PROGRAM_ID)) ?? null }));
+        sourceResult.rows = sourceResult.rows.map((row) => ({ ...row, PARENT_PROGRAM_ID: null }));
+      }
       const immutableColumns = new Set([...syncKeyColumns, ...primaryKeyColumns]);
       const updateColumns = columns.filter((column) => !immutableColumns.has(column));
       const usesLogicalKey = syncKeyColumns.some((column) => !primaryKeyColumns.includes(column));
@@ -1085,6 +1149,13 @@ async function copyOracleTables(source, destination, selected, direction) {
             bindDefs: executeManyBindDefs(columnMetadata, sourceResult.rows),
           }));
       }
+      if (table === 'BES_MEMBER_PROGRAMS' && memberProgramParents?.length) {
+        const destinationPrograms = await destination.execute(`SELECT program_id,program_uid FROM bes_member_programs`);
+        const destinationIdByUid = new Map(destinationPrograms.rows.map((row) => [row.PROGRAM_UID, row.PROGRAM_ID]));
+        for (const relation of memberProgramParents) {
+          await destination.execute(`UPDATE bes_member_programs SET parent_program_id=:parentId WHERE program_uid=:programUid`, { programUid: relation.programUid, parentId: relation.parentUid ? destinationIdByUid.get(relation.parentUid) ?? null : null });
+        }
+      }
       report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length, addedColumns: addedColumns.get(table), direction, syncKey: syncKeyColumns, note: 'Upserted; destination-only rows preserved.' });
     } catch (error) {
       if (error?.statusCode) throw error;
@@ -1097,9 +1168,7 @@ async function copyOracleTables(source, destination, selected, direction) {
 }
 
 async function syncOracleTables(targetDetails, requestedTables, requestedDirection = 'push') {
-  const selected = Array.isArray(requestedTables)
-    ? [...new Set(requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)))]
-    : [];
+  const selected = expandSyncSelection(requestedTables);
   if (selected.length === 0) throw Object.assign(new Error('Select at least one BES table to sync.'), { statusCode: 400 });
 
   const direction = ['push', 'pull', 'both'].includes(normalize(requestedDirection).toLowerCase()) ? normalize(requestedDirection).toLowerCase() : 'push';
@@ -1189,8 +1258,8 @@ async function handle(req, res) {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
         const access = await c.execute(`SELECT tool_code, tool_name, department_code, office_name, position_name,
-            access_level, tool_status, owner_department_code, access_note
-          FROM bes_tool_access WHERE is_active='Y'
+            access_level, tool_status, owner_department_code, access_note, is_active
+          FROM bes_tool_access
           ORDER BY tool_code, department_code, office_name, position_name`);
         const subjects = await c.execute(`SELECT tool_code, task_subject FROM bes_task_subjects
           WHERE is_active='Y' ORDER BY tool_code, task_subject`);
@@ -1210,13 +1279,15 @@ async function handle(req, res) {
             taskSubjects: subjectsByTool.get(row.TOOL_CODE) ?? [],
             access: [],
           });
-          byCode.get(row.TOOL_CODE).access.push({
-            departmentId: row.DEPARTMENT_CODE,
-            level: row.ACCESS_LEVEL,
-            ...(row.OFFICE_NAME ? { unit: row.OFFICE_NAME } : {}),
-            ...(row.POSITION_NAME ? { position: row.POSITION_NAME } : {}),
-            ...(row.ACCESS_NOTE ? { note: row.ACCESS_NOTE } : {}),
-          });
+          if (row.IS_ACTIVE === 'Y') {
+            byCode.get(row.TOOL_CODE).access.push({
+              departmentId: row.DEPARTMENT_CODE,
+              level: row.ACCESS_LEVEL,
+              ...(row.OFFICE_NAME ? { unit: row.OFFICE_NAME } : {}),
+              ...(row.POSITION_NAME ? { position: row.POSITION_NAME } : {}),
+              ...(row.ACCESS_NOTE ? { note: row.ACCESS_NOTE } : {}),
+            });
+          }
         }
         return [...byCode.values()];
       });
@@ -2786,6 +2857,54 @@ async function handle(req, res) {
       if (!result) return json(res, 401, { error: 'Session expired.' });
       return json(res, 200, { locations: result.rows.map((row) => ({ municipality: row.MUNICIPALITY, barangay: row.BARANGAY, district: row.DISTRICT })) });
     }
+    if (req.method === 'GET' && req.url === '/api/member-programs/programs') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; return c.execute(`SELECT child.program_uid,parent.program_uid parent_uid,child.program_name,child.program_description,child.start_date,child.end_date,child.program_status FROM bes_member_programs child LEFT JOIN bes_member_programs parent ON parent.program_id=child.parent_program_id ORDER BY child.start_date,child.program_id`); });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { programs: result.rows.map((row) => ({ id: row.PROGRAM_UID, parentId: row.PARENT_UID || null, name: row.PROGRAM_NAME, description: row.PROGRAM_DESCRIPTION || '', startDate: localDateOnly(row.START_DATE), endDate: localDateOnly(row.END_DATE), status: row.PROGRAM_STATUS })) });
+    }
+    if (req.method === 'GET' && req.url === '/api/member-programs/operations') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const data = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; const [programs, activities, schedules] = await Promise.all([
+        c.execute(`SELECT program_uid,parent_program_uid,program_title,display_order FROM bes_member_ops_programs ORDER BY display_order,program_title`),
+        c.execute(`SELECT activity_uid,program_uid,activity_name,activity_description,frequency,uniform_time,time_from,time_to,display_order FROM bes_member_ops_activities ORDER BY display_order,activity_name`),
+        c.execute(`SELECT activity_uid,weekday_name,time_from,time_to,display_order FROM bes_member_ops_schedules ORDER BY display_order`),
+      ]); return { programs: programs.rows, activities: activities.rows, schedules: schedules.rows }; });
+      if (!data) return json(res, 401, { error: 'Session expired.' });
+      const activityMap = new Map(data.activities.map((row) => [row.ACTIVITY_UID, { id: row.ACTIVITY_UID, name: row.ACTIVITY_NAME, description: row.ACTIVITY_DESCRIPTION || '', frequency: row.FREQUENCY, weekdays: [], timeFrom: row.TIME_FROM || '', timeTo: row.TIME_TO || '', uniformTime: row.UNIFORM_TIME !== 'N', dayTimes: {} }]));
+      for (const row of data.schedules) { const activity = activityMap.get(row.ACTIVITY_UID); if (activity) { activity.weekdays.push(row.WEEKDAY_NAME); activity.dayTimes[row.WEEKDAY_NAME] = { from: row.TIME_FROM, to: row.TIME_TO }; } }
+      const nodes = data.programs.map((row) => ({ id: row.PROGRAM_UID, parentId: row.PARENT_PROGRAM_UID || null, title: row.PROGRAM_TITLE, children: [], activities: data.activities.filter((activity) => activity.PROGRAM_UID === row.PROGRAM_UID).map((activity) => activityMap.get(activity.ACTIVITY_UID)) })); const nodeMap = new Map(nodes.map((node) => [node.id, node])); const roots = []; for (const node of nodes) { const parent = node.parentId ? nodeMap.get(node.parentId) : null; if (parent) parent.children.push(node); else roots.push(node); delete node.parentId; }
+      return json(res, 200, { programs: roots });
+    }
+    if (req.method === 'PUT' && req.url === '/api/member-programs/operations') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const body = await readBody(req, 2_000_000); if (!Array.isArray(body.programs)) return json(res, 400, { error: 'Operations programs must be an array.' });
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`DELETE FROM bes_member_ops_schedules`); await c.execute(`DELETE FROM bes_member_ops_activities`); await c.execute(`DELETE FROM bes_member_ops_programs`);
+        const insertNodes = async (nodes, parentId = null) => { for (let programIndex = 0; programIndex < nodes.length; programIndex += 1) { const program = nodes[programIndex]; const programId = normalize(program.id); const title = normalize(program.title); if (!programId || !title) throw Object.assign(new Error('Every operations program requires an ID and title.'), { statusCode: 400 }); await c.execute(`INSERT INTO bes_member_ops_programs (program_uid,parent_program_uid,program_title,display_order,updated_by_user_id) VALUES (:programId,:parentId,:title,:displayOrder,:userId)`, { programId, parentId, title, displayOrder: programIndex, userId: user.USER_ID }); const activities = Array.isArray(program.activities) ? program.activities : []; for (let activityIndex = 0; activityIndex < activities.length; activityIndex += 1) { const activity = activities[activityIndex]; const activityId = normalize(activity.id); if (!activityId || !normalize(activity.name)) throw Object.assign(new Error('Every activity requires an ID and name.'), { statusCode: 400 }); await c.execute(`INSERT INTO bes_member_ops_activities (activity_uid,program_uid,activity_name,activity_description,frequency,uniform_time,time_from,time_to,display_order,updated_by_user_id) VALUES (:activityId,:programId,:activityName,:activityDescription,:frequency,:uniformTime,:timeFrom,:timeTo,:displayOrder,:userId)`, { activityId, programId, activityName: normalize(activity.name), activityDescription: nullableNormalize(activity.description), frequency: normalize(activity.frequency), uniformTime: activity.uniformTime === false ? 'N' : 'Y', timeFrom: nullableNormalize(activity.timeFrom), timeTo: nullableNormalize(activity.timeTo), displayOrder: activityIndex, userId: user.USER_ID }); const weekdays = Array.isArray(activity.weekdays) ? activity.weekdays : []; for (let dayIndex = 0; dayIndex < weekdays.length; dayIndex += 1) { const day = normalize(weekdays[dayIndex]); const schedule = activity.dayTimes?.[day] || { from: activity.timeFrom, to: activity.timeTo }; await c.execute(`INSERT INTO bes_member_ops_schedules (activity_uid,weekday_name,time_from,time_to,display_order) VALUES (:activityId,:weekday,:timeFrom,:timeTo,:displayOrder)`, { activityId, weekday: day, timeFrom: normalize(schedule.from), timeTo: normalize(schedule.to), displayOrder: dayIndex }); } } await insertNodes(Array.isArray(program.children) ? program.children : [], programId); } }; await insertNodes(body.programs); await c.commit(); });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && req.url === '/api/member-programs/programs') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const body = await readBody(req, 50_000);
+      const name = normalize(body.name); const startDate = normalize(body.startDate); const endDate = normalize(body.endDate); const status = normalize(body.status);
+      if (!name || !startDate || !endDate) return json(res, 400, { error: 'Name and tentative schedule are required.' });
+      if (endDate < startDate) return json(res, 400, { error: 'End date must be on or after the start date.' });
+      if (!['Planned','Ongoing','Completed','On Hold','Cancelled'].includes(status)) return json(res, 400, { error: 'Invalid program status.' });
+      const programUid = `MPRG-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); const inserted = await c.execute(`INSERT INTO bes_member_programs (program_uid,parent_program_id,program_name,program_description,start_date,end_date,program_status,created_by_user_id,updated_by_user_id) VALUES (:programUid,(SELECT program_id FROM bes_member_programs WHERE program_uid=:parentUid),:programName,:programDescription,TO_DATE(:startDate,'YYYY-MM-DD'),TO_DATE(:endDate,'YYYY-MM-DD'),:programStatus,:userId,:userId)`, { programUid, parentUid: nullableNormalize(body.parentId), programName: name, programDescription: nullableNormalize(body.description), startDate, endDate, programStatus: status, userId: user.USER_ID }); if (!inserted.rowsAffected) throw Object.assign(new Error('Program was not saved.'), { statusCode: 400 }); await c.commit(); });
+      return json(res, 201, { id: programUid });
+    }
+    const memberProgramMatch = url.pathname.match(/^\/api\/member-programs\/programs\/([^/]+)$/);
+    if (req.method === 'PATCH' && memberProgramMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const programUid = decodeURIComponent(memberProgramMatch[1]); const body = await readBody(req, 50_000); const name = normalize(body.name); const startDate = normalize(body.startDate); const endDate = normalize(body.endDate); const status = normalize(body.status);
+      if (!name || !startDate || !endDate || endDate < startDate) return json(res, 400, { error: 'A valid name and tentative schedule are required.' });
+      if (!['Planned','Ongoing','Completed','On Hold','Cancelled'].includes(status)) return json(res, 400, { error: 'Invalid program status.' });
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`UPDATE bes_member_programs SET program_name=:programName,program_description=:programDescription,start_date=TO_DATE(:startDate,'YYYY-MM-DD'),end_date=TO_DATE(:endDate,'YYYY-MM-DD'),program_status=:programStatus,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP WHERE program_uid=:programUid`, { programUid, programName: name, programDescription: nullableNormalize(body.description), startDate, endDate, programStatus: status, userId: user.USER_ID }); await c.commit(); });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'DELETE' && memberProgramMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const programUid = decodeURIComponent(memberProgramMatch[1]);
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`DELETE FROM bes_member_programs WHERE program_uid=:programUid`, { programUid }); await c.commit(); });
+      return json(res, 200, { ok: true });
+    }
     if (req.method === 'GET' && req.url === '/api/member-programs/csr-sectors') {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
       const result = await withConnection(async (c) => {
@@ -2822,18 +2941,23 @@ async function handle(req, res) {
       const body = await readBody(req, 100_000);
       if (!normalize(body.dateRequested) || !normalize(body.programType) || !normalize(body.requestee)) return json(res, 400, { error: 'Date Requested, Program Type, and Requestee are required.' });
       if (!['For evaluation','Pending','Completed'].includes(normalize(body.status))) return json(res, 400, { error: 'Invalid CSR status.' });
-      if (normalize(body.evaluationResult) && !['Within CSR Policy','Not Within CSR Policy'].includes(normalize(body.evaluationResult))) return json(res, 400, { error: 'Invalid evaluation result.' });
+      const evaluationResults = csrEvaluationResults(body);
+      if (evaluationResults.some((value) => !CSR_EVALUATION_RESULTS.includes(value))) return json(res, 400, { error: 'Invalid evaluation result.' });
+      const approvalStatus = evaluationResults.length ? normalize(body.approvalStatus) : 'For Evaluation';
+      if (evaluationResults.length && !['Approved','Disapproved'].includes(approvalStatus)) return json(res, 400, { error: 'Select Approved or Disapproved after evaluating the request.' });
+      const approvalDate = evaluationResults.length ? nullableNormalize(body.dateApproved) : null;
       const csrUid = `CSR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
-        await c.execute(`INSERT INTO bes_csr_requests (csr_uid,date_requested,program_type,requestee,designation,organization,sector,location,barangay,municipality,district,project_details,project_requirement,request_status,evaluation_result,evaluated_by,date_approved,amount_funding,created_by_user_id,updated_by_user_id)
-          VALUES (:csrRequestUid,TO_DATE(:csrDateRequested,'YYYY-MM-DD'),:csrProgramType,:csrRequestee,:csrDesignation,:csrOrganization,:csrSector,:csrLocation,:csrBarangay,:csrMunicipality,:csrDistrict,:csrProjectDetails,:csrProjectRequirement,:csrRequestStatus,:csrEvaluationResult,:csrEvaluatedBy,TO_DATE(:csrDateApproved,'YYYY-MM-DD'),:csrAmountFunding,:csrActorUserId,:csrActorUserId)`, {
+        await c.execute(`INSERT INTO bes_csr_requests (csr_uid,date_requested,program_type,requestee,designation,organization,registration_details,sector,location,barangay,municipality,district,project_details,project_requirement,request_status,approval_status,evaluation_result,evaluated_by,date_approved,amount_funding,pjrs,actual_project_cost,created_by_user_id,updated_by_user_id)
+          VALUES (:csrRequestUid,TO_DATE(:csrDateRequested,'YYYY-MM-DD'),:csrProgramType,:csrRequestee,:csrDesignation,:csrOrganization,:csrRegistrationDetails,:csrSector,:csrLocation,:csrBarangay,:csrMunicipality,:csrDistrict,:csrProjectDetails,:csrProjectRequirement,:csrRequestStatus,:csrApprovalStatus,:csrEvaluationResult,:csrEvaluatedBy,TO_DATE(:csrDateApproved,'YYYY-MM-DD'),:csrAmountFunding,:csrPjrs,:csrActualProjectCost,:csrActorUserId,:csrActorUserId)`, {
           csrRequestUid: csrUid,
           csrDateRequested: normalize(body.dateRequested),
           csrProgramType: normalize(body.programType),
           csrRequestee: normalize(body.requestee),
           csrDesignation: nullableNormalize(body.designation),
           csrOrganization: nullableNormalize(body.organization),
+          csrRegistrationDetails: nullableNormalize(body.registrationDetails),
           csrSector: nullableNormalize(body.sector),
           csrLocation: nullableNormalize(body.location),
           csrBarangay: nullableNormalize(body.barangay),
@@ -2842,14 +2966,66 @@ async function handle(req, res) {
           csrProjectDetails: nullableNormalize(body.projectDetails),
           csrProjectRequirement: nullableNormalize(body.projectRequirement),
           csrRequestStatus: normalize(body.status),
-          csrEvaluationResult: nullableNormalize(body.evaluationResult),
+          csrApprovalStatus: approvalStatus,
+          csrEvaluationResult: evaluationResults.length ? evaluationResults.join('|') : null,
           csrEvaluatedBy: nullableNormalize(body.evaluatedBy),
-          csrDateApproved: nullableNormalize(body.dateApproved),
+          csrDateApproved: approvalDate,
           csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null,
+          csrPjrs: nullableNormalize(body.pjrs),
+          csrActualProjectCost: normalize(body.actualProjectCost) ? Number(body.actualProjectCost) : null,
           csrActorUserId: user.USER_ID,
         }); await c.commit();
       });
       return json(res, 201, { id: csrUid });
+    }
+    const csrAttachmentsMatch = url.pathname.match(/^\/api\/member-programs\/csr\/([^/]+)\/attachments$/);
+    const csrAttachmentMatch = url.pathname.match(/^\/api\/member-programs\/csr\/([^/]+)\/attachments\/([^/]+)$/);
+    if (req.method === 'GET' && csrAttachmentsMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const csrUid = decodeURIComponent(csrAttachmentsMatch[1]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        return c.execute(`SELECT attachment.attachment_uid,attachment.file_name,attachment.mime_type,attachment.file_size,attachment.created_at FROM bes_csr_attachments attachment JOIN bes_csr_requests request ON request.csr_id=attachment.csr_id WHERE request.csr_uid=:csrUid ORDER BY attachment.attachment_id`, { csrUid });
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { attachments: result.rows.map((row) => ({ id: row.ATTACHMENT_UID, fileName: row.FILE_NAME, mimeType: row.MIME_TYPE || '', fileSize: Number(row.FILE_SIZE) || 0, createdAt: localIso(row.CREATED_AT) })) });
+    }
+    if (req.method === 'POST' && csrAttachmentsMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const csrUid = decodeURIComponent(csrAttachmentsMatch[1]); const body = await readBody(req, 22_000_000);
+      const match = normalize(body.dataUrl).match(/^data:([^;,]+);base64,(.+)$/s);
+      if (!normalize(body.fileName) || !match) return json(res, 400, { error: 'A valid attachment file is required.' });
+      const file = Buffer.from(match[2], 'base64');
+      if (!file.length || file.length > 15_000_000) return json(res, 400, { error: 'Attachments must be 15 MB or smaller.' });
+      const attachmentUid = `CSRA-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        const inserted = await c.execute(`INSERT INTO bes_csr_attachments (attachment_uid,csr_id,file_name,mime_type,file_size,file_blob,created_by_user_id) SELECT :attachmentUid,request.csr_id,:fileName,:mimeType,:fileSize,:fileBlob,:userId FROM bes_csr_requests request WHERE request.csr_uid=:csrUid`, {
+          attachmentUid, csrUid, fileName: safeFileName(body.fileName), mimeType: normalize(body.mimeType) || match[1], fileSize: file.length, fileBlob: { val: file, type: oracledb.BLOB }, userId: user.USER_ID,
+        });
+        if (!inserted.rowsAffected) throw Object.assign(new Error('CSR request was not found.'), { statusCode: 404 });
+        await c.commit();
+      });
+      return json(res, 201, { id: attachmentUid });
+    }
+    if (req.method === 'GET' && csrAttachmentMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const csrUid = decodeURIComponent(csrAttachmentMatch[1]); const attachmentUid = decodeURIComponent(csrAttachmentMatch[2]);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        const found = await c.execute(`SELECT attachment.file_name,attachment.mime_type,attachment.file_size,attachment.file_blob FROM bes_csr_attachments attachment JOIN bes_csr_requests request ON request.csr_id=attachment.csr_id WHERE request.csr_uid=:csrUid AND attachment.attachment_uid=:attachmentUid`, { csrUid, attachmentUid });
+        const row = found.rows[0]; if (!row) return false;
+        const file = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData(); return { ...row, FILE: file };
+      });
+      if (result === null) return json(res, 401, { error: 'Session expired.' });
+      if (!result) return json(res, 404, { error: 'Attachment was not found.' });
+      res.writeHead(200, { 'content-type': result.MIME_TYPE || 'application/octet-stream', 'content-length': result.FILE_SIZE, 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(result.FILE_NAME)}`, 'cache-control': 'private, no-store' }); return res.end(result.FILE);
+    }
+    if (req.method === 'DELETE' && csrAttachmentMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const csrUid = decodeURIComponent(csrAttachmentMatch[1]); const attachmentUid = decodeURIComponent(csrAttachmentMatch[2]);
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`DELETE FROM bes_csr_attachments WHERE attachment_uid=:attachmentUid AND csr_id=(SELECT csr_id FROM bes_csr_requests WHERE csr_uid=:csrUid)`, { attachmentUid, csrUid }); await c.commit(); });
+      return json(res, 200, { ok: true });
     }
     const csrEventsMatch = url.pathname.match(/^\/api\/member-programs\/csr\/([^/]+)\/events$/);
     if (req.method === 'GET' && csrEventsMatch) {
@@ -2884,10 +3060,16 @@ async function handle(req, res) {
     if (req.method === 'PATCH' && csrMatch) {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
       const csrUid = decodeURIComponent(csrMatch[1]); const body = await readBody(req, 100_000);
+      if (!['For evaluation','Pending','Completed'].includes(normalize(body.status))) return json(res, 400, { error: 'Invalid CSR status.' });
+      const evaluationResults = csrEvaluationResults(body);
+      if (evaluationResults.some((value) => !CSR_EVALUATION_RESULTS.includes(value))) return json(res, 400, { error: 'Invalid evaluation result.' });
+      const approvalStatus = evaluationResults.length ? normalize(body.approvalStatus) : 'For Evaluation';
+      if (evaluationResults.length && !['Approved','Disapproved'].includes(approvalStatus)) return json(res, 400, { error: 'Select Approved or Disapproved after evaluating the request.' });
+      const approvalDate = evaluationResults.length ? nullableNormalize(body.dateApproved) : null;
       await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
-        await c.execute(`UPDATE bes_csr_requests SET date_requested=TO_DATE(:csrDateRequested,'YYYY-MM-DD'),program_type=:csrProgramType,requestee=:csrRequestee,designation=:csrDesignation,organization=:csrOrganization,sector=:csrSector,location=:csrLocation,barangay=:csrBarangay,municipality=:csrMunicipality,district=:csrDistrict,project_details=:csrProjectDetails,project_requirement=:csrProjectRequirement,request_status=:csrRequestStatus,evaluation_result=:csrEvaluationResult,evaluated_by=:csrEvaluatedBy,date_approved=TO_DATE(:csrDateApproved,'YYYY-MM-DD'),amount_funding=:csrAmountFunding,updated_by_user_id=:csrActorUserId,updated_at=SYSTIMESTAMP WHERE csr_uid=:csrRequestUid`, {
-          csrRequestUid: csrUid, csrDateRequested: normalize(body.dateRequested), csrProgramType: normalize(body.programType), csrRequestee: normalize(body.requestee), csrDesignation: nullableNormalize(body.designation), csrOrganization: nullableNormalize(body.organization), csrSector: nullableNormalize(body.sector), csrLocation: nullableNormalize(body.location), csrBarangay: nullableNormalize(body.barangay), csrMunicipality: nullableNormalize(body.municipality), csrDistrict: nullableNormalize(body.district), csrProjectDetails: nullableNormalize(body.projectDetails), csrProjectRequirement: nullableNormalize(body.projectRequirement), csrRequestStatus: normalize(body.status), csrEvaluationResult: nullableNormalize(body.evaluationResult), csrEvaluatedBy: nullableNormalize(body.evaluatedBy), csrDateApproved: nullableNormalize(body.dateApproved), csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null, csrActorUserId: user.USER_ID,
+        await c.execute(`UPDATE bes_csr_requests SET date_requested=TO_DATE(:csrDateRequested,'YYYY-MM-DD'),program_type=:csrProgramType,requestee=:csrRequestee,designation=:csrDesignation,organization=:csrOrganization,registration_details=:csrRegistrationDetails,sector=:csrSector,location=:csrLocation,barangay=:csrBarangay,municipality=:csrMunicipality,district=:csrDistrict,project_details=:csrProjectDetails,project_requirement=:csrProjectRequirement,request_status=:csrRequestStatus,approval_status=:csrApprovalStatus,evaluation_result=:csrEvaluationResult,evaluated_by=:csrEvaluatedBy,date_approved=TO_DATE(:csrDateApproved,'YYYY-MM-DD'),amount_funding=:csrAmountFunding,pjrs=:csrPjrs,actual_project_cost=:csrActualProjectCost,updated_by_user_id=:csrActorUserId,updated_at=SYSTIMESTAMP WHERE csr_uid=:csrRequestUid`, {
+          csrRequestUid: csrUid, csrDateRequested: normalize(body.dateRequested), csrProgramType: normalize(body.programType), csrRequestee: normalize(body.requestee), csrDesignation: nullableNormalize(body.designation), csrOrganization: nullableNormalize(body.organization), csrRegistrationDetails: nullableNormalize(body.registrationDetails), csrSector: nullableNormalize(body.sector), csrLocation: nullableNormalize(body.location), csrBarangay: nullableNormalize(body.barangay), csrMunicipality: nullableNormalize(body.municipality), csrDistrict: nullableNormalize(body.district), csrProjectDetails: nullableNormalize(body.projectDetails), csrProjectRequirement: nullableNormalize(body.projectRequirement), csrRequestStatus: normalize(body.status), csrApprovalStatus: approvalStatus, csrEvaluationResult: evaluationResults.length ? evaluationResults.join('|') : null, csrEvaluatedBy: nullableNormalize(body.evaluatedBy), csrDateApproved: approvalDate, csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null, csrPjrs: nullableNormalize(body.pjrs), csrActualProjectCost: normalize(body.actualProjectCost) ? Number(body.actualProjectCost) : null, csrActorUserId: user.USER_ID,
         }); await c.commit();
       });
       return json(res, 200, { ok: true });
@@ -3322,6 +3504,19 @@ async function handle(req, res) {
               :materialsUsedText,:recommendationText,:convertedTaskId,:userId,:userId)`, {
             detailUid: `BFM-DET-${Date.now()}`, todoUid, workDate, findingsText, actionTakenText,
             materialsUsedText, recommendationText, convertedTaskId, userId: user.USER_ID,
+          });
+        }
+        // Keep an inactive registry marker when every grant is removed. Without
+        // this row, /api/tools cannot distinguish "configured with no access"
+        // from an unconfigured seeded tool, and the client fallback restores the
+        // default owner-department grant on its next refresh.
+        if (uniqueAccess.size === 0) {
+          await c.execute(`INSERT INTO bes_tool_access
+              (tool_access_id,tool_code,tool_name,department_code,office_name,position_name,access_level,tool_status,owner_department_code,access_note,is_active)
+            VALUES ((SELECT NVL(MAX(tool_access_id),0)+1 FROM bes_tool_access),:toolCode,:toolName,:departmentCode,NULL,NULL,'VIEW',:toolStatus,:ownerDepartmentCode,:accessNote,'N')`, {
+            toolCode, toolName, departmentCode: ownerDepartmentId,
+            toolStatus: status, ownerDepartmentCode: ownerDepartmentId,
+            accessNote: 'Configured with no department access.',
           });
         }
         await c.commit();

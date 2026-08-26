@@ -54,6 +54,23 @@ function seedAll() {
 
 type SeedState = ReturnType<typeof seedAll>;
 
+const EMPTY_TOOL_ACCESS_KEY = 'bes:explicitly-empty-tool-access:v1';
+
+function explicitlyEmptyToolCodes(): Set<string> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(EMPTY_TOOL_ACCESS_KEY) ?? '[]');
+    return new Set(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function rememberExplicitlyEmptyTool(code: string, empty: boolean) {
+  const codes = explicitlyEmptyToolCodes();
+  if (empty) codes.add(code); else codes.delete(code);
+  try { localStorage.setItem(EMPTY_TOOL_ACCESS_KEY, JSON.stringify([...codes])); } catch { /* Storage is only a refresh safeguard. */ }
+}
+
 interface DataContextValue {
   employees: typeof EMPLOYEES;
   departments: typeof DEPARTMENTS;
@@ -260,9 +277,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
       .then((oracleTools) => {
         if (cancelled) return;
         const oracleByCode = new Map(oracleTools.map((tool) => [tool.code, tool]));
+        const explicitlyEmpty = explicitlyEmptyToolCodes();
         setTools(buildTools().map((tool) => {
           const configured = oracleByCode.get(tool.code);
-          return configured ? { ...tool, ...configured } : tool;
+          if (configured) {
+            if (configured.access.length > 0) rememberExplicitlyEmptyTool(tool.code, false);
+            return { ...tool, ...configured };
+          }
+          return explicitlyEmpty.has(tool.code) ? { ...tool, access: [] } : tool;
         }));
       })
       .catch((error) => console.warn('Unable to load Oracle tool access; keeping the local fallback.', error));
@@ -578,6 +600,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setTools((prev) => prev.map((t) => (t.code === code ? { ...t, ...patch } : t)));
   }
   function setToolAccess(code: string, access: AppTool['access']) {
+    rememberExplicitlyEmptyTool(code, access.length === 0);
     setTools((prev) => prev.map((t) => (t.code === code ? { ...t, access } : t)));
     logAction('admin', 'Updated tool access', code, 'Administration');
   }

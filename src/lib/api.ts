@@ -436,6 +436,7 @@ export interface CsrRequest {
   requestee: string;
   designation: string;
   organization: string;
+  registrationDetails: string;
   sector: string;
   location: string;
   barangay: string;
@@ -444,10 +445,13 @@ export interface CsrRequest {
   projectDetails: string;
   projectRequirement: string;
   status: 'For evaluation' | 'Pending' | 'Completed';
-  evaluationResult: '' | 'Within CSR Policy' | 'Not Within CSR Policy';
+  approvalStatus: 'Approved' | 'Disapproved' | 'For Evaluation';
+  evaluationResult: Array<'Within CSR Policy' | 'Not Within CSR Policy'>;
   evaluatedBy: string;
   dateApproved: string;
   amountFunding: string;
+  pjrs: string;
+  actualProjectCost: string;
   updatedAt?: string;
 }
 
@@ -494,6 +498,53 @@ export async function saveCsrRequest(token: string, request: Omit<CsrRequest, 'i
 
 export async function deleteCsrRequest(token: string, id: string) {
   return apiRequest<{ ok: true }>(`/api/member-programs/csr/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export interface CsrAttachment { id: string; fileName: string; mimeType: string; fileSize: number; createdAt?: string }
+
+export type MemberProgramStatus = 'Planned' | 'Ongoing' | 'Completed' | 'On Hold' | 'Cancelled';
+export interface MemberProgram { id: string; parentId: string | null; name: string; description: string; startDate: string; endDate: string; status: MemberProgramStatus }
+export type MemberProgramInput = Omit<MemberProgram, 'id'>;
+
+export async function fetchMemberPrograms(token: string) {
+  const result = await apiRequest<{ programs: MemberProgram[] }>('/api/member-programs/programs', { headers: { authorization: `Bearer ${token}` } });
+  return result.programs;
+}
+export async function saveMemberProgram(token: string, input: MemberProgramInput, id?: string) {
+  return apiRequest<{ id?: string; ok?: true }>(id ? `/api/member-programs/programs/${encodeURIComponent(id)}` : '/api/member-programs/programs', { method: id ? 'PATCH' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function deleteMemberProgram(token: string, id: string) {
+  return apiRequest<{ ok: true }>(`/api/member-programs/programs/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export interface MemberOperationsActivity { id: string; name: string; description: string; frequency: 'Daily' | 'Weekly' | 'Monthly' | 'Quarterly' | 'Yearly' | 'Custom'; weekdays: string[]; timeFrom: string; timeTo: string; uniformTime?: boolean; dayTimes?: Record<string, { from: string; to: string }> }
+export interface MemberOperationsProgram { id: string; title: string; children: MemberOperationsProgram[]; activities: MemberOperationsActivity[] }
+export async function fetchMemberOperations(token: string) {
+  const result = await apiRequest<{ programs: MemberOperationsProgram[] }>('/api/member-programs/operations', { headers: { authorization: `Bearer ${token}` } });
+  return result.programs;
+}
+export async function saveMemberOperations(token: string, programs: MemberOperationsProgram[]) {
+  return apiRequest<{ ok: true }>('/api/member-programs/operations', { method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ programs }) });
+}
+
+export async function fetchCsrAttachments(token: string, csrId: string) {
+  const result = await apiRequest<{ attachments: CsrAttachment[] }>(`/api/member-programs/csr/${encodeURIComponent(csrId)}/attachments`, { headers: { authorization: `Bearer ${token}` } });
+  return result.attachments;
+}
+
+export async function uploadCsrAttachment(token: string, csrId: string, file: File) {
+  const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error || new Error('Unable to read attachment.')); reader.readAsDataURL(file); });
+  return apiRequest<{ id: string }>(`/api/member-programs/csr/${encodeURIComponent(csrId)}/attachments`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, dataUrl }) });
+}
+
+export async function deleteCsrAttachment(token: string, csrId: string, attachmentId: string) {
+  return apiRequest<{ ok: true }>(`/api/member-programs/csr/${encodeURIComponent(csrId)}/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function downloadCsrAttachment(token: string, csrId: string, attachment: CsrAttachment) {
+  const response = await fetch(`/api/member-programs/csr/${encodeURIComponent(csrId)}/attachments/${encodeURIComponent(attachment.id)}`, { headers: { authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Unable to download attachment.');
+  const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = attachment.fileName; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function fetchCsrProjectEvents(token: string, csrId: string) {

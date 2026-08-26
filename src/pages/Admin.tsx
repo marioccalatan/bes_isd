@@ -1154,7 +1154,7 @@ export default function Admin() {
               tabs={toolDepartmentTabs.map((t) => ({
                 value: t.value,
                 label: t.label,
-                count: t.value === 'ALL' ? tools.length : tools.filter((tool) => tool.ownerDepartmentId === t.value).length,
+                count: t.value === 'ALL' ? tools.length : tools.filter((tool) => tool.access.some((grant) => grant.departmentId === t.value)).length,
               }))}
               value={toolDeptTab}
               onChange={(v) => setToolDeptTab(v as DepartmentId | 'ALL')}
@@ -1163,7 +1163,7 @@ export default function Admin() {
             <Toolbar search={toolSearch} onSearchChange={setToolSearch} placeholder="Search tools…" />
             <div className="space-y-2">
               {tools
-                .filter((t) => toolDeptTab === 'ALL' || t.ownerDepartmentId === toolDeptTab)
+                .filter((t) => toolDeptTab === 'ALL' || t.access.some((grant) => grant.departmentId === toolDeptTab))
                 .filter((t) => !toolSearch.trim() || t.code.toLowerCase().includes(toolSearch.toLowerCase()) || t.name.toLowerCase().includes(toolSearch.toLowerCase()))
                 .sort((left, right) => left.code.localeCompare(right.code, undefined, { sensitivity: 'base' }))
                 .map((t) => {

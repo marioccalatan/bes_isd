@@ -60,7 +60,8 @@ export default function WorkspaceModule() {
   if (moduleId === 'human-resources') return <HumanResources module={mod} taskSubject="Human Resource" />;
   if (moduleId === 'employee-relations') return <HumanResources module={mod} taskSubject="Employee Relations" />;
   if (moduleId === 'performance-management') return <PerformanceManagement module={mod} />;
-  if (['learning-development', 'institutional-communications', 'member-programs', 'records-management', 'events-management'].includes(moduleId ?? '')) {
+  if (moduleId === 'member-programs') return <HumanResources module={mod} taskSubject="Community Programs" />;
+  if (['learning-development', 'institutional-communications', 'records-management', 'events-management'].includes(moduleId ?? '')) {
     return <HumanResources module={mod} taskSubject={mod.name} />;
   }
 

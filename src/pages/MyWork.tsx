@@ -32,6 +32,7 @@ const OFFICE_ASSIGNMENTS = [
   'Human Resource Office',
 ];
 const OFFICE_SUBJECTS: Record<string, string[]> = {
+  'Community Relations Office': ['Corporate Social Responsibility', 'Community Relations'],
   'Human Resource Office': [
     'Application Letter',
     'Policy Related',
@@ -136,6 +137,18 @@ export default function MyWork() {
   useEffect(() => {
     if (taskSubject && !subjectOptions.includes(taskSubject)) setTaskSubject('');
   }, [subjectOptions, taskSubject]);
+
+  useEffect(() => {
+    if (searchParams.get('newTask') !== '1') return;
+    openNewTask();
+    const office = searchParams.get('office');
+    const subject = searchParams.get('subject');
+    if (office && OFFICE_ASSIGNMENTS.includes(office)) setTaskOfficeAssignments([office]);
+    if (subject) setTaskSubject(subject);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('newTask'); nextParams.delete('office'); nextParams.delete('subject');
+    setSearchParams(nextParams, { replace: true });
+  }, []);
 
   const myRequests = oracleWorkItems.filter((w) => myIds.has(w.requestorId) && w.status !== 'Draft');
   const myDrafts = oracleWorkItems.filter((w) => myIds.has(w.requestorId) && w.status === 'Draft');
