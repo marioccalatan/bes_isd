@@ -91,6 +91,17 @@ if not exist ".env.local" (
   echo.
 )
 
+echo.
+echo Stopping the existing BES process before updating dependencies...
+call :stop_port %BES_PORT%
+if errorlevel 1 (
+  echo.
+  echo ERROR: The existing BES process could not be stopped.
+  echo Run this deployment script as Administrator and try again.
+  pause
+  exit /b 1
+)
+
 echo Installing/checking npm dependencies...
 call npm install
 if errorlevel 1 (
@@ -111,10 +122,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Restarting any process already listening on port %BES_PORT%...
-call :stop_port %BES_PORT%
-
-echo.
 echo Starting BES on all IPv4 network interfaces ^(%BES_BIND_HOST%:%BES_PORT%^)
 echo Available URLs:
 echo   http://%BES_HOST_PRIMARY%:%BES_PORT%
@@ -128,8 +135,17 @@ pause
 exit /b 0
 
 :stop_port
+set "BES_STOP_FAILED="
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /C:":%~1" ^| findstr /C:"LISTENING"') do (
   echo Stopping PID %%P on port %~1...
   taskkill /PID %%P /F >nul 2>nul
+  if errorlevel 1 set "BES_STOP_FAILED=1"
 )
+if defined BES_STOP_FAILED exit /b 1
+
+rem Give Windows time to release loaded Node.js/native-module file handles.
+timeout /t 2 /nobreak >nul
+
+netstat -ano | findstr /C:":%~1" | findstr /C:"LISTENING" >nul
+if not errorlevel 1 exit /b 1
 exit /b 0
