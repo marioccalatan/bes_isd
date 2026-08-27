@@ -3,9 +3,13 @@ setlocal EnableExtensions
 
 cd /d "%~dp0"
 
-set "BES_HOST=192.168.62.14"
+rem Listen on every IPv4 interface so BES is reachable through both
+rem of this server's assigned network addresses.
+set "BES_BIND_HOST=0.0.0.0"
+set "BES_HOST_PRIMARY=192.168.62.14"
+set "BES_HOST_SECONDARY=192.168.10.14"
 set "BES_PORT=5000"
-set "API_HOST=%BES_HOST%"
+set "API_HOST=%BES_BIND_HOST%"
 set "API_PORT=%BES_PORT%"
 set "BES_BRANCH=main"
 
@@ -13,7 +17,9 @@ echo.
 echo ============================================================
 echo   BENECO Enterprise System - Full Deploy
 echo ============================================================
-echo Target URL: http://%BES_HOST%:%BES_PORT%
+echo Target URLs:
+echo   http://%BES_HOST_PRIMARY%:%BES_PORT%
+echo   http://%BES_HOST_SECONDARY%:%BES_PORT%
 echo Deployment folder: %CD%
 echo.
 
@@ -109,7 +115,10 @@ echo Restarting any process already listening on port %BES_PORT%...
 call :stop_port %BES_PORT%
 
 echo.
-echo Starting BES on http://%BES_HOST%:%BES_PORT%
+echo Starting BES on all IPv4 network interfaces ^(%BES_BIND_HOST%:%BES_PORT%^)
+echo Available URLs:
+echo   http://%BES_HOST_PRIMARY%:%BES_PORT%
+echo   http://%BES_HOST_SECONDARY%:%BES_PORT%
 echo Deployed commit: %BES_COMMIT%
 echo Press Ctrl+C in this window to stop the server.
 echo.
