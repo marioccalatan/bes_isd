@@ -967,6 +967,9 @@ export async function initializeDatabase() {
       district VARCHAR2(80),
       project_details VARCHAR2(4000),
       project_requirement VARCHAR2(4000),
+      pending_reason VARCHAR2(2000),
+      with_letter_reply CHAR(1) DEFAULT 'N' NOT NULL,
+      additional_remarks VARCHAR2(4000),
       request_status VARCHAR2(30) DEFAULT 'For evaluation' NOT NULL,
       approval_status VARCHAR2(30) DEFAULT 'For Evaluation' NOT NULL,
       evaluation_result VARCHAR2(40),
@@ -986,6 +989,9 @@ export async function initializeDatabase() {
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (actual_project_cost NUMBER(15,2))`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (approval_status VARCHAR2(30) DEFAULT 'For Evaluation' NOT NULL)`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (registration_details VARCHAR2(500))`);
+    await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (pending_reason VARCHAR2(2000))`);
+    await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (with_letter_reply CHAR(1) DEFAULT 'N' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (additional_remarks VARCHAR2(4000))`);
     await dropConstraint(connection, 'BES_CSR_REQUESTS', 'CHK_CSR_EVALUATION');
     await connection.execute(`ALTER TABLE bes_csr_requests MODIFY (evaluation_result VARCHAR2(200))`);
     await runDdl(connection, `CREATE TABLE bes_csr_events (

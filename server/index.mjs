@@ -149,6 +149,9 @@ const csrRequestJson = (row) => ({
   district: row.DISTRICT || '',
   projectDetails: row.PROJECT_DETAILS || '',
   projectRequirement: row.PROJECT_REQUIREMENT || '',
+  pendingReason: row.PENDING_REASON || '',
+  withLetterReply: row.WITH_LETTER_REPLY === 'Y',
+  additionalRemarks: row.ADDITIONAL_REMARKS || '',
   status: row.REQUEST_STATUS || 'For evaluation',
   approvalStatus: row.APPROVAL_STATUS || 'For Evaluation',
   evaluationResult: normalize(row.EVALUATION_RESULT) ? normalize(row.EVALUATION_RESULT).split('|').filter(Boolean) : [],
@@ -3120,6 +3123,7 @@ async function handle(req, res) {
       const body = await readBody(req, 100_000);
       if (!normalize(body.dateRequested) || !normalize(body.programType) || !normalize(body.requestee)) return json(res, 400, { error: 'Date Requested, Program Type, and Requestee are required.' });
       if (!['For evaluation','Pending','Completed'].includes(normalize(body.status))) return json(res, 400, { error: 'Invalid CSR status.' });
+      if (normalize(body.status) === 'Pending' && !normalize(body.pendingReason)) return json(res, 400, { error: 'Pending reason is required when the evaluation status is Pending.' });
       const evaluationResults = csrEvaluationResults(body);
       if (evaluationResults.some((value) => !CSR_EVALUATION_RESULTS.includes(value))) return json(res, 400, { error: 'Invalid evaluation result.' });
       const approvalStatus = evaluationResults.length ? normalize(body.approvalStatus) : 'For Evaluation';
@@ -3128,8 +3132,8 @@ async function handle(req, res) {
       const csrUid = `CSR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
-        await c.execute(`INSERT INTO bes_csr_requests (csr_uid,date_requested,program_type,requestee,designation,organization,registration_details,sector,location,barangay,municipality,district,project_details,project_requirement,request_status,approval_status,evaluation_result,evaluated_by,date_approved,amount_funding,pjrs,actual_project_cost,created_by_user_id,updated_by_user_id)
-          VALUES (:csrRequestUid,TO_DATE(:csrDateRequested,'YYYY-MM-DD'),:csrProgramType,:csrRequestee,:csrDesignation,:csrOrganization,:csrRegistrationDetails,:csrSector,:csrLocation,:csrBarangay,:csrMunicipality,:csrDistrict,:csrProjectDetails,:csrProjectRequirement,:csrRequestStatus,:csrApprovalStatus,:csrEvaluationResult,:csrEvaluatedBy,TO_DATE(:csrDateApproved,'YYYY-MM-DD'),:csrAmountFunding,:csrPjrs,:csrActualProjectCost,:csrActorUserId,:csrActorUserId)`, {
+        await c.execute(`INSERT INTO bes_csr_requests (csr_uid,date_requested,program_type,requestee,designation,organization,registration_details,sector,location,barangay,municipality,district,project_details,project_requirement,pending_reason,with_letter_reply,additional_remarks,request_status,approval_status,evaluation_result,evaluated_by,date_approved,amount_funding,pjrs,actual_project_cost,created_by_user_id,updated_by_user_id)
+          VALUES (:csrRequestUid,TO_DATE(:csrDateRequested,'YYYY-MM-DD'),:csrProgramType,:csrRequestee,:csrDesignation,:csrOrganization,:csrRegistrationDetails,:csrSector,:csrLocation,:csrBarangay,:csrMunicipality,:csrDistrict,:csrProjectDetails,:csrProjectRequirement,:csrPendingReason,:csrWithLetterReply,:csrAdditionalRemarks,:csrRequestStatus,:csrApprovalStatus,:csrEvaluationResult,:csrEvaluatedBy,TO_DATE(:csrDateApproved,'YYYY-MM-DD'),:csrAmountFunding,:csrPjrs,:csrActualProjectCost,:csrActorUserId,:csrActorUserId)`, {
           csrRequestUid: csrUid,
           csrDateRequested: normalize(body.dateRequested),
           csrProgramType: normalize(body.programType),
@@ -3144,6 +3148,9 @@ async function handle(req, res) {
           csrDistrict: nullableNormalize(body.district),
           csrProjectDetails: nullableNormalize(body.projectDetails),
           csrProjectRequirement: nullableNormalize(body.projectRequirement),
+          csrPendingReason: normalize(body.status) === 'Pending' ? nullableNormalize(body.pendingReason) : null,
+          csrWithLetterReply: body.withLetterReply ? 'Y' : 'N',
+          csrAdditionalRemarks: nullableNormalize(body.additionalRemarks),
           csrRequestStatus: normalize(body.status),
           csrApprovalStatus: approvalStatus,
           csrEvaluationResult: evaluationResults.length ? evaluationResults.join('|') : null,
@@ -3240,6 +3247,7 @@ async function handle(req, res) {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
       const csrUid = decodeURIComponent(csrMatch[1]); const body = await readBody(req, 100_000);
       if (!['For evaluation','Pending','Completed'].includes(normalize(body.status))) return json(res, 400, { error: 'Invalid CSR status.' });
+      if (normalize(body.status) === 'Pending' && !normalize(body.pendingReason)) return json(res, 400, { error: 'Pending reason is required when the evaluation status is Pending.' });
       const evaluationResults = csrEvaluationResults(body);
       if (evaluationResults.some((value) => !CSR_EVALUATION_RESULTS.includes(value))) return json(res, 400, { error: 'Invalid evaluation result.' });
       const approvalStatus = evaluationResults.length ? normalize(body.approvalStatus) : 'For Evaluation';
@@ -3247,8 +3255,8 @@ async function handle(req, res) {
       const approvalDate = evaluationResults.length ? nullableNormalize(body.dateApproved) : null;
       await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
-        await c.execute(`UPDATE bes_csr_requests SET date_requested=TO_DATE(:csrDateRequested,'YYYY-MM-DD'),program_type=:csrProgramType,requestee=:csrRequestee,designation=:csrDesignation,organization=:csrOrganization,registration_details=:csrRegistrationDetails,sector=:csrSector,location=:csrLocation,barangay=:csrBarangay,municipality=:csrMunicipality,district=:csrDistrict,project_details=:csrProjectDetails,project_requirement=:csrProjectRequirement,request_status=:csrRequestStatus,approval_status=:csrApprovalStatus,evaluation_result=:csrEvaluationResult,evaluated_by=:csrEvaluatedBy,date_approved=TO_DATE(:csrDateApproved,'YYYY-MM-DD'),amount_funding=:csrAmountFunding,pjrs=:csrPjrs,actual_project_cost=:csrActualProjectCost,updated_by_user_id=:csrActorUserId,updated_at=SYSTIMESTAMP WHERE csr_uid=:csrRequestUid`, {
-          csrRequestUid: csrUid, csrDateRequested: normalize(body.dateRequested), csrProgramType: normalize(body.programType), csrRequestee: normalize(body.requestee), csrDesignation: nullableNormalize(body.designation), csrOrganization: nullableNormalize(body.organization), csrRegistrationDetails: nullableNormalize(body.registrationDetails), csrSector: nullableNormalize(body.sector), csrLocation: nullableNormalize(body.location), csrBarangay: nullableNormalize(body.barangay), csrMunicipality: nullableNormalize(body.municipality), csrDistrict: nullableNormalize(body.district), csrProjectDetails: nullableNormalize(body.projectDetails), csrProjectRequirement: nullableNormalize(body.projectRequirement), csrRequestStatus: normalize(body.status), csrApprovalStatus: approvalStatus, csrEvaluationResult: evaluationResults.length ? evaluationResults.join('|') : null, csrEvaluatedBy: nullableNormalize(body.evaluatedBy), csrDateApproved: approvalDate, csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null, csrPjrs: nullableNormalize(body.pjrs), csrActualProjectCost: normalize(body.actualProjectCost) ? Number(body.actualProjectCost) : null, csrActorUserId: user.USER_ID,
+        await c.execute(`UPDATE bes_csr_requests SET date_requested=TO_DATE(:csrDateRequested,'YYYY-MM-DD'),program_type=:csrProgramType,requestee=:csrRequestee,designation=:csrDesignation,organization=:csrOrganization,registration_details=:csrRegistrationDetails,sector=:csrSector,location=:csrLocation,barangay=:csrBarangay,municipality=:csrMunicipality,district=:csrDistrict,project_details=:csrProjectDetails,project_requirement=:csrProjectRequirement,pending_reason=:csrPendingReason,with_letter_reply=:csrWithLetterReply,additional_remarks=:csrAdditionalRemarks,request_status=:csrRequestStatus,approval_status=:csrApprovalStatus,evaluation_result=:csrEvaluationResult,evaluated_by=:csrEvaluatedBy,date_approved=TO_DATE(:csrDateApproved,'YYYY-MM-DD'),amount_funding=:csrAmountFunding,pjrs=:csrPjrs,actual_project_cost=:csrActualProjectCost,updated_by_user_id=:csrActorUserId,updated_at=SYSTIMESTAMP WHERE csr_uid=:csrRequestUid`, {
+          csrRequestUid: csrUid, csrDateRequested: normalize(body.dateRequested), csrProgramType: normalize(body.programType), csrRequestee: normalize(body.requestee), csrDesignation: nullableNormalize(body.designation), csrOrganization: nullableNormalize(body.organization), csrRegistrationDetails: nullableNormalize(body.registrationDetails), csrSector: nullableNormalize(body.sector), csrLocation: nullableNormalize(body.location), csrBarangay: nullableNormalize(body.barangay), csrMunicipality: nullableNormalize(body.municipality), csrDistrict: nullableNormalize(body.district), csrProjectDetails: nullableNormalize(body.projectDetails), csrProjectRequirement: nullableNormalize(body.projectRequirement), csrPendingReason: normalize(body.status) === 'Pending' ? nullableNormalize(body.pendingReason) : null, csrWithLetterReply: body.withLetterReply ? 'Y' : 'N', csrAdditionalRemarks: nullableNormalize(body.additionalRemarks), csrRequestStatus: normalize(body.status), csrApprovalStatus: approvalStatus, csrEvaluationResult: evaluationResults.length ? evaluationResults.join('|') : null, csrEvaluatedBy: nullableNormalize(body.evaluatedBy), csrDateApproved: approvalDate, csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null, csrPjrs: nullableNormalize(body.pjrs), csrActualProjectCost: normalize(body.actualProjectCost) ? Number(body.actualProjectCost) : null, csrActorUserId: user.USER_ID,
         }); await c.commit();
       });
       return json(res, 200, { ok: true });

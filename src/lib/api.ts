@@ -527,6 +527,9 @@ export interface CsrRequest {
   district: string;
   projectDetails: string;
   projectRequirement: string;
+  pendingReason: string;
+  withLetterReply: boolean;
+  additionalRemarks: string;
   status: 'For evaluation' | 'Pending' | 'Completed';
   approvalStatus: 'Approved' | 'Disapproved' | 'For Evaluation';
   evaluationResult: Array<'Within CSR Policy' | 'Not Within CSR Policy'>;
