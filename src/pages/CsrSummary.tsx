@@ -15,12 +15,13 @@ const money = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP
 const currentYear = new Date().getFullYear();
 const CHART_COLORS = ['#10b981', '#38bdf8', '#f59e0b', '#a78bfa', '#f43f5e', '#14b8a6'];
 const PAGE_SIZE = 20;
+const COMMUNITY_RELATIONS_PROGRAM_TYPES = ['Partnership', 'Linkages', 'Networking'];
 
 export default function CsrSummary() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
   const programTypeFilter = searchParams.get('programType')?.trim() ?? '';
-  const isCommunityRelations = programTypeFilter === 'Linkages';
+  const isCommunityRelations = programTypeFilter === 'community-relations';
   const summaryTitle = isCommunityRelations ? 'Community Relations Summary' : 'Corporate Social Responsibility Summary';
   const requestName = isCommunityRelations ? 'Community Relations' : 'CSR';
   const [requests, setRequests] = useState<CsrRequest[]>([]);
@@ -39,7 +40,7 @@ export default function CsrSummary() {
     fetchCsrRequests(token).then(setRequests).catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load CSR requests.')).finally(() => setLoading(false));
   }, [token]);
 
-  const filtered = useMemo(() => requests.filter((request) => request.dateRequested >= startDate && request.dateRequested <= endDate && (!programTypeFilter || request.programType === programTypeFilter)), [requests, startDate, endDate, programTypeFilter]);
+  const filtered = useMemo(() => requests.filter((request) => request.dateRequested >= startDate && request.dateRequested <= endDate && (!programTypeFilter || (isCommunityRelations ? COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(request.programType) : request.programType === programTypeFilter))), [requests, startDate, endDate, isCommunityRelations, programTypeFilter]);
   const tableRows = useMemo(() => {
     const visible = filtered.filter((request) => Object.entries(columnFilters).every(([column, query]) => {
       if (!query) return true;
