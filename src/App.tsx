@@ -19,6 +19,7 @@ import BuildingMaintenance from '@/pages/BuildingMaintenance';
 import BuildingProgramOfWorks from '@/pages/BuildingProgramOfWorks';
 import VehicleMaintenanceSchedule from '@/pages/VehicleMaintenanceSchedule';
 import CsrSummary from '@/pages/CsrSummary';
+import HumanResourcesSummary from '@/pages/HumanResourcesSummary';
 import Workflows from '@/pages/Workflows';
 import CalendarPage from '@/pages/CalendarPage';
 import News from '@/pages/News';
@@ -67,7 +68,9 @@ export default function App() {
         <Route path="/workspace/building-facilities/maintenance" element={<BuildingMaintenance />} />
         <Route path="/workspace/building-facilities/program-of-works" element={<BuildingProgramOfWorks />} />
         <Route path="/workspace/vehicle-fleet/maintenance-schedule" element={<VehicleMaintenanceSchedule />} />
+        <Route path="/workspace/vehicle-fleet/renewal-schedule" element={<VehicleMaintenanceSchedule scheduleType="Registration Renewal" />} />
         <Route path="/workspace/member-programs/csr-summary" element={<CsrSummary />} />
+        <Route path="/workspace/human-resources/summary" element={<HumanResourcesSummary />} />
         <Route path="/workspace/:moduleId" element={<WorkspaceModule />} />
         <Route path="/workflows" element={<Workflows />} />
         <Route path="/calendar" element={<CalendarPage />} />

@@ -12,6 +12,15 @@ export default defineConfig({
   },
   server: {
     host: true,
+    watch: {
+      ignored: ['**/.tmp/**'],
+    },
+    proxy: {
+      '/api': 'http://127.0.0.1:3001',
+    },
+  },
+  preview: {
+    host: true,
     proxy: {
       '/api': 'http://127.0.0.1:3001',
     },

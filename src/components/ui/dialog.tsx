@@ -13,11 +13,13 @@ interface DialogProps {
   headerActions?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   contentOverflowVisible?: boolean;
+  contentOverflowHidden?: boolean;
+  fixedHeight?: boolean;
 }
 
 const sizeClasses = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl', '2xl': 'max-w-7xl' };
 
-export function Dialog({ open, onClose, title, description, children, footer, headerActions, size = 'md', contentOverflowVisible = false }: DialogProps) {
+export function Dialog({ open, onClose, title, description, children, footer, headerActions, size = 'md', contentOverflowVisible = false, contentOverflowHidden = false, fixedHeight = false }: DialogProps) {
   const ref = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -52,7 +54,7 @@ export function Dialog({ open, onClose, title, description, children, footer, he
         aria-modal="true"
         aria-labelledby="dialog-title"
         tabIndex={-1}
-        className={cn('relative z-10 flex max-h-[90vh] w-full flex-col rounded-xl bg-surface shadow-2xl outline-none', sizeClasses[size])}
+        className={cn('relative z-10 flex max-h-[90vh] w-full flex-col rounded-xl bg-surface shadow-2xl outline-none', fixedHeight && 'h-[90vh]', sizeClasses[size])}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-4 sm:p-5">
           <div className="min-w-0">
@@ -72,7 +74,7 @@ export function Dialog({ open, onClose, title, description, children, footer, he
             </button>
           </div>
         </div>
-        <div className={cn('min-h-0 flex-1 p-4 sm:p-5', contentOverflowVisible ? 'overflow-visible' : 'overflow-y-auto')}>{children}</div>
+        <div className={cn('min-h-0 flex-1 p-4 sm:p-5', contentOverflowHidden ? 'overflow-hidden' : contentOverflowVisible ? 'overflow-visible' : 'overflow-y-auto')}>{children}</div>
         {footer && <div className="flex items-center justify-end gap-2 border-t border-slate-200 p-4 sm:p-5">{footer}</div>}
       </div>
     </div>,

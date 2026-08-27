@@ -1,0 +1,1575 @@
+[
+  {
+    "item": 1,
+    "plate": "CAB 5626",
+    "assignee": "EDISON CASILLO",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 2,
+    "plate": "IAC6158",
+    "assignee": "OGM C/O FRANKY BUGAYONG",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 3,
+    "plate": "PIZ779",
+    "assignee": "MICS/ IT GROUP",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 4,
+    "plate": "NDV4116",
+    "assignee": "CREW 07- NNSD C/O EDISON CASILLO",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 5,
+    "plate": "NDV 4115",
+    "assignee": "CREW 15 - MERSON ALBIN",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 6,
+    "plate": "IAC 6177",
+    "assignee": "ARTEMIO BACOCO",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 7,
+    "plate": "NDV 4117",
+    "assignee": "CREW 13 - ACDONG, HYDRAN",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 8,
+    "plate": "NZI 947",
+    "assignee": "GIS C/O MARIO CALATAN",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 9,
+    "plate": "NKC2309",
+    "assignee": "NSD-COM C/O JEREMY SHAGOL",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 10,
+    "plate": "NDY 9022",
+    "assignee": "CREW 17- KHEVIN TUASON",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 11,
+    "plate": "NDZ 4651",
+    "assignee": "CREW 39- NSD SCADA",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 12,
+    "plate": "NDV4113",
+    "assignee": "CREW 05 - LEO TABAO-ICAN",
+    "quarters": [
+      "JANUARY 5 TO 9",
+      "MARCH 30 TO APRIL 03",
+      "JUNE 22 TO 26",
+      "SEPTEMBER 14 TO 18"
+    ]
+  },
+  {
+    "item": 13,
+    "plate": "NDY9030",
+    "assignee": "CREW 21 - JOHNWELL QUIPOT",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 14,
+    "plate": "NCG2682",
+    "assignee": "CREW 52 - MICS/I.T. GROUP",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 15,
+    "plate": "NCX 9846",
+    "assignee": "CREW 50 - MANUEL BAYAS",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 16,
+    "plate": "NDB 5105",
+    "assignee": "CREW 29 - NSD CMO C/O C. TAIT",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 17,
+    "plate": "NCH 8792",
+    "assignee": "CREW 47 - MURPHY MORCA",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 18,
+    "plate": "NCG 2680",
+    "assignee": "CREW 49- CHARLIE DUMSANG",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 19,
+    "plate": "NDY 7035",
+    "assignee": "ISD C/O COMREL C. GONZALES",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 20,
+    "plate": "NDB 5093",
+    "assignee": "CMO - C/O PERCIVAL ASPILLAN",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 21,
+    "plate": "IAC 4632",
+    "assignee": "MARY JANE L. CAPUYAN",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 22,
+    "plate": "NDB 5094",
+    "assignee": "LEONARD L. ATAM",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 23,
+    "plate": "POS309",
+    "assignee": "OGM- AGM SAFETY",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 24,
+    "plate": "AHD 762",
+    "assignee": "TELELECT RUFO MADILAT",
+    "quarters": [
+      "JANUARY 12 TO 16",
+      "APRIL 6 TO 10",
+      "JUNE 29 TO JULY 03",
+      "SEPTEMBER 21 TO 25"
+    ]
+  },
+  {
+    "item": 25,
+    "plate": "NDB 5106",
+    "assignee": "CREW 30 - REAGAN ACDONG",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 26,
+    "plate": "NDB 5091",
+    "assignee": "NSD CRIS TAIT",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 27,
+    "plate": "NDV 4110",
+    "assignee": "CREW 14 - JOHN BATATAS",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 28,
+    "plate": "NCX 9835",
+    "assignee": "CREW 51-JOEL PI-AY",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 29,
+    "plate": "NKC1878",
+    "assignee": "NSD-SEMO",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 30,
+    "plate": "CAB 5618",
+    "assignee": "NSD - SPCO C/O SCADA ROLLY",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 31,
+    "plate": "ZTH511",
+    "assignee": "JAMES C. PALICDON",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 32,
+    "plate": "NDZ 4650",
+    "assignee": "CREW 37 - ENRICO EUSTAQUIO",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 33,
+    "plate": "NDY9026",
+    "assignee": "CREW 25 - RAY PALLOGAN",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 34,
+    "plate": "NZI977",
+    "assignee": "NSD-SPDO MAUREEN RAMIREZ",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 35,
+    "plate": "NDB 5101",
+    "assignee": "CREW 32 - SABADO, JULIUS",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 36,
+    "plate": "NDV 4111",
+    "assignee": "CREW 02 - BASILIO ARNEL",
+    "quarters": [
+      "JANUARY 19 TO 23",
+      "APRIL 13 TO 17",
+      "JULY 06 TO 10",
+      "SEPTEMBER 28  TO OCTOBER 02"
+    ]
+  },
+  {
+    "item": 37,
+    "plate": "NDG 9834",
+    "assignee": "CREW 43 - C/O BRENSTON PENRAD",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 38,
+    "plate": "CAB 5622",
+    "assignee": "NSD-CMO C/O ROY OLATIC",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 39,
+    "plate": "NDY 9025",
+    "assignee": "CREW 24 - ABLAO, LOWELL",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 40,
+    "plate": "NCE 5697",
+    "assignee": "ARJAY P. TANASA",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 41,
+    "plate": "NDW 8499",
+    "assignee": "IAO C/O VIDAL BADIVAL",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 42,
+    "plate": "CAB 5629",
+    "assignee": "ANDRO ANGLUBEN",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 43,
+    "plate": "NIU2420",
+    "assignee": "NSD-SPDO C/O JERIEL VELASCO",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 44,
+    "plate": "NDV 4118",
+    "assignee": "CREW 11- GREGORIO AGNO",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 45,
+    "plate": "NDV 4109",
+    "assignee": "CREW 03 - C/O BERNARDO CAMILO",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 46,
+    "plate": "RKC 820",
+    "assignee": "NSD-CMO C/O P. ASPILAN",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 47,
+    "plate": "NZI 967",
+    "assignee": "ISD C/O ISD",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 48,
+    "plate": "CAB 5620",
+    "assignee": "MOTORPOOL",
+    "quarters": [
+      "JANUARY 26 TO 30",
+      "APRIL 20  TO 24",
+      "JULY 13 TO 17",
+      "OCTOBER 05 TO 09"
+    ]
+  },
+  {
+    "item": 49,
+    "plate": "PIK994",
+    "assignee": "CHRISTEVE MALIHOD",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 50,
+    "plate": "NZI997",
+    "assignee": "GERGEM B. BANDA-AY",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 51,
+    "plate": "NDG9833",
+    "assignee": "CREW 42-NICASIO BARTOLOME",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 52,
+    "plate": "NDY9023",
+    "assignee": "CREW 23 - DE GUZMAN, JACOB",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 53,
+    "plate": "NDG 9832",
+    "assignee": "CREW 41 - ALLASIW, SAXON",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 54,
+    "plate": "NDB 5103",
+    "assignee": "CREW 22 - LARRY PACSI",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 55,
+    "plate": "NDY 9028",
+    "assignee": "CREW 18 - TORRES, ABRIELO",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 56,
+    "plate": "NDB 5098",
+    "assignee": "CREW 33 - ROWELL TAYNAN",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 57,
+    "plate": "YCX 1525",
+    "assignee": "OGM C/O FRANKY BUGAYONG",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 58,
+    "plate": "PIZ 730",
+    "assignee": "NSD - JOEL ESTEBAN",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 59,
+    "plate": "TQT302",
+    "assignee": "NSD-SPDO C/O  JONES LOSNONG",
+    "quarters": [
+      "FEBRUARY 2 TO 6",
+      "APRIL 27  TO 30",
+      "JULY 20 TO 24",
+      "OCTOBER 12 TO 16"
+    ]
+  },
+  {
+    "item": 60,
+    "plate": "NKC1876",
+    "assignee": "NSD CMO C/O ELMER TAVAS",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 61,
+    "plate": "NDV4120",
+    "assignee": "CREW 04-NSD CMO C/O CRIS TAIT",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 62,
+    "plate": "NDB 5104",
+    "assignee": "CREW 31 - ROWELL BUMIDANG",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 63,
+    "plate": "CAG 9549",
+    "assignee": "PI-AY, JOEL",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 64,
+    "plate": "NDV 4122",
+    "assignee": "CREW 09 - ADDOM, DAVE",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 65,
+    "plate": "CAD 9751",
+    "assignee": "EUSTAQUIO, ENRICO",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 66,
+    "plate": "NKC1896",
+    "assignee": "NSD-COM C/O JOHNNY PASCUA",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 67,
+    "plate": "CAB 5619",
+    "assignee": "EDWARD BATOYOG",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 68,
+    "plate": "IAC 4639",
+    "assignee": "JOAQUIN O. CALAWEN",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 69,
+    "plate": "NIU2324",
+    "assignee": "NSD-SPDO C/O RONEL MIRO",
+    "quarters": [
+      "FEBRUARY 9 TO 13",
+      "MAY 04 TO 8",
+      "JULY 27 TO 31",
+      "OCTOBER 19 TO 23"
+    ]
+  },
+  {
+    "item": 70,
+    "plate": "NAS5910",
+    "assignee": "MADILAT, RUFO",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 71,
+    "plate": "NBJ8327",
+    "assignee": "CMO- C/O ROY OLATIC (MANLIFT)",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 72,
+    "plate": "CAB 5628",
+    "assignee": "CMO - C/O PERCIVAL ASPILLAN",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 73,
+    "plate": "PIZ779",
+    "assignee": "MICS/ IT GROUP",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 74,
+    "plate": "NCX9819",
+    "assignee": "CREW 54 - MATTHEW CARINO",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 75,
+    "plate": "NLI 797",
+    "assignee": "IAO C/O JEREK CABATAN",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 76,
+    "plate": "NDB 5100",
+    "assignee": "CREW 36 - ARNEL BOADO",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 77,
+    "plate": "NDV 4112",
+    "assignee": "CREW 16 - PGD",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 78,
+    "plate": "NDG9833",
+    "assignee": "CREW 42-NICASIO BARTOLOME",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 79,
+    "plate": "PIK984",
+    "assignee": "RONA SORIANO",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 80,
+    "plate": "NCE 9012",
+    "assignee": "CREW 48 - BARTOLOME PARROCHA",
+    "quarters": [
+      "FEBRUARY 16 TO 20",
+      "MAY 11 TO 15",
+      "AUGUST 03 TO 07",
+      "OCTOBER 26 TO 30"
+    ]
+  },
+  {
+    "item": 81,
+    "plate": "IAC 4601",
+    "assignee": "OGM-BOD C/O FRANKY BUGAYONG",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 82,
+    "plate": "NCX 9845",
+    "assignee": "CREW 53 - JOEL PI-AY",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 83,
+    "plate": "NKC1887",
+    "assignee": "CHRISTOPHER RIFANI",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 84,
+    "plate": "NKC1877",
+    "assignee": "JANUS TANDI",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 85,
+    "plate": "NIU2327",
+    "assignee": "PGD- C/O RUDY BALAG-EY JR.",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 86,
+    "plate": "NIU2329",
+    "assignee": "NSD-SPDO C/O CHESTER PINTO",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 87,
+    "plate": "NKC1886",
+    "assignee": "NSD-COM C/O VALENTINE CHOSCHOS",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 88,
+    "plate": "PIK974",
+    "assignee": "SHERAINE WILLY",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 89,
+    "plate": "NDY 2010",
+    "assignee": "MARIO CALATAN",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 90,
+    "plate": "NDY 9029",
+    "assignee": "CREW 26 - GERRY LANDOCAN",
+    "quarters": [
+      "FEBRUARY 23 TO 27",
+      "MAY 18 TO 22",
+      "AUGUST 10 TO 14",
+      "NOVEMBER 2 TO 6"
+    ]
+  },
+  {
+    "item": 91,
+    "plate": "PIZ730",
+    "assignee": "JOEL ESTEBAN",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 92,
+    "plate": "NCE 9012",
+    "assignee": "CREW 48 - BARTOLOME PARROCHA",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 93,
+    "plate": "NDY 9024",
+    "assignee": "CREW 20 - DENVER KARRY",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 94,
+    "plate": "WJN187",
+    "assignee": "NSD-COM C/O LARRY PACSI",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 95,
+    "plate": "NDB 5097",
+    "assignee": "CREW 34 - BUYA, ALADIN",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 96,
+    "plate": "RKC820",
+    "assignee": "ISUZU ALUMINUM VAN - c/o ASPILAN",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 97,
+    "plate": "NKG 2077",
+    "assignee": "NSD-CMO C/O R. OLATIC",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 98,
+    "plate": "NDV 4121",
+    "assignee": "CREW 06 - Motorpool",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 99,
+    "plate": "NKC2310",
+    "assignee": "NSD-CMO C/O ISIDRO BUSILAN",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 100,
+    "plate": "AHD792",
+    "assignee": "DUMSANG, CHARLIE/MURPHY MORCA",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 101,
+    "plate": "ZRE851",
+    "assignee": "OGM C/O FRANKIE BUGAYONG",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 102,
+    "plate": "AHM169",
+    "assignee": "NSD-CMO R. PAGANDIYAN",
+    "quarters": [
+      "MARCH 2 TO 6",
+      "MAY 25 TO 29",
+      "AUGUST 17 TO 21",
+      "NOVEMBER 09 TO 13"
+    ]
+  },
+  {
+    "item": 103,
+    "plate": "NIU2421",
+    "assignee": "NSD-SPDO C/O AERA ANGWAY",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 104,
+    "plate": "IAC 4630",
+    "assignee": "FRAISER P. ANGAYEN",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 105,
+    "plate": "NDG 9833",
+    "assignee": "CREW 42 CMO C/O NICASIO BARTOLOME",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 106,
+    "plate": "NKC1897",
+    "assignee": "NSD-CMO C/O CERYL LINMIPAO",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 107,
+    "plate": "NDB 5096",
+    "assignee": "NNSD C/O AMYLYN P. TIMPAC",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 108,
+    "plate": "YAB4871",
+    "assignee": "OGM C/O F. BUGAYONG",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 109,
+    "plate": "AHD 752",
+    "assignee": "EUSTAQUIO, ENRICO",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 110,
+    "plate": "NDB 5102",
+    "assignee": "CREW 28 - CRAIG ACDONG",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 111,
+    "plate": "NKC1868",
+    "assignee": "NSD-CMO C/O M. AWINGAN",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 112,
+    "plate": "ZTH561",
+    "assignee": "PGD- C/O RUDY BALAG-EY JR.",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 113,
+    "plate": "NDV 4124",
+    "assignee": "I-VAN OGM C/O F. BUGAYONG",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 114,
+    "plate": "XTL959",
+    "assignee": "CMO - C/O ROY OLATIC",
+    "quarters": [
+      "MARCH 9 TO 13",
+      "JUNE 01 TO  05",
+      "AUGUST 24 TO 28",
+      "NOVEMBER 16 TO 20"
+    ]
+  },
+  {
+    "item": 115,
+    "plate": "IAC 4633",
+    "assignee": "RAMEL B. RIFANI",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 116,
+    "plate": "NDB 5092",
+    "assignee": "OLIVE O. BETE",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 117,
+    "plate": "NDV 4114",
+    "assignee": "CREW 08 - MRBDO C/O MARK AMISOLA",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 118,
+    "plate": "NDV 4123",
+    "assignee": "CREW 12 - CARIÑO, ARIES",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 119,
+    "plate": "CAB 5625",
+    "assignee": "SEMO- C/O BENJIE BAJO",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 120,
+    "plate": "NCE 7249",
+    "assignee": "NNSD C/O R. OLATIC",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 121,
+    "plate": "ZTH491",
+    "assignee": "SEMO C/O ELLIS GOSADAN",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 122,
+    "plate": "IAC 4636",
+    "assignee": "BENELITA S. LINMIPAO",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 123,
+    "plate": "NDG 9835",
+    "assignee": "CREW 44 - ARVIN GAMBOA",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 124,
+    "plate": "NCJ 1389",
+    "assignee": "CREW 38 - ESGANA, EMERSON",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 125,
+    "plate": "IAC 4635",
+    "assignee": "ROY P. OLATIC",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 126,
+    "plate": "NDX 7485",
+    "assignee": "CREW 27 - CMO C/O PERCIVAL ASPILAN",
+    "quarters": [
+      "MARCH 16 TO 20",
+      "JUNE 08 TO  11",
+      "SEPTEMBER 01 TO 04",
+      "NOVEMBER 23 TO 27"
+    ]
+  },
+  {
+    "item": 127,
+    "plate": "NKA3999",
+    "assignee": "NSD-CMO C/O PERCY ASPILAN",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 128,
+    "plate": "ZTH501",
+    "assignee": "EDUARDSON LUMINES",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 129,
+    "plate": "IAC 4638",
+    "assignee": "EDISON DE GUZMAN",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 130,
+    "plate": "IAC 4637",
+    "assignee": "GAIL T. MANGAOIL",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 131,
+    "plate": "NDY9027",
+    "assignee": "CREW 19 - DIANO, WILLIAM",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 132,
+    "plate": "NAG 9365",
+    "assignee": "NSD- CMO C/O DUMSANG, CHARLIE",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 133,
+    "plate": "NZI957",
+    "assignee": "ERIC ESTRADA",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 134,
+    "plate": "NDG 9832",
+    "assignee": "CREW 41 - ALLASIW, SAXON",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 135,
+    "plate": "TQT332",
+    "assignee": "ELLEN E. RUFINO",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 136,
+    "plate": "IAC 4629",
+    "assignee": "ROBERT T. APILIS",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 137,
+    "plate": "NDV 4119",
+    "assignee": "CREW 10 - DONGLA, LEONARD",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 138,
+    "plate": "NDY 4340",
+    "assignee": "OGM-PAUL DONAAL",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 139,
+    "plate": "NDB 5099",
+    "assignee": "CREW 35-NSD SEMO",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 140,
+    "plate": "NZI987",
+    "assignee": "SCPO C/O  RICAFORT",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 141,
+    "plate": "ZTH551",
+    "assignee": "NSD C/O SPDO",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 142,
+    "plate": "NDV 4108",
+    "assignee": "CREW 01 - MARCELO, NARDO",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  },
+  {
+    "item": 143,
+    "plate": "NZI 997",
+    "assignee": "NSD- SCPO C/O GERGEM B. BANDA-AY",
+    "quarters": [
+      "MARCH 23 TO 27",
+      "JUNE 15 TO  19",
+      "SEPTEMBER 07 TO 11",
+      "DECEMBER 1  TO 4"
+    ]
+  }
+]

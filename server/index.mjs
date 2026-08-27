@@ -577,6 +577,7 @@ const DB_SYNC_TABLES = [
   'BES_POSITION_DR_PL',
   'BES_EMPLOYEE_SKILL_CHECKS',
   'BES_FLEET_STORE',
+  'BES_FLEET_VEHICLE_MODELS',
   'BES_CSR_SECTORS',
   'BES_BARANGAY_LOCATIONS',
   'BES_CSR_REQUESTS',
@@ -635,6 +636,7 @@ const DB_SYNC_DELETE_ORDER = [
   'BES_HRO_RM_TASK_PROCESSING',
   'BES_HRO_EM_TASK_PROCESSING',
   'BES_POLICY_TASK_PROCESSING',
+  'BES_FLEET_VEHICLE_MODELS',
   'BES_FLEET_STORE',
   'BES_HRO_RECRUITMENT_COMMENTS',
   'BES_HRO_RECRUITMENT_POSITIONS',
@@ -683,6 +685,7 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_PERFORMANCE_PLANS',
   'BES_PERFORMANCE_TARGETS',
   'BES_FLEET_STORE',
+  'BES_FLEET_VEHICLE_MODELS',
   'BES_CSR_SECTORS',
   'BES_BARANGAY_LOCATIONS',
   'BES_CSR_REQUESTS',
@@ -718,6 +721,7 @@ const DB_SYNC_KEY_OVERRIDES = new Map([
   ['BES_TASK_SUBJECTS', ['TOOL_CODE', 'TASK_SUBJECT']],
   ['BES_TOOL_ACCESS', ['TOOL_CODE', 'DEPARTMENT_CODE', 'OFFICE_NAME', 'POSITION_NAME']],
   ['BES_USER_ROLES', ['USER_ID', 'ROLE_CODE', 'SCOPE_DEPARTMENT_CODE', 'SCOPE_UNIT_NAME']],
+  ['BES_FLEET_VEHICLE_MODELS', ['VEHICLE_UID']],
   ['BES_CSR_SECTORS', ['SECTOR_NAME']],
   ['BES_BARANGAY_LOCATIONS', ['MUNICIPALITY', 'BARANGAY']],
   ['BES_CSR_REQUESTS', ['CSR_UID']],
@@ -2825,6 +2829,155 @@ async function handle(req, res) {
       if (!result) return json(res, 404, { error: 'Policy record not found.' });
       return json(res, 200, { ok: true });
     }
+    if (req.method === 'GET' && req.url === '/api/hro/employees') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        return c.execute(`SELECT e.EMPNO, e.E_LAST, e.E_FIRST, e.E_MIDDLE,
+            e.CURRENT_POSITION_TYPE, e.OFFICIAL_POSITION_TYPE, e.POSITION_LEVEL,
+            TO_CHAR(e.DATE_HIRED, 'YYYY-MM-DD') DATE_HIRED,
+            e.DEPT_ID, d.DEPT_SHORT, d.DEPT_LONG, e.JL_ID, jl.JL_DESC
+          FROM HR_EMP_MASTERFILE e
+          LEFT JOIN HR_DEPARTMENT_LOOKUP d ON d.DEPT_ID = e.DEPT_ID
+            AND UPPER(TRIM(d.ACTIVE_STAT)) = 'ACTIVE'
+          LEFT JOIN HR_JOBLEVEL_LOOKUP jl ON jl.JL_ID = LPAD(TRIM(TO_CHAR(e.JL_ID)), 2, '0')
+            AND UPPER(TRIM(jl.ACTIVE_STAT)) = 'ACTIVE'
+          WHERE UPPER(TRIM(e.ACTIVE_STAT)) = 'ACTIVE'
+            AND UPPER(TRIM(NVL(e.CURRENT_POSITION_TYPE, '-'))) <> 'BOD MEMBER'
+            AND UPPER(TRIM(NVL(e.OFFICIAL_POSITION_TYPE, '-'))) <> 'BOD MEMBER'
+          ORDER BY UPPER(e.E_LAST), UPPER(e.E_FIRST), e.EMPNO`);
+      });
+      return result ? json(res, 200, { employees: result.rows.map((row) => ({
+        employeeNo: row.EMPNO,
+        lastName: row.E_LAST,
+        firstName: row.E_FIRST,
+        middleName: row.E_MIDDLE,
+        currentPositionType: row.CURRENT_POSITION_TYPE,
+        officialPositionType: row.OFFICIAL_POSITION_TYPE,
+        positionLevel: row.POSITION_LEVEL,
+        dateHired: row.DATE_HIRED,
+        departmentId: row.DEPT_ID,
+        departmentShort: row.DEPT_SHORT,
+        departmentName: row.DEPT_LONG,
+        jobLevelId: row.JL_ID == null ? null : String(row.JL_ID).padStart(2, '0'),
+        jobLevelDescription: row.JL_DESC,
+      })) }) : json(res, 401, { error: 'Session expired.' });
+    }
+    if (req.method === 'PATCH' && /^\/api\/hro\/employees\/[^/]+$/.test(req.url || '')) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const employeeNo = decodeURIComponent((req.url || '').split('/').pop() || '');
+      const body = await readBody(req);
+      const lastName = normalize(body.lastName);
+      const firstName = normalize(body.firstName);
+      const middleName = nullableNormalize(body.middleName);
+      const currentPositionType = nullableNormalize(body.currentPositionType);
+      const officialPositionType = nullableNormalize(body.officialPositionType);
+      const positionLevel = nullableNormalize(body.positionLevel);
+      const dateHired = nullableNormalize(body.dateHired);
+      if (!lastName || !firstName) return json(res, 400, { error: 'First and last name are required.' });
+      if (dateHired && !/^\d{4}-\d{2}-\d{2}$/.test(dateHired)) return json(res, 400, { error: 'Date hired must use YYYY-MM-DD.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const updated = await c.execute(`UPDATE HR_EMP_MASTERFILE SET
+            E_LAST=:lastName, E_FIRST=:firstName, E_MIDDLE=:middleName,
+            CURRENT_POSITION_TYPE=:currentPositionType, OFFICIAL_POSITION_TYPE=:officialPositionType, POSITION_LEVEL=:positionLevel,
+            DATE_HIRED=TO_DATE(:dateHired, 'YYYY-MM-DD'), UPDATE_BY=:updatedBy, UPDATE_DATE=SYSDATE
+          WHERE EMPNO=:employeeNo`, { lastName, firstName, middleName, currentPositionType, officialPositionType, positionLevel, dateHired, updatedBy: user.USERNAME, employeeNo });
+        if (!updated.rowsAffected) return { missing: true };
+        await c.commit();
+        const selected = await c.execute(`SELECT e.EMPNO, e.E_LAST, e.E_FIRST, e.E_MIDDLE,
+            e.CURRENT_POSITION_TYPE, e.OFFICIAL_POSITION_TYPE, e.POSITION_LEVEL, TO_CHAR(e.DATE_HIRED, 'YYYY-MM-DD') DATE_HIRED,
+            e.DEPT_ID, d.DEPT_SHORT, d.DEPT_LONG, e.JL_ID, jl.JL_DESC
+          FROM HR_EMP_MASTERFILE e LEFT JOIN HR_DEPARTMENT_LOOKUP d ON d.DEPT_ID=e.DEPT_ID
+            AND UPPER(TRIM(d.ACTIVE_STAT))='ACTIVE'
+          LEFT JOIN HR_JOBLEVEL_LOOKUP jl ON jl.JL_ID=LPAD(TRIM(TO_CHAR(e.JL_ID)),2,'0')
+            AND UPPER(TRIM(jl.ACTIVE_STAT))='ACTIVE'
+          WHERE e.EMPNO=:employeeNo`, { employeeNo });
+        return { row: selected.rows[0] };
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      if (result.missing || !result.row) return json(res, 404, { error: 'Employee not found.' });
+      const row = result.row;
+      return json(res, 200, { employee: {
+        employeeNo: row.EMPNO, lastName: row.E_LAST, firstName: row.E_FIRST, middleName: row.E_MIDDLE,
+        currentPositionType: row.CURRENT_POSITION_TYPE, officialPositionType: row.OFFICIAL_POSITION_TYPE, positionLevel: row.POSITION_LEVEL, dateHired: row.DATE_HIRED,
+        departmentId: row.DEPT_ID, departmentShort: row.DEPT_SHORT, departmentName: row.DEPT_LONG,
+        jobLevelId: row.JL_ID == null ? null : String(row.JL_ID).padStart(2, '0'), jobLevelDescription: row.JL_DESC,
+      } });
+    }
+    const hrEmployeeServiceMatch = url.pathname.match(/^\/api\/hro\/employees\/([^/]+)\/service-records$/);
+    if (hrEmployeeServiceMatch && ['GET', 'POST'].includes(req.method)) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const employeeNo = decodeURIComponent(hrEmployeeServiceMatch[1]);
+      if (req.method === 'GET') {
+        const result = await withConnection(async (c) => {
+          const user = await currentSessionUser(c, token); if (!user) return null;
+          const records = await c.execute(`SELECT service_record_id,employee_no,position_title,position_level,monthly_salary,
+              TO_CHAR(effective_start,'YYYY-MM-DD') effective_start,TO_CHAR(effective_end,'YYYY-MM-DD') effective_end,remarks
+            FROM bes_hr_service_records WHERE employee_no=:employeeNo ORDER BY effective_start DESC,service_record_id DESC`, { employeeNo });
+          const evidence = await c.execute(`SELECT e.evidence_id,e.service_record_id,e.file_name,e.mime_type,e.file_size,e.created_at
+            FROM bes_hr_service_evidence e JOIN bes_hr_service_records r ON r.service_record_id=e.service_record_id
+            WHERE r.employee_no=:employeeNo ORDER BY e.evidence_id`, { employeeNo });
+          return { records: records.rows, evidence: evidence.rows };
+        });
+        if (!result) return json(res, 401, { error: 'Session expired.' });
+        return json(res, 200, { records: result.records.map((row) => ({
+          id: String(row.SERVICE_RECORD_ID), employeeNo: row.EMPLOYEE_NO, positionTitle: row.POSITION_TITLE, positionLevel: row.POSITION_LEVEL,
+          monthlySalary: row.MONTHLY_SALARY == null ? null : Number(row.MONTHLY_SALARY), effectiveStart: row.EFFECTIVE_START, effectiveEnd: row.EFFECTIVE_END, remarks: row.REMARKS,
+          evidence: result.evidence.filter((item) => item.SERVICE_RECORD_ID === row.SERVICE_RECORD_ID).map((item) => ({ id: String(item.EVIDENCE_ID), fileName: item.FILE_NAME, mimeType: item.MIME_TYPE, fileSize: Number(item.FILE_SIZE), createdAt: localIso(item.CREATED_AT) })),
+        })) });
+      }
+      const body = await readBody(req); const positionTitle = normalize(body.positionTitle); const positionLevel = nullableNormalize(body.positionLevel);
+      const monthlySalary = body.monthlySalary === null || body.monthlySalary === '' || body.monthlySalary === undefined ? null : Number(body.monthlySalary);
+      const effectiveStart = normalize(body.effectiveStart); const effectiveEnd = nullableNormalize(body.effectiveEnd); const remarks = nullableNormalize(body.remarks);
+      if (!positionTitle || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveStart)) return json(res, 400, { error: 'Position and effective start date are required.' });
+      if (effectiveEnd && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveEnd)) return json(res, 400, { error: 'Effective end date is invalid.' });
+      if (monthlySalary !== null && (!Number.isFinite(monthlySalary) || monthlySalary < 0)) return json(res, 400, { error: 'Salary must be zero or greater.' });
+      const created = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        const exists = await c.execute(`SELECT 1 FROM HR_EMP_MASTERFILE WHERE EMPNO=:employeeNo`, { employeeNo });
+        if (!exists.rows[0]) throw Object.assign(new Error('Employee was not found.'), { statusCode: 404 });
+        const inserted = await c.execute(`INSERT INTO bes_hr_service_records (employee_no,position_title,position_level,monthly_salary,effective_start,effective_end,remarks,created_by_user_id)
+          VALUES (:employeeNo,:positionTitle,:positionLevel,:monthlySalary,TO_DATE(:effectiveStart,'YYYY-MM-DD'),CASE WHEN :effectiveEnd IS NULL THEN NULL ELSE TO_DATE(:effectiveEnd,'YYYY-MM-DD') END,:remarks,:userId)
+          RETURNING service_record_id INTO :recordId`, { employeeNo, positionTitle, positionLevel, monthlySalary, effectiveStart, effectiveEnd, remarks, userId: user.USER_ID, recordId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
+        await c.commit(); return String(inserted.outBinds.recordId[0]);
+      });
+      return created ? json(res, 201, { record: { id: created, employeeNo, positionTitle, positionLevel, monthlySalary, effectiveStart, effectiveEnd, remarks, evidence: [] } }) : json(res, 401, { error: 'Session expired.' });
+    }
+    const hrServiceRecordMatch = url.pathname.match(/^\/api\/hro\/service-records\/(\d+)$/);
+    if (hrServiceRecordMatch && ['PATCH', 'DELETE'].includes(req.method)) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const recordId = Number(hrServiceRecordMatch[1]);
+      if (req.method === 'DELETE') {
+        const deleted = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; const result = await c.execute(`DELETE FROM bes_hr_service_records WHERE service_record_id=:recordId`, { recordId }); await c.commit(); return result.rowsAffected; });
+        if (deleted === null) return json(res, 401, { error: 'Session expired.' }); return deleted ? json(res, 200, { ok: true }) : json(res, 404, { error: 'Service record not found.' });
+      }
+      const body = await readBody(req); const positionTitle = normalize(body.positionTitle); const positionLevel = nullableNormalize(body.positionLevel);
+      const monthlySalary = body.monthlySalary === null || body.monthlySalary === '' || body.monthlySalary === undefined ? null : Number(body.monthlySalary);
+      const effectiveStart = normalize(body.effectiveStart); const effectiveEnd = nullableNormalize(body.effectiveEnd); const remarks = nullableNormalize(body.remarks);
+      if (!positionTitle || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveStart)) return json(res, 400, { error: 'Position and effective start date are required.' });
+      const updated = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; const result = await c.execute(`UPDATE bes_hr_service_records SET position_title=:positionTitle,position_level=:positionLevel,monthly_salary=:monthlySalary,effective_start=TO_DATE(:effectiveStart,'YYYY-MM-DD'),effective_end=CASE WHEN :effectiveEnd IS NULL THEN NULL ELSE TO_DATE(:effectiveEnd,'YYYY-MM-DD') END,remarks=:remarks,updated_at=SYSTIMESTAMP WHERE service_record_id=:recordId`, { positionTitle, positionLevel, monthlySalary, effectiveStart, effectiveEnd, remarks, recordId }); await c.commit(); return result.rowsAffected; });
+      if (updated === null) return json(res, 401, { error: 'Session expired.' }); return updated ? json(res, 200, { record: { id: String(recordId), positionTitle, positionLevel, monthlySalary, effectiveStart, effectiveEnd, remarks } }) : json(res, 404, { error: 'Service record not found.' });
+    }
+    const hrServiceEvidenceUploadMatch = url.pathname.match(/^\/api\/hro\/service-records\/(\d+)\/evidence$/);
+    if (req.method === 'POST' && hrServiceEvidenceUploadMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const recordId = Number(hrServiceEvidenceUploadMatch[1]);
+      let originalName = ''; try { originalName = decodeURIComponent(normalize(req.headers['x-file-name'])); } catch { return json(res, 400, { error: 'Evidence filename is invalid.' }); }
+      const fileName = safeFileName(originalName || 'service-record-evidence'); const mimeType = normalize(req.headers['content-type']) || 'application/octet-stream'; const file = await readBinaryBody(req);
+      if (!file.length) return json(res, 400, { error: 'Evidence file is empty.' });
+      const uploaded = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; const inserted = await c.execute(`INSERT INTO bes_hr_service_evidence (service_record_id,file_name,mime_type,file_size,file_blob,uploaded_by_user_id) SELECT :recordId,:fileName,:mimeType,:fileSize,:fileBlob,:userId FROM bes_hr_service_records WHERE service_record_id=:recordId RETURNING evidence_id INTO :evidenceId`, { recordId, fileName, mimeType, fileSize: file.length, fileBlob: { val: file, type: oracledb.BLOB }, userId: user.USER_ID, evidenceId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } }); await c.commit(); return inserted.rowsAffected ? String(inserted.outBinds.evidenceId[0]) : false; });
+      if (uploaded === null) return json(res, 401, { error: 'Session expired.' }); return uploaded ? json(res, 201, { evidence: { id: uploaded, fileName, mimeType, fileSize: file.length } }) : json(res, 404, { error: 'Service record not found.' });
+    }
+    const hrServiceEvidenceMatch = url.pathname.match(/^\/api\/hro\/service-evidence\/(\d+)$/);
+    if (hrServiceEvidenceMatch && ['GET', 'DELETE'].includes(req.method)) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const evidenceId = Number(hrServiceEvidenceMatch[1]);
+      if (req.method === 'DELETE') { const deleted = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; const result = await c.execute(`DELETE FROM bes_hr_service_evidence WHERE evidence_id=:evidenceId`, { evidenceId }); await c.commit(); return result.rowsAffected; }); if (deleted === null) return json(res, 401, { error: 'Session expired.' }); return deleted ? json(res, 200, { ok: true }) : json(res, 404, { error: 'Evidence not found.' }); }
+      const found = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; const result = await c.execute(`SELECT file_name,mime_type,file_size,file_blob FROM bes_hr_service_evidence WHERE evidence_id=:evidenceId`, { evidenceId }); const row = result.rows[0]; if (!row) return false; row.FILE_BUFFER = Buffer.isBuffer(row.FILE_BLOB) ? row.FILE_BLOB : await row.FILE_BLOB.getData(); return row; });
+      if (found === null) return json(res, 401, { error: 'Session expired.' }); if (!found) return json(res, 404, { error: 'Evidence not found.' }); res.writeHead(200, { 'content-type': found.MIME_TYPE || 'application/octet-stream', 'content-length': String(found.FILE_BUFFER.length), 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(safeFileName(found.FILE_NAME))}`, 'cache-control': 'private, no-store' }); return res.end(found.FILE_BUFFER);
+    }
     const orgDeleteMatch = url.pathname.match(/^\/api\/admin\/org-structure\/(office)\/(\d+)$/);
     if (req.method === 'DELETE' && orgDeleteMatch) {
       const admin = await requireAdministrator(bearerToken(req));
@@ -3085,13 +3238,245 @@ async function handle(req, res) {
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        return c.execute(`SELECT payload, updated_at FROM bes_fleet_store WHERE data_key='MODEL_LIBRARY'`);
+        const store = await c.execute(`SELECT payload, updated_at FROM bes_fleet_store WHERE data_key='MODEL_LIBRARY'`);
+        let catalog = null;
+        try { catalog = await c.execute(`SELECT library.model_uid,library.vehicle_type,library.brand,library.model,
+          files.file_name,files.mime_type,files.file_size
+          FROM bes_fleet_model_library library LEFT JOIN bes_fleet_vehicle_models files ON files.vehicle_uid=library.model_uid
+          ORDER BY library.brand,library.model`); } catch (error) { if (error.errorNum !== 942) throw error; }
+        return { store, catalog };
       });
       if (!result) return json(res, 401, { error: 'Session expired.' });
-      const payload = result.rows[0]?.PAYLOAD;
+      const payload = result.store.rows[0]?.PAYLOAD;
       let models = [];
       try { models = payload ? JSON.parse(String(payload)) : []; } catch { models = []; }
-      return json(res, 200, { models, updatedAt: localIso(result.rows[0]?.UPDATED_AT) });
+      if (result.catalog?.rows.length) models = result.catalog.rows.map((row) => ({
+        id: row.MODEL_UID, type: row.VEHICLE_TYPE, brand: row.BRAND, model: row.MODEL,
+        ...(row.FILE_NAME ? { model3d: { name: row.FILE_NAME, type: row.MIME_TYPE, size: row.FILE_SIZE } } : {}),
+      }));
+      return json(res, 200, { models, updatedAt: localIso(result.store.rows[0]?.UPDATED_AT) });
+    }
+    if (req.method === 'GET' && req.url === '/api/fleet/maintenance-schedule') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const sessionUser = await withConnection((c) => currentSessionUser(c, token));
+      if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
+      return withConnection(async (connection) => {
+        const result = await connection.execute(`SELECT vehicle.id,vehicle.plate_no,vehicle.brand,vehicle.model,vehicle.description,
+            vehicle.driver,vehicle.department,vehicle.vehicle_type,schedule.schedule_uid,schedule.schedule_type,
+            TO_CHAR(schedule.start_date,'YYYY-MM-DD') start_date,TO_CHAR(schedule.end_date,'YYYY-MM-DD') end_date,
+            schedule.schedule_status,schedule.notes
+          FROM vms_vehicle_mast vehicle
+          LEFT JOIN bes_fleet_schedules schedule ON schedule.vehicle_master_id=vehicle.id
+            AND schedule.schedule_type IN ('Preventive Maintenance','Registration Renewal')
+          WHERE NVL(vehicle.deleted,0)=0 AND vehicle.status='ACTIVE' AND vehicle.vehicle_type IS NOT NULL
+          ORDER BY vehicle.vehicle_type,vehicle.brand,vehicle.model,vehicle.plate_no,schedule.start_date`, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        const vehicles = new Map();
+        for (const row of result.rows) {
+          const id = String(row.ID);
+          if (!vehicles.has(id)) vehicles.set(id, {
+            id, plateNumber: row.PLATE_NO ?? '', brand: row.BRAND ?? '', model: row.MODEL ?? row.DESCRIPTION ?? '',
+            type: row.VEHICLE_TYPE, custodian: row.DRIVER ?? '', assignedDepartment: row.DEPARTMENT ?? '',
+            assignedOffice: row.DEPARTMENT ?? '', schedules: [],
+          });
+          if (row.SCHEDULE_UID) vehicles.get(id).schedules.push({
+            id: row.SCHEDULE_UID, type: row.SCHEDULE_TYPE, startDate: row.START_DATE, endDate: row.END_DATE,
+            status: row.SCHEDULE_STATUS, notes: row.NOTES, checklist: [], documents: [],
+          });
+        }
+        return json(res, 200, { vehicles: [...vehicles.values()] });
+      });
+    }
+    if (req.method === 'GET' && req.url === '/api/fleet/master-vehicles') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const sessionUser = await withConnection((c) => currentSessionUser(c, token));
+      if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
+      return withConnection(async (connection) => {
+        const result = await connection.execute(`SELECT id,vehicle_no,plate_no,model,year_model,brand,description,driver,department,
+          acquired_date,acquired_cost,engine_no,chasis_no,remarks,fuel_type,status,vehicle_type,fuel_eff
+          FROM vms_vehicle_mast WHERE NVL(deleted,0)=0 AND status='ACTIVE' AND vehicle_type IS NOT NULL
+          ORDER BY vehicle_type,brand,model,plate_no`, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        return json(res, 200, { vehicles: result.rows.map((row) => ({
+          id: String(row.ID), vehicleNo: row.VEHICLE_NO, plateNo: row.PLATE_NO, model: row.MODEL, yearModel: row.YEAR_MODEL,
+          brand: row.BRAND, description: row.DESCRIPTION, driver: row.DRIVER, department: row.DEPARTMENT,
+          acquiredDate: row.ACQUIRED_DATE, acquiredCost: row.ACQUIRED_COST, engineNo: row.ENGINE_NO, chassisNo: row.CHASIS_NO,
+          remarks: row.REMARKS, fuelType: row.FUEL_TYPE, status: row.STATUS, fuelEfficiency: row.FUEL_EFF,
+          vehicleType: row.VEHICLE_TYPE,
+        })) });
+      });
+    }
+    const fleetMasterActivityMatch = req.method === 'GET' && req.url?.match(/^\/api\/fleet\/master-vehicles\/(\d+)\/activity$/);
+    if (fleetMasterActivityMatch) {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const sessionUser = await withConnection((c) => currentSessionUser(c, token));
+      if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
+      const vehicleMasterId = Number(fleetMasterActivityMatch[1]);
+      return withConnection(async (connection) => {
+        const schedules = await connection.execute(`SELECT schedule_uid,schedule_type,TO_CHAR(start_date,'YYYY-MM-DD') start_date,TO_CHAR(end_date,'YYYY-MM-DD') end_date,TO_CHAR(actual_maintenance_date,'YYYY-MM-DD') actual_maintenance_date,schedule_status,notes,created_at,updated_at
+          FROM bes_fleet_schedules WHERE vehicle_master_id=:vehicleMasterId ORDER BY start_date DESC,created_at DESC`, { vehicleMasterId }, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        const inspections = await connection.execute(`SELECT inspection_uid,TO_CHAR(inspection_date,'YYYY-MM-DD') inspection_date,inspected_by,inspection_status,findings,action_taken,recommendation,created_at,updated_at
+          FROM bes_fleet_inspections WHERE vehicle_master_id=:vehicleMasterId ORDER BY inspection_date DESC,created_at DESC`, { vehicleMasterId }, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        return json(res, 200, {
+          schedules: schedules.rows.map((row) => ({ id: row.SCHEDULE_UID, type: row.SCHEDULE_TYPE, startDate: row.START_DATE, endDate: row.END_DATE, actualDate: row.ACTUAL_MAINTENANCE_DATE, status: row.SCHEDULE_STATUS, notes: row.NOTES, createdAt: row.CREATED_AT, updatedAt: row.UPDATED_AT })),
+          inspections: inspections.rows.map((row) => ({ id: row.INSPECTION_UID, date: row.INSPECTION_DATE, inspectedBy: row.INSPECTED_BY, status: row.INSPECTION_STATUS, findings: row.FINDINGS, actionTaken: row.ACTION_TAKEN, recommendation: row.RECOMMENDATION, createdAt: row.CREATED_AT, updatedAt: row.UPDATED_AT })),
+        });
+      });
+    }
+    const renewalReceiptMatch = req.url?.match(/^\/api\/fleet\/renewal-receipts\/([^/]+)$/);
+    if (renewalReceiptMatch && req.method === 'GET') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const scheduleUid = decodeURIComponent(renewalReceiptMatch[1]);
+      return withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' });
+        const result = await c.execute(`SELECT or_number,TO_CHAR(receipt_date,'YYYY-MM-DD') receipt_date,amount_paid,issuing_office,file_name,mime_type,file_size
+          FROM bes_fleet_renewal_receipts WHERE schedule_uid=:scheduleUid`, { scheduleUid }, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        const row = result.rows[0];
+        return json(res, 200, { receipt: row ? { orNumber: row.OR_NUMBER, receiptDate: row.RECEIPT_DATE, amountPaid: row.AMOUNT_PAID, issuingOffice: row.ISSUING_OFFICE, attachment: row.FILE_NAME ? { name: row.FILE_NAME, type: row.MIME_TYPE, size: row.FILE_SIZE } : null } : null });
+      });
+    }
+    if (renewalReceiptMatch && req.method === 'PUT') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const scheduleUid = decodeURIComponent(renewalReceiptMatch[1]);
+      const body = await readBody(req, 8_000_000);
+      const allowedTypes = new Set(['application/pdf','image/png','image/jpeg','image/bmp']);
+      let fileBuffer = null; let fileName = null; let mimeType = null; let fileSize = null;
+      if (body.attachment?.dataUrl) {
+        const match = String(body.attachment.dataUrl).match(/^data:([^;]+);base64,(.+)$/s);
+        if (!match || !allowedTypes.has(match[1])) return json(res, 400, { error: 'Attach a PDF, PNG, JPG/JPEG, or BMP file.' });
+        fileBuffer = Buffer.from(match[2], 'base64'); fileName = safeFileName(String(body.attachment.name || 'attachment')); mimeType = match[1]; fileSize = fileBuffer.length;
+      }
+      return withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' });
+        const schedule = await c.execute(`SELECT 1 FROM bes_fleet_schedules WHERE schedule_uid=:scheduleUid AND schedule_type='Registration Renewal'`, { scheduleUid });
+        if (!schedule.rows.length) return json(res, 404, { error: 'Registration renewal schedule was not found.' });
+        await c.execute(`MERGE INTO bes_fleet_renewal_receipts target USING (SELECT :scheduleUid schedule_uid FROM dual) source ON (target.schedule_uid=source.schedule_uid)
+          WHEN MATCHED THEN UPDATE SET or_number=:orNumber,receipt_date=TO_DATE(:receiptDate,'YYYY-MM-DD'),amount_paid=:amountPaid,issuing_office=:issuingOffice,
+            file_name=COALESCE(:fileName,target.file_name),mime_type=COALESCE(:mimeType,target.mime_type),file_size=COALESCE(:fileSize,target.file_size),file_blob=COALESCE(:fileBlob,target.file_blob),updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+          WHEN NOT MATCHED THEN INSERT (schedule_uid,or_number,receipt_date,amount_paid,issuing_office,file_name,mime_type,file_size,file_blob,updated_by_user_id)
+            VALUES (:scheduleUid,:orNumber,TO_DATE(:receiptDate,'YYYY-MM-DD'),:amountPaid,:issuingOffice,:fileName,:mimeType,:fileSize,:fileBlob,:userId)`, {
+          scheduleUid, orNumber: nullableNormalize(body.orNumber), receiptDate: nullableNormalize(body.receiptDate), amountPaid: body.amountPaid === '' || body.amountPaid == null ? null : Number(body.amountPaid),
+          issuingOffice: nullableNormalize(body.issuingOffice), fileName, mimeType, fileSize, fileBlob: fileBuffer, userId: user.USER_ID,
+        });
+        await c.commit(); return json(res, 200, { ok: true });
+      });
+    }
+    if (renewalReceiptMatch && req.method === 'DELETE') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const scheduleUid = decodeURIComponent(renewalReceiptMatch[1]);
+      return withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); await c.execute(`DELETE FROM bes_fleet_renewal_receipts WHERE schedule_uid=:scheduleUid`, { scheduleUid }); await c.commit(); return json(res, 200, { ok: true }); });
+    }
+    const renewalAttachmentMatch = req.method === 'GET' && req.url?.match(/^\/api\/fleet\/renewal-receipts\/([^/]+)\/attachment$/);
+    if (renewalAttachmentMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const scheduleUid = decodeURIComponent(renewalAttachmentMatch[1]);
+      const result = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; return c.execute(`SELECT file_name,mime_type,file_blob FROM bes_fleet_renewal_receipts WHERE schedule_uid=:scheduleUid AND file_blob IS NOT NULL`, { scheduleUid }, { outFormat: oracledb.OUT_FORMAT_OBJECT, fetchInfo: { FILE_BLOB: { type: oracledb.BUFFER } } }); });
+      if (!result) return json(res, 401, { error: 'Session expired.' }); const row = result.rows[0]; if (!row) return json(res, 404, { error: 'Attachment not found.' });
+      res.writeHead(200, { 'content-type': row.MIME_TYPE, 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.FILE_NAME)}`, 'content-length': String(row.FILE_BLOB.length) }); res.end(row.FILE_BLOB); return;
+    }
+    if (req.method === 'POST' && req.url === '/api/fleet/master-schedules') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const sessionUser = await withConnection((c) => currentSessionUser(c, token));
+      if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
+      const body = await readBody(req);
+      const vehicleMasterId = Number(body.vehicleMasterId);
+      const scheduleType = normalize(body.scheduleType);
+      const startDate = normalize(body.startDate);
+      const endDate = normalize(body.endDate);
+      if (!Number.isFinite(vehicleMasterId) || !['Preventive Maintenance', 'Registration Renewal'].includes(scheduleType) || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return json(res, 400, { error: 'Vehicle, schedule type, and valid dates are required.' });
+      return withConnection(async (connection) => {
+        const exists = await connection.execute(`SELECT 1 FROM vms_vehicle_mast WHERE id=:vehicleMasterId AND NVL(deleted,0)=0`, { vehicleMasterId });
+        if (!exists.rows[0]) return json(res, 404, { error: 'Vehicle master record was not found.' });
+        const scheduleUid = `SCH-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await connection.execute(`INSERT INTO bes_fleet_schedules (schedule_uid,vehicle_master_id,schedule_type,start_date,end_date,schedule_status,notes,created_by_user_id)
+          VALUES (:scheduleUid,:vehicleMasterId,:scheduleType,TO_DATE(:startDate,'YYYY-MM-DD'),TO_DATE(:endDate,'YYYY-MM-DD'),'Scheduled',:notes,:userId)`, {
+          scheduleUid, vehicleMasterId, scheduleType, startDate, endDate, notes: normalize(body.notes) || null, userId: sessionUser.USER_ID,
+        });
+        await connection.commit();
+        return json(res, 201, { schedule: { id: scheduleUid, vehicleMasterId, scheduleType, startDate, endDate, status: 'Scheduled' } });
+      });
+    }
+    const fleetScheduleStatusMatch = req.method === 'PATCH' && req.url?.match(/^\/api\/fleet\/master-schedules\/([^/]+)\/status$/);
+    if (fleetScheduleStatusMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const scheduleUid = decodeURIComponent(fleetScheduleStatusMatch[1]); const body = await readBody(req); const status = normalize(body.status);
+      if (!['Scheduled','In Progress','Registered'].includes(status)) return json(res, 400, { error: 'Invalid renewal status.' });
+      return withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const result = await c.execute(`UPDATE bes_fleet_schedules SET schedule_status=:status,updated_at=SYSTIMESTAMP WHERE schedule_uid=:scheduleUid AND schedule_type='Registration Renewal'`, { status, scheduleUid }); if (!result.rowsAffected) return json(res, 404, { error: 'Registration renewal schedule was not found.' }); await c.commit(); return json(res, 200, { ok: true }); });
+    }
+    const fleetMaintenanceUpdateMatch = req.method === 'PATCH' && req.url?.match(/^\/api\/fleet\/master-schedules\/([^/]+)\/maintenance$/);
+    if (fleetMaintenanceUpdateMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const scheduleUid = decodeURIComponent(fleetMaintenanceUpdateMatch[1]); const body = await readBody(req); const status = normalize(body.status); const actualDate = nullableNormalize(body.actualDate);
+      if (!['Scheduled','Completed'].includes(status)) return json(res, 400, { error: 'Invalid preventive maintenance status.' });
+      if (actualDate && !/^\d{4}-\d{2}-\d{2}$/.test(actualDate)) return json(res, 400, { error: 'Invalid actual maintenance date.' });
+      return withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const result = await c.execute(`UPDATE bes_fleet_schedules SET schedule_status=:status,actual_maintenance_date=TO_DATE(:actualDate,'YYYY-MM-DD'),updated_at=SYSTIMESTAMP WHERE schedule_uid=:scheduleUid AND schedule_type='Preventive Maintenance'`, { status, actualDate, scheduleUid }); if (!result.rowsAffected) return json(res, 404, { error: 'Preventive maintenance schedule was not found.' }); await c.commit(); return json(res, 200, { ok: true }); });
+    }
+    const fleetInspectionRecordMatch = req.url?.match(/^\/api\/fleet\/master-inspections\/([^/]+)$/);
+    if (fleetInspectionRecordMatch && req.method === 'GET') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const inspectionUid = decodeURIComponent(fleetInspectionRecordMatch[1]);
+      return withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' });
+        const header = await c.execute(`SELECT inspection_uid,vehicle_master_id,TO_CHAR(inspection_date,'YYYY-MM-DD') inspection_date,inspected_by,inspection_status,findings,action_taken,recommendation FROM bes_fleet_inspections WHERE inspection_uid=:inspectionUid`, { inspectionUid }, { outFormat: oracledb.OUT_FORMAT_OBJECT });
+        if (!header.rows[0]) return json(res, 404, { error: 'Inspection was not found.' });
+        const items = await c.execute(`SELECT item_uid,item_sequence,activity,item_status,findings,action_taken,recommendation,annotations_json,snapshot_name,snapshot_mime_type,snapshot_blob FROM bes_fleet_inspection_items WHERE inspection_uid=:inspectionUid ORDER BY item_sequence`, { inspectionUid }, { outFormat: oracledb.OUT_FORMAT_OBJECT, fetchInfo: { ANNOTATIONS_JSON: { type: oracledb.STRING }, SNAPSHOT_BLOB: { type: oracledb.BUFFER } } });
+        const photos = await c.execute(`SELECT item_uid,file_name,mime_type,file_blob FROM bes_fleet_inspection_photos WHERE inspection_uid=:inspectionUid ORDER BY photo_id`, { inspectionUid }, { outFormat: oracledb.OUT_FORMAT_OBJECT, fetchInfo: { FILE_BLOB: { type: oracledb.BUFFER } } });
+        const row = header.rows[0];
+        const detailItems = items.rows.map((item) => ({ id: item.ITEM_UID, activity: item.ACTIVITY, status: item.ITEM_STATUS, findings: item.FINDINGS ?? '', actionTaken: item.ACTION_TAKEN ?? '', recommendation: item.RECOMMENDATION ?? '', notes: '', annotations: (() => { try { return JSON.parse(item.ANNOTATIONS_JSON || '[]'); } catch { return []; } })(), snapshot: item.SNAPSHOT_BLOB ? { name: item.SNAPSHOT_NAME, type: item.SNAPSHOT_MIME_TYPE, dataUrl: `data:${item.SNAPSHOT_MIME_TYPE};base64,${item.SNAPSHOT_BLOB.toString('base64')}` } : undefined, photos: photos.rows.filter((photo) => photo.ITEM_UID === item.ITEM_UID).map((photo) => ({ name: photo.FILE_NAME, type: photo.MIME_TYPE, dataUrl: `data:${photo.MIME_TYPE};base64,${photo.FILE_BLOB.toString('base64')}` })) }));
+        if (!detailItems.length) detailItems.push({ id: `LEGACY-${row.INSPECTION_UID}`, activity: 'General vehicle condition', status: row.INSPECTION_STATUS, findings: row.FINDINGS ?? '', actionTaken: row.ACTION_TAKEN ?? '', recommendation: row.RECOMMENDATION ?? '', notes: '', annotations: [], snapshot: undefined, photos: [] });
+        return json(res, 200, { inspection: { id: row.INSPECTION_UID, vehicleMasterId: String(row.VEHICLE_MASTER_ID), inspectionDate: row.INSPECTION_DATE, inspectedBy: row.INSPECTED_BY, inspectionStatus: row.INSPECTION_STATUS, items: detailItems } });
+      });
+    }
+    if (fleetInspectionRecordMatch && req.method === 'PUT') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const inspectionUid = decodeURIComponent(fleetInspectionRecordMatch[1]); const body = await readBody(req, 40_000_000);
+      const inspectionDate = normalize(body.inspectionDate); const inspectedBy = normalize(body.inspectedBy); const inspectionStatus = normalize(body.inspectionStatus); const items = Array.isArray(body.items) ? body.items : [];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(inspectionDate) || !inspectedBy || !inspectionStatus || !items.length) return json(res, 400, { error: 'Inspection date, inspector, status, and at least one detail are required.' });
+      return withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const exists = await c.execute(`SELECT 1 FROM bes_fleet_inspections WHERE inspection_uid=:inspectionUid`, { inspectionUid }); if (!exists.rows.length) return json(res, 404, { error: 'Inspection was not found.' });
+        const decodeImage = (item) => { if (!item?.dataUrl) return null; const match = String(item.dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s); if (!match) throw Object.assign(new Error('Inspection images must be valid images.'), { statusCode: 400 }); const buffer = Buffer.from(match[2], 'base64'); if (buffer.length > 12_000_000) throw Object.assign(new Error('Each inspection image must be 12 MB or smaller.'), { statusCode: 400 }); return { name: safeFileName(normalize(item.name) || 'inspection-image'), mimeType: match[1], buffer }; };
+        await c.execute(`UPDATE bes_fleet_inspections SET inspection_date=TO_DATE(:inspectionDate,'YYYY-MM-DD'),inspected_by=:inspectedBy,inspection_status=:inspectionStatus,updated_at=SYSTIMESTAMP WHERE inspection_uid=:inspectionUid`, { inspectionDate, inspectedBy, inspectionStatus, inspectionUid });
+        await c.execute(`DELETE FROM bes_fleet_inspection_photos WHERE inspection_uid=:inspectionUid`, { inspectionUid }); await c.execute(`DELETE FROM bes_fleet_inspection_items WHERE inspection_uid=:inspectionUid`, { inspectionUid });
+        for (let index = 0; index < items.length; index += 1) { const item = items[index]; const itemUid = normalize(item.id) || `INSP-ITEM-${Date.now()}-${index}`; const snapshot = decodeImage(item.snapshot); const itemPhotos = Array.isArray(item.photos) ? item.photos.map(decodeImage).filter(Boolean) : []; await c.execute(`INSERT INTO bes_fleet_inspection_items (item_uid,inspection_uid,item_sequence,activity,item_status,findings,action_taken,recommendation,annotations_json,snapshot_name,snapshot_mime_type,snapshot_blob) VALUES (:itemUid,:inspectionUid,:itemSequence,:activity,:itemStatus,:findings,:actionTaken,:recommendation,:annotationsJson,:snapshotName,:snapshotMimeType,:snapshotBlob)`, { itemUid, inspectionUid, itemSequence: index + 1, activity: normalize(item.activity), itemStatus: normalize(item.status), findings: normalize(item.findings) || null, actionTaken: normalize(item.actionTaken) || null, recommendation: normalize(item.recommendation) || null, annotationsJson: { val: JSON.stringify(Array.isArray(item.annotations) ? item.annotations : []), type: oracledb.CLOB }, snapshotName: snapshot?.name ?? null, snapshotMimeType: snapshot?.mimeType ?? null, snapshotBlob: snapshot?.buffer ?? null }); for (const photo of itemPhotos) await c.execute(`INSERT INTO bes_fleet_inspection_photos (inspection_uid,item_uid,file_name,mime_type,file_size,file_blob) VALUES (:inspectionUid,:itemUid,:fileName,:mimeType,:fileSize,:fileBlob)`, { inspectionUid, itemUid, fileName: photo.name, mimeType: photo.mimeType, fileSize: photo.buffer.length, fileBlob: photo.buffer }); }
+        await c.commit(); return json(res, 200, { ok: true });
+      });
+    }
+    if (req.method === 'POST' && req.url === '/api/fleet/master-inspections') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const sessionUser = await withConnection((c) => currentSessionUser(c, token));
+      if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
+      const body = await readBody(req, 40_000_000);
+      const vehicleMasterId = Number(body.vehicleMasterId);
+      const inspectionDate = normalize(body.inspectionDate);
+      const inspectedBy = normalize(body.inspectedBy);
+      const inspectionStatus = normalize(body.inspectionStatus);
+      const items = Array.isArray(body.items) ? body.items : [];
+      if (!Number.isFinite(vehicleMasterId) || !/^\d{4}-\d{2}-\d{2}$/.test(inspectionDate) || !inspectedBy || !inspectionStatus || !items.length) return json(res, 400, { error: 'Vehicle, inspection date, inspector, status, and at least one inspection detail are required.' });
+      return withConnection(async (connection) => {
+        const exists = await connection.execute(`SELECT 1 FROM vms_vehicle_mast WHERE id=:vehicleMasterId AND NVL(deleted,0)=0`, { vehicleMasterId });
+        if (!exists.rows[0]) return json(res, 404, { error: 'Vehicle master record was not found.' });
+        const inspectionUid = `INSP-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const decodeImage = (item) => {
+          if (!item?.dataUrl) return null;
+          const match = String(item.dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+          if (!match) throw Object.assign(new Error('Inspection images must be valid image files.'), { statusCode: 400 });
+          const buffer = Buffer.from(match[2], 'base64');
+          if (buffer.length > 12_000_000) throw Object.assign(new Error('Each inspection image must be 12 MB or smaller.'), { statusCode: 400 });
+          return { name: safeFileName(normalize(item.name) || 'inspection-image'), mimeType: match[1], buffer };
+        };
+        await connection.execute(`INSERT INTO bes_fleet_inspections (inspection_uid,vehicle_master_id,inspection_date,inspected_by,inspection_status,created_by_user_id) VALUES (:inspectionUid,:vehicleMasterId,TO_DATE(:inspectionDate,'YYYY-MM-DD'),:inspectedBy,:inspectionStatus,:userId)`, { inspectionUid, vehicleMasterId, inspectionDate, inspectedBy, inspectionStatus, userId: sessionUser.USER_ID });
+        for (let index = 0; index < items.length; index += 1) {
+          const item = items[index]; const activity = normalize(item.activity); const itemStatus = normalize(item.status);
+          if (!activity || !itemStatus) throw Object.assign(new Error(`Inspection detail ${index + 1} requires an activity and status.`), { statusCode: 400 });
+          const itemUid = normalize(item.id) || `INSP-ITEM-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
+          const snapshot = decodeImage(item.snapshot); const photos = Array.isArray(item.photos) ? item.photos.map(decodeImage).filter(Boolean) : [];
+          await connection.execute(`INSERT INTO bes_fleet_inspection_items (item_uid,inspection_uid,item_sequence,activity,item_status,findings,action_taken,recommendation,annotations_json,snapshot_name,snapshot_mime_type,snapshot_blob) VALUES (:itemUid,:inspectionUid,:itemSequence,:activity,:itemStatus,:findings,:actionTaken,:recommendation,:annotationsJson,:snapshotName,:snapshotMimeType,:snapshotBlob)`, { itemUid, inspectionUid, itemSequence: index + 1, activity, itemStatus, findings: normalize(item.findings) || null, actionTaken: normalize(item.actionTaken) || null, recommendation: normalize(item.recommendation) || null, annotationsJson: { val: JSON.stringify(Array.isArray(item.annotations) ? item.annotations : []), type: oracledb.CLOB }, snapshotName: snapshot?.name ?? null, snapshotMimeType: snapshot?.mimeType ?? null, snapshotBlob: snapshot?.buffer ?? null });
+          for (const photo of photos) await connection.execute(`INSERT INTO bes_fleet_inspection_photos (inspection_uid,item_uid,file_name,mime_type,file_size,file_blob) VALUES (:inspectionUid,:itemUid,:fileName,:mimeType,:fileSize,:fileBlob)`, { inspectionUid, itemUid, fileName: photo.name, mimeType: photo.mimeType, fileSize: photo.buffer.length, fileBlob: photo.buffer });
+        }
+        await connection.commit();
+        return json(res, 201, { inspection: { id: inspectionUid, vehicleMasterId, inspectionDate, inspectedBy, inspectionStatus } });
+      });
     }
     if (req.method === 'PUT' && req.url === '/api/fleet/models') {
       const token = bearerToken(req);
@@ -3108,6 +3493,17 @@ async function handle(req, res) {
           WHEN NOT MATCHED THEN INSERT (data_key,payload,updated_by_user_id) VALUES ('MODEL_LIBRARY',:payload,:userId)`, {
           payload: { val: payload, type: oracledb.CLOB }, userId: user.USER_ID,
         });
+        try {
+          const existingRows = await c.execute(`SELECT model_uid FROM bes_fleet_model_library`);
+          const incomingIds = new Set(body.models.map((item) => normalize(item.id)).filter(Boolean));
+          for (const row of existingRows.rows) if (!incomingIds.has(row.MODEL_UID)) await c.execute(`DELETE FROM bes_fleet_model_library WHERE model_uid=:modelUid`, { modelUid: row.MODEL_UID });
+          for (const item of body.models) await c.execute(`MERGE INTO bes_fleet_model_library target USING (SELECT :modelUid model_uid FROM dual) source
+            ON (target.model_uid=source.model_uid)
+            WHEN MATCHED THEN UPDATE SET vehicle_type=:vehicleType,brand=:brand,model=:model,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP
+            WHEN NOT MATCHED THEN INSERT (model_uid,vehicle_type,brand,model,updated_by_user_id) VALUES (:modelUid,:vehicleType,:brand,:model,:userId)`, {
+            modelUid: normalize(item.id), vehicleType: normalize(item.type), brand: normalize(item.brand), model: normalize(item.model), userId: user.USER_ID,
+          });
+        } catch (error) { if (error.errorNum !== 942) throw error; }
         await c.commit();
       });
       return json(res, 200, { ok: true });

@@ -12,11 +12,11 @@ import { VehicleModelViewer, type ModelAnnotation, type VehicleModelViewerHandle
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { deleteFleetVehicleModel, fetchFleetVehicleModel, fetchFleetVehicleModels, fetchFleetVehicles, fetchOrgStructure, saveFleetVehicleModels, saveFleetVehicles, uploadFleetVehicleModel, type OrgDepartment } from '@/lib/api';
+import { createFleetMasterInspection, createFleetMasterSchedule, deleteFleetRenewalReceipt, deleteFleetVehicleModel, downloadFleetRenewalReceiptAttachment, fetchFleetMaintenanceSchedule, fetchFleetMasterInspection, fetchFleetMasterVehicleActivity, fetchFleetMasterVehicles, fetchFleetRenewalReceipt, fetchFleetVehicleModel, fetchFleetVehicleModels, fetchFleetVehicles, fetchOrgStructure, saveFleetRenewalReceipt, saveFleetVehicleModels, saveFleetVehicles, updateFleetMasterInspection, updateFleetPreventiveMaintenance, updateFleetRenewalScheduleStatus, uploadFleetVehicleModel, type FleetRenewalReceipt, type OrgDepartment } from '@/lib/api';
 
 type FleetFile = { name: string; type: string; dataUrl: string };
 type FleetModelFile = { name: string; type: string; size?: number; dataUrl?: string };
-type FleetVehicleModel = { id: string; type: string; brand: string; model: string; model3d: FleetModelFile };
+type FleetVehicleModel = { id: string; type: string; brand: string; model: string; model3d?: FleetModelFile };
 type CheckItem = { id: string; label: string; checked: boolean; notes: string; photos: FleetFile[] };
 export type FleetChecklistTemplateItem = { id: string; label: string };
 export type FleetInspectionEntry = { id: string; activity: string; status: string; findings: string; actionTaken: string; recommendation: string; notes: string; annotations?: ModelAnnotation[]; snapshot?: FleetFile; photos?: FleetFile[] };
@@ -25,7 +25,13 @@ export type FleetScheduleRecurrence = { frequency: 'Annual'; month: number; star
 export type FleetSchedule = { id: string; type: 'Inspection' | 'Maintenance' | 'Preventive Maintenance' | 'Registration Renewal'; startDate: string; endDate: string; status: 'Scheduled' | 'In Progress' | 'Completed' | 'Overdue'; recurrence?: FleetScheduleRecurrence; checklist: CheckItem[]; documents: FleetFile[] };
 export type FleetVehicle = { id: string; modelLibraryId?: string; type: string; brand: string; model: string; yearAcquired: string; plateNumber: string; propertyNumber: string; color: string; fuel: string; odometer: string; custodian: string; assignedDepartment?: string; assignedOffice: string; acquisitionCost: string; registrationExpiry: string; notes: string; image?: FleetFile; model3d?: FleetModelFile; preventiveChecklist?: FleetChecklistTemplateItem[]; inspectionStatuses?: string[]; inspections?: FleetInspection[]; schedules: FleetSchedule[] };
 type Schedule = FleetSchedule;
-type SummarySortKey = 'vehicle' | 'plate' | 'department' | 'type' | 'preventive' | 'registration';
+type SummarySortKey = 'vehicle' | 'plate' | 'driver' | 'department' | 'type' | 'preventive' | 'registration';
+type MasterSortKey = 'vehicle' | 'brand' | 'description' | 'year' | 'acquired' | 'type' | 'driver' | 'department' | 'fuel' | 'status';
+type FleetMasterVehicle = { id: string; vehicleNo?: string; plateNo?: string; model?: string; yearModel?: number; brand?: string; description?: string; driver?: string; department?: string; acquiredDate?: string; acquiredCost?: string; engineNo?: string; chassisNo?: string; remarks?: string; fuelType?: string; status?: string; fuelEfficiency?: number; vehicleType: string };
+type FleetMasterActivity = {
+  schedules: { id: string; type: string; startDate: string; endDate: string; actualDate?: string; status: string; notes?: string }[];
+  inspections: { id: string; date: string; inspectedBy: string; status: string; findings?: string; actionTaken?: string; recommendation?: string }[];
+};
 
 export const FLEET_STORAGE_KEY = 'bes:vehicle-fleet:v1';
 const today = new Date().toISOString().slice(0, 10);
@@ -72,11 +78,14 @@ function scheduleSummaryLabel(schedule?: FleetSchedule) {
   return schedule.recurrence ? `${dates} · Annual (${monthNames[schedule.recurrence.month - 1]}, Week ${schedule.recurrence.startWeek}${schedule.recurrence.endWeek !== schedule.recurrence.startWeek ? `–${schedule.recurrence.endWeek}` : ''})` : dates;
 }
 function fleetSummaryRow(vehicle: FleetVehicle) {
-  return { vehicle: `${vehicle.brand} ${vehicle.model}`, plate: vehicle.plateNumber, department: vehicle.assignedDepartment || 'Unassigned', type: vehicle.type || 'Other', preventive: scheduleSummaryLabel(nextVehicleSchedule(vehicle, 'Preventive Maintenance')), registration: scheduleSummaryLabel(nextVehicleSchedule(vehicle, 'Registration Renewal')) };
+  const scheduleForSummary = (type: FleetSchedule['type']) => nextVehicleSchedule(vehicle, type)
+    ?? [...vehicle.schedules].filter((schedule) => schedule.type === type).sort((left, right) => right.startDate.localeCompare(left.startDate))[0];
+  return { vehicle: `${vehicle.brand} ${vehicle.model}`, plate: vehicle.plateNumber, driver: vehicle.custodian || 'Unassigned', department: vehicle.assignedDepartment || 'Unassigned', type: vehicle.type || 'Other', preventive: scheduleSummaryLabel(scheduleForSummary('Preventive Maintenance')), registration: scheduleSummaryLabel(scheduleForSummary('Registration Renewal')) };
 }
 function escapePrintText(value: string) {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[character]!);
 }
+function displayDate(value?: string) { return value ? String(value).slice(0, 10) : '—'; }
 async function imageUrlToDataUrl(url: string) {
   const response = await fetch(url); const blob = await response.blob();
   return await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
@@ -99,11 +108,43 @@ export function VehicleFleetManagement() {
   const [orgDepartments, setOrgDepartments] = useState<OrgDepartment[]>([]);
   const [oracleReady, setOracleReady] = useState(false);
   const [vehicles, setVehicles] = useState<FleetVehicle[]>(loadFleetVehicles);
+  const [masterVehicles, setMasterVehicles] = useState<FleetMasterVehicle[]>([]);
+  const [masterLoading, setMasterLoading] = useState(true);
+  const [masterError, setMasterError] = useState('');
+  const [masterSearch, setMasterSearch] = useState('');
+  const [masterType, setMasterType] = useState('ALL');
+  const [masterSort, setMasterSort] = useState<{ key: MasterSortKey; direction: 'asc' | 'desc' }>({ key: 'vehicle', direction: 'asc' });
+  const [masterPage, setMasterPage] = useState(1);
+  const [masterPageSize, setMasterPageSize] = useState(25);
+  const [masterContext, setMasterContext] = useState<{ vehicle: FleetMasterVehicle; x: number; y: number } | null>(null);
+  const [masterDetailVehicle, setMasterDetailVehicle] = useState<FleetMasterVehicle | null>(null);
+  const [masterDetailTab, setMasterDetailTab] = useState<'details' | 'schedules' | 'renewals' | 'history'>('details');
+  const [masterActivity, setMasterActivity] = useState<FleetMasterActivity>({ schedules: [], inspections: [] });
+  const [masterActivityLoading, setMasterActivityLoading] = useState(false);
+  const [masterActivityError, setMasterActivityError] = useState('');
+  const [masterActionVehicle, setMasterActionVehicle] = useState<FleetMasterVehicle | null>(null);
+  const [masterScheduleOpen, setMasterScheduleOpen] = useState(false);
+  const [masterScheduleForm, setMasterScheduleForm] = useState<{ scheduleType: 'Preventive Maintenance' | 'Registration Renewal'; startDate: string; endDate: string; notes: string }>({ scheduleType: 'Preventive Maintenance', startDate: today, endDate: today, notes: '' });
+  const [masterInspectionOpen, setMasterInspectionOpen] = useState(false);
+  const [editingMasterInspectionId, setEditingMasterInspectionId] = useState<string | null>(null);
+  const [masterInspectionForm, setMasterInspectionForm] = useState({ inspectionDate: today, inspectedBy: '', inspectionStatus: 'No Problem', findings: '', actionTaken: '', recommendation: '' });
+  const [masterInspectionItems, setMasterInspectionItems] = useState<FleetInspectionEntry[]>([newInspectionEntry()]);
+  const [activeMasterInspectionItemId, setActiveMasterInspectionItemId] = useState('');
+  const [masterInspectionModelUrl, setMasterInspectionModelUrl] = useState('');
+  const [savingMasterAction, setSavingMasterAction] = useState(false);
+  const [renewalReceiptSchedule, setRenewalReceiptSchedule] = useState<FleetMasterActivity['schedules'][number] | null>(null);
+  const [renewalReceiptForm, setRenewalReceiptForm] = useState<FleetRenewalReceipt>({});
+  const [renewalReceiptFile, setRenewalReceiptFile] = useState<File>();
+  const [renewalReceiptLoading, setRenewalReceiptLoading] = useState(false);
+  const [renewalReceiptExists, setRenewalReceiptExists] = useState(false);
+  const [renewalReceiptDeleteOpen, setRenewalReceiptDeleteOpen] = useState(false);
   const [vehicleModels, setVehicleModels] = useState<FleetVehicleModel[]>([]);
   const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
   const [modelLibraryForm, setModelLibraryForm] = useState({ type: 'Car', brand: '', model: '' });
+  const [modelLibraryTypeFilter, setModelLibraryTypeFilter] = useState('ALL');
   const [modelLibraryFile, setModelLibraryFile] = useState<File>();
   const [editingModelLibraryId, setEditingModelLibraryId] = useState<string | null>(null);
+  const [modelLibraryDeleteOpen, setModelLibraryDeleteOpen] = useState(false);
   const [editingModelLibraryForm, setEditingModelLibraryForm] = useState({ type: 'Car', brand: '', model: '' });
   const [editingModelLibraryFile, setEditingModelLibraryFile] = useState<File>();
   const [savingModelLibrary, setSavingModelLibrary] = useState(false);
@@ -118,6 +159,8 @@ export function VehicleFleetManagement() {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryScheduleVehicles, setSummaryScheduleVehicles] = useState<FleetVehicle[]>([]);
+  const [summaryScheduleLoading, setSummaryScheduleLoading] = useState(true);
   const [summarySort, setSummarySort] = useState<{ key: SummarySortKey; direction: 'asc' | 'desc' }>({ key: 'vehicle', direction: 'asc' });
   const [registryFilterMode, setRegistryFilterMode] = useState<'all' | 'department' | 'type'>('all');
   const [registryFilterValue, setRegistryFilterValue] = useState('');
@@ -165,20 +208,35 @@ export function VehicleFleetManagement() {
   const registryDepartments = useMemo(() => [...new Set(vehicles.map((vehicle) => vehicle.assignedDepartment || 'Unassigned'))].sort(), [vehicles]);
   const registryVehicleTypes = useMemo(() => [...new Set(vehicles.map((vehicle) => vehicle.type || 'Other'))].sort(), [vehicles]);
   const modelLibraryBrands = useMemo(() => [...new Set(vehicleModels.map((item) => item.brand))].sort(), [vehicleModels]);
+  const vehicleModelTypes = useMemo(() => [...new Set(vehicleModels.map((item) => item.type).filter(Boolean))].sort(), [vehicleModels]);
+  const filteredVehicleModels = useMemo(() => vehicleModels
+    .filter((item) => modelLibraryTypeFilter === 'ALL' || item.type === modelLibraryTypeFilter)
+    .sort((a, b) => a.brand.localeCompare(b.brand) || a.model.localeCompare(b.model)), [modelLibraryTypeFilter, vehicleModels]);
   const modelsForSelectedBrand = useMemo(() => vehicleModels.filter((item) => item.brand === vehicleForm.brand).sort((a, b) => a.model.localeCompare(b.model)), [vehicleModels, vehicleForm.brand]);
   const filteredVehicles = useMemo(() => vehicles.filter((vehicle) => registryFilterMode === 'all'
     || (registryFilterMode === 'department' ? (vehicle.assignedDepartment || 'Unassigned') === registryFilterValue : (vehicle.type || 'Other') === registryFilterValue)), [vehicles, registryFilterMode, registryFilterValue]);
-  const summaryVehicles = useMemo(() => [...vehicles].sort((left, right) => {
+  const summaryVehicles = useMemo(() => [...summaryScheduleVehicles].sort((left, right) => {
     const leftValue = fleetSummaryRow(left)[summarySort.key];
     const rightValue = fleetSummaryRow(right)[summarySort.key];
     const comparison = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: 'base' });
     return summarySort.direction === 'asc' ? comparison : -comparison;
-  }), [vehicles, summarySort]);
+  }), [summaryScheduleVehicles, summarySort]);
 
   useEffect(() => {
     let cancelled = false;
     if (!token) return;
     fetchOrgStructure(token).then((result) => { if (!cancelled) setOrgDepartments(result); }).catch(() => { /* keep the offline fallback */ });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) { setSummaryScheduleLoading(false); return; }
+    setSummaryScheduleLoading(true);
+    fetchFleetMaintenanceSchedule<FleetVehicle[]>(token)
+      .then((items) => { if (!cancelled) setSummaryScheduleVehicles(items); })
+      .catch((error) => console.warn('Unable to load the Oracle fleet schedule summary.', error))
+      .finally(() => { if (!cancelled) setSummaryScheduleLoading(false); });
     return () => { cancelled = true; };
   }, [token]);
 
@@ -194,6 +252,18 @@ export function VehicleFleetManagement() {
     }).catch((error) => console.warn('Unable to load the vehicle 3D model.', error));
     return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [selected?.id, selected?.modelLibraryId, selected?.model3d?.name, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) return;
+    setMasterLoading(true);
+    fetchFleetMasterVehicles<FleetMasterVehicle[]>(token).then((items) => {
+      if (!cancelled) { setMasterVehicles(items); setMasterError(''); }
+    }).catch((error) => {
+      if (!cancelled) setMasterError(error instanceof Error ? error.message : 'Unable to load the vehicle master list.');
+    }).finally(() => { if (!cancelled) setMasterLoading(false); });
+    return () => { cancelled = true; };
+  }, [token]);
 
   useEffect(() => {
     let cancelled = false;
@@ -479,12 +549,12 @@ export function VehicleFleetManagement() {
     const printWindow = window.open('', '_blank', 'width=1100,height=750');
     if (!printWindow) return;
     printWindow.opener = null;
-    printWindow.document.write(`<!doctype html><html><head><title>Vehicle Fleet Schedule Summary</title><style>body{font:13px Arial,sans-serif;color:#111;padding:30px}.header{display:flex;align-items:center;gap:14px;border-bottom:2px solid #166534;padding-bottom:12px;margin-bottom:20px}.logo{width:58px;height:58px;object-fit:contain}h1{font-size:20px;margin:0}.sub{margin-top:4px;color:#555}table{width:100%;border-collapse:collapse}th,td{border:1px solid #444;padding:8px;text-align:left;vertical-align:top}th{background:#e8f3eb}.muted{color:#666}@media print{body{padding:0}}</style></head><body><div class="header"><img class="logo" src="${benecoLogo}" alt="BENECO logo"><div><h1>Vehicle Fleet Schedule Summary</h1><div class="sub">Benguet Electric Cooperative · Generated ${new Date().toLocaleDateString()}</div></div></div><table><thead><tr><th>No.</th><th>Vehicle</th><th>Plate No.</th><th>Department</th><th>Vehicle Type</th><th>Preventive Maintenance</th><th>Registration Renewal</th></tr></thead><tbody>${rows.map((row, index) => `<tr><td>${index + 1}</td><td>${escapePrintText(row.vehicle)}</td><td>${escapePrintText(row.plate)}</td><td>${escapePrintText(row.department)}</td><td>${escapePrintText(row.type)}</td><td>${escapePrintText(row.preventive)}</td><td>${escapePrintText(row.registration)}</td></tr>`).join('')}</tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`);
+    printWindow.document.write(`<!doctype html><html><head><title>Vehicle Fleet Schedule Summary</title><style>body{font:13px Arial,sans-serif;color:#111;padding:30px}.header{display:flex;align-items:center;gap:14px;border-bottom:2px solid #166534;padding-bottom:12px;margin-bottom:20px}.logo{width:58px;height:58px;object-fit:contain}h1{font-size:20px;margin:0}.sub{margin-top:4px;color:#555}table{width:100%;border-collapse:collapse}th,td{border:1px solid #444;padding:8px;text-align:left;vertical-align:top}th{background:#e8f3eb}.muted{color:#666}@media print{body{padding:0}}</style></head><body><div class="header"><img class="logo" src="${benecoLogo}" alt="BENECO logo"><div><h1>Vehicle Fleet Schedule Summary</h1><div class="sub">Benguet Electric Cooperative · Generated ${new Date().toLocaleDateString()}</div></div></div><table><thead><tr><th>No.</th><th>Vehicle</th><th>Plate No.</th><th>Driver</th><th>Department</th><th>Vehicle Type</th><th>Preventive Maintenance</th><th>Registration Renewal</th></tr></thead><tbody>${rows.map((row, index) => `<tr><td>${index + 1}</td><td>${escapePrintText(row.vehicle)}</td><td>${escapePrintText(row.plate)}</td><td>${escapePrintText(row.driver)}</td><td>${escapePrintText(row.department)}</td><td>${escapePrintText(row.type)}</td><td>${escapePrintText(row.preventive)}</td><td>${escapePrintText(row.registration)}</td></tr>`).join('')}</tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`);
     printWindow.document.close();
   }
   function exportFleetSummary() {
     const rows = summaryVehicles.map((vehicle) => fleetSummaryRow(vehicle));
-    const table = `<table><thead><tr><th>No.</th><th>Vehicle</th><th>Plate Number</th><th>Department</th><th>Vehicle Type</th><th>Preventive Maintenance Schedule</th><th>Registration Renewal Schedule</th></tr></thead><tbody>${rows.map((row, index) => `<tr><td>${index + 1}</td><td>${escapePrintText(row.vehicle)}</td><td>${escapePrintText(row.plate)}</td><td>${escapePrintText(row.department)}</td><td>${escapePrintText(row.type)}</td><td>${escapePrintText(row.preventive)}</td><td>${escapePrintText(row.registration)}</td></tr>`).join('')}</tbody></table>`;
+    const table = `<table><thead><tr><th>No.</th><th>Vehicle</th><th>Plate Number</th><th>Driver</th><th>Department</th><th>Vehicle Type</th><th>Preventive Maintenance Schedule</th><th>Registration Renewal Schedule</th></tr></thead><tbody>${rows.map((row, index) => `<tr><td>${index + 1}</td><td>${escapePrintText(row.vehicle)}</td><td>${escapePrintText(row.plate)}</td><td>${escapePrintText(row.driver)}</td><td>${escapePrintText(row.department)}</td><td>${escapePrintText(row.type)}</td><td>${escapePrintText(row.preventive)}</td><td>${escapePrintText(row.registration)}</td></tr>`).join('')}</tbody></table>`;
     const blob = new Blob([`<html><head><meta charset="utf-8"></head><body>${table}</body></html>`], { type: 'application/vnd.ms-excel' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -495,6 +565,18 @@ export function VehicleFleetManagement() {
   }
   function toggleSummarySort(key: SummarySortKey) {
     setSummarySort((current) => current.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' });
+  }
+  async function openFleetSummary() {
+    setSummaryOpen(true);
+    if (!token) return;
+    setSummaryScheduleLoading(true);
+    try {
+      setSummaryScheduleVehicles(await fetchFleetMaintenanceSchedule<FleetVehicle[]>(token));
+    } catch (error) {
+      toast({ kind: 'error', title: 'Schedule summary was not refreshed', description: error instanceof Error ? error.message : 'Unable to load the Oracle fleet schedule summary.' });
+    } finally {
+      setSummaryScheduleLoading(false);
+    }
   }
   async function setImage(event: ChangeEvent<HTMLInputElement>) { setVehicleImage((await readFiles(event.target.files))[0]); }
   async function setModel3d(event: ChangeEvent<HTMLInputElement>) {
@@ -509,7 +591,7 @@ export function VehicleFleetManagement() {
     setVehicleModel3dFile(file);
   }
   function openModelLibrary() {
-    setEditingModelLibraryId(null); setModelLibraryForm({ type: 'Car', brand: '', model: '' }); setModelLibraryFile(undefined); if (modelLibraryInputRef.current) modelLibraryInputRef.current.value = ''; setModelLibraryOpen(true);
+    setEditingModelLibraryId(null); setModelLibraryTypeFilter('ALL'); setModelLibraryForm({ type: vehicleModelTypes[0] ?? '', brand: '', model: '' }); setModelLibraryFile(undefined); if (modelLibraryInputRef.current) modelLibraryInputRef.current.value = ''; setModelLibraryOpen(true);
   }
   function editModelLibraryItem(item: FleetVehicleModel) {
     setEditingModelLibraryId(item.id); setEditingModelLibraryForm({ type: item.type, brand: item.brand, model: item.model }); setEditingModelLibraryFile(undefined); if (editingModelLibraryInputRef.current) editingModelLibraryInputRef.current.value = '';
@@ -526,7 +608,7 @@ export function VehicleFleetManagement() {
       const updatedItem = { id, type: modelLibraryForm.type, brand: modelLibraryForm.brand.trim(), model: modelLibraryForm.model.trim(), model3d };
       const next = [...vehicleModels, updatedItem];
       await saveFleetVehicleModels(token, next); setVehicleModels(next);
-      setModelLibraryForm({ type: 'Car', brand: '', model: '' }); setModelLibraryFile(undefined); if (modelLibraryInputRef.current) modelLibraryInputRef.current.value = '';
+      setModelLibraryForm({ type: vehicleModelTypes[0] ?? '', brand: '', model: '' }); setModelLibraryFile(undefined); if (modelLibraryInputRef.current) modelLibraryInputRef.current.value = '';
       toast({ kind: 'success', title: 'Vehicle model added', description: `${updatedItem.brand} ${updatedItem.model} is now available to all fleet vehicles.` });
     } catch (error) { toast({ kind: 'error', title: 'Vehicle model was not saved', description: error instanceof Error ? error.message : 'Please try again.' }); } finally { setSavingModelLibrary(false); }
   }
@@ -545,18 +627,211 @@ export function VehicleFleetManagement() {
       setEditingModelLibraryId(null); setEditingModelLibraryFile(undefined); toast({ kind: 'success', title: 'Vehicle model updated', description: `${updatedItem.brand} ${updatedItem.model} was updated.` });
     } catch (error) { toast({ kind: 'error', title: 'Vehicle model was not updated', description: error instanceof Error ? error.message : 'Please try again.' }); } finally { setSavingModelLibrary(false); }
   }
+  async function deleteModelLibraryItem() {
+    if (!token || !editingModelLibraryId) return;
+    const existing = vehicleModels.find((item) => item.id === editingModelLibraryId); if (!existing) return;
+    setSavingModelLibrary(true);
+    try {
+      const nextModels = vehicleModels.filter((item) => item.id !== existing.id);
+      await saveFleetVehicleModels(token, nextModels);
+      if (existing.model3d) await deleteFleetVehicleModel(token, existing.id);
+      setVehicleModels(nextModels);
+      persist(vehicles.map((vehicle) => vehicle.modelLibraryId === existing.id ? { ...vehicle, modelLibraryId: undefined, model3d: undefined } : vehicle));
+      setModelLibraryDeleteOpen(false); setEditingModelLibraryId(null); setEditingModelLibraryFile(undefined);
+      toast({ kind: 'success', title: 'Vehicle model deleted', description: `${existing.brand} ${existing.model} was removed from the library.` });
+    } catch (error) { toast({ kind: 'error', title: 'Vehicle model was not deleted', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setSavingModelLibrary(false); }
+  }
+
+  const filteredMasterVehicles = useMemo(() => {
+    const query = masterSearch.trim().toLowerCase();
+    return masterVehicles.filter((vehicle) => (masterType === 'ALL' || vehicle.vehicleType === masterType)
+      && (!query || [vehicle.vehicleNo, vehicle.plateNo, vehicle.brand, vehicle.model, vehicle.description, vehicle.driver, vehicle.department].some((value) => String(value ?? '').toLowerCase().includes(query))));
+  }, [masterSearch, masterType, masterVehicles]);
+
+  const masterVehicleTypes = useMemo(() => [...new Set(masterVehicles.map((vehicle) => vehicle.vehicleType).filter(Boolean))].sort(), [masterVehicles]);
+
+  const sortedMasterVehicles = useMemo(() => {
+    const valueFor = (vehicle: FleetMasterVehicle, key: MasterSortKey) => {
+      if (key === 'vehicle') return vehicle.plateNo ?? '';
+      if (key === 'brand') return `${vehicle.brand ?? ''} ${vehicle.model ?? ''}`;
+      if (key === 'year') return vehicle.yearModel ?? 0;
+      if (key === 'acquired') return vehicle.acquiredDate ?? '';
+      if (key === 'type') return vehicle.vehicleType;
+      if (key === 'fuel') return vehicle.fuelType ?? '';
+      return vehicle[key] ?? '';
+    };
+    return [...filteredMasterVehicles].sort((left, right) => {
+      const leftValue = valueFor(left, masterSort.key);
+      const rightValue = valueFor(right, masterSort.key);
+      const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+        ? leftValue - rightValue
+        : String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: 'base' });
+      return masterSort.direction === 'asc' ? comparison : -comparison;
+    });
+  }, [filteredMasterVehicles, masterSort]);
+
+  function toggleMasterSort(key: MasterSortKey) {
+    setMasterSort((current) => current.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' });
+    setMasterPage(1);
+  }
+
+  useEffect(() => { setMasterPage(1); }, [masterSearch, masterType, masterPageSize]);
+  const masterPageCount = Math.max(1, Math.ceil(filteredMasterVehicles.length / masterPageSize));
+  const pagedMasterVehicles = useMemo(() => sortedMasterVehicles.slice((masterPage - 1) * masterPageSize, masterPage * masterPageSize), [sortedMasterVehicles, masterPage, masterPageSize]);
+
+  function openMasterSchedule(vehicle: FleetMasterVehicle, scheduleType: 'Preventive Maintenance' | 'Registration Renewal') {
+    setMasterContext(null); setMasterActionVehicle(vehicle); setMasterScheduleForm({ scheduleType, startDate: today, endDate: today, notes: '' }); setMasterScheduleOpen(true);
+  }
+  async function openMasterInspection(vehicle: FleetMasterVehicle) {
+    setEditingMasterInspectionId(null); setMasterContext(null); setMasterActionVehicle(vehicle); setMasterInspectionForm({ inspectionDate: today, inspectedBy: user?.name ?? '', inspectionStatus: 'No Problem', findings: '', actionTaken: '', recommendation: '' });
+    const item = newInspectionEntry(); setMasterInspectionItems([item]); setActiveMasterInspectionItemId(item.id); setMasterInspectionModelUrl(''); setMasterInspectionOpen(true);
+    if (!token) return;
+    const libraryModel = vehicleModels.find((item) => item.brand.trim().toLowerCase() === (vehicle.brand ?? '').trim().toLowerCase() && item.model.trim().toLowerCase() === (vehicle.model ?? '').trim().toLowerCase() && item.model3d);
+    if (!libraryModel) return;
+    try { const blob = await fetchFleetVehicleModel(token, libraryModel.id); setMasterInspectionModelUrl(URL.createObjectURL(blob)); }
+    catch (error) { toast({ kind: 'error', title: '3D model could not be loaded', description: error instanceof Error ? error.message : 'Please try again.' }); }
+  }
+  async function editMasterInspection(inspectionId: string) {
+    if (!token || !masterDetailVehicle) return;
+    setSavingMasterAction(true);
+    try {
+      const inspection = await fetchFleetMasterInspection<{ inspectionDate: string; inspectedBy: string; inspectionStatus: string; items: FleetInspectionEntry[] }>(token, inspectionId);
+      setEditingMasterInspectionId(inspectionId); setMasterActionVehicle(masterDetailVehicle); setMasterInspectionForm({ inspectionDate: inspection.inspectionDate, inspectedBy: inspection.inspectedBy, inspectionStatus: inspection.inspectionStatus, findings: '', actionTaken: '', recommendation: '' }); setMasterInspectionItems(inspection.items); setActiveMasterInspectionItemId(inspection.items[0]?.id ?? ''); setMasterInspectionModelUrl(''); setMasterInspectionOpen(true);
+      const libraryModel = vehicleModels.find((item) => item.brand.trim().toLowerCase() === (masterDetailVehicle.brand ?? '').trim().toLowerCase() && item.model.trim().toLowerCase() === (masterDetailVehicle.model ?? '').trim().toLowerCase() && item.model3d);
+      if (libraryModel) { const blob = await fetchFleetVehicleModel(token, libraryModel.id); setMasterInspectionModelUrl(URL.createObjectURL(blob)); }
+    } catch (error) { toast({ kind: 'error', title: 'Inspection could not be opened', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setSavingMasterAction(false); }
+  }
+  async function openMasterDetails(vehicle: FleetMasterVehicle) {
+    setMasterContext(null); setMasterDetailVehicle(vehicle); setMasterDetailTab('details');
+    setMasterActivity({ schedules: [], inspections: [] }); setMasterActivityError('');
+    if (!token) return;
+    setMasterActivityLoading(true);
+    try { setMasterActivity(await fetchFleetMasterVehicleActivity<FleetMasterActivity>(token, vehicle.id)); }
+    catch (error) { setMasterActivityError(error instanceof Error ? error.message : 'Unable to load schedules and history.'); }
+    finally { setMasterActivityLoading(false); }
+  }
+  async function saveMasterSchedule() {
+    if (!token || !masterActionVehicle || !masterScheduleForm.startDate || !masterScheduleForm.endDate) return;
+    setSavingMasterAction(true);
+    try { await createFleetMasterSchedule(token, { vehicleMasterId: masterActionVehicle.id, ...masterScheduleForm }); setMasterScheduleOpen(false); toast({ kind: 'success', title: 'Schedule created', description: `${masterScheduleForm.scheduleType} was linked to vehicle master ID ${masterActionVehicle.id}.` }); }
+    catch (error) { toast({ kind: 'error', title: 'Schedule was not created', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setSavingMasterAction(false); }
+  }
+  async function saveMasterInspection() {
+    if (!token || !masterActionVehicle || !masterInspectionForm.inspectionDate || !masterInspectionForm.inspectedBy.trim()) return;
+    setSavingMasterAction(true);
+    try { const payload = { inspectionDate: masterInspectionForm.inspectionDate, inspectedBy: masterInspectionForm.inspectedBy, inspectionStatus: masterInspectionItems.some((item) => item.status !== 'No Problem') ? 'With Findings' : 'No Problem', items: masterInspectionItems.map((item) => ({ id: item.id, activity: item.activity, status: item.status, findings: item.findings, actionTaken: item.actionTaken, recommendation: item.recommendation, annotations: item.annotations, snapshot: item.snapshot ? { name: item.snapshot.name, dataUrl: item.snapshot.dataUrl } : undefined, photos: (item.photos ?? []).map((photo) => ({ name: photo.name, dataUrl: photo.dataUrl })) })) }; if (editingMasterInspectionId) await updateFleetMasterInspection(token, editingMasterInspectionId, payload); else await createFleetMasterInspection(token, { vehicleMasterId: masterActionVehicle.id, ...payload }); setMasterInspectionOpen(false); setEditingMasterInspectionId(null); toast({ kind: 'success', title: editingMasterInspectionId ? 'Inspection updated' : 'Inspection recorded', description: `${masterInspectionItems.length} separate inspection detail record${masterInspectionItems.length === 1 ? '' : 's'} and their evidence were saved in Oracle.` }); }
+    catch (error) { toast({ kind: 'error', title: 'Inspection was not recorded', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setSavingMasterAction(false); }
+  }
+  function updateMasterInspectionItem(id: string, changes: Partial<FleetInspectionEntry>) { setMasterInspectionItems((current) => current.map((item) => item.id === id ? { ...item, ...changes } : item)); }
+  async function captureMasterInspectionSnapshot() {
+    try { const dataUrl = await modelViewerRef.current?.captureSnapshot(); if (dataUrl && activeMasterInspectionItemId) updateMasterInspectionItem(activeMasterInspectionItemId, { snapshot: { name: `vehicle-inspection-${masterInspectionForm.inspectionDate}-${activeMasterInspectionItemId}.png`, type: 'image/png', dataUrl } }); }
+    catch (error) { toast({ kind: 'error', title: 'Unable to capture snapshot', description: error instanceof Error ? error.message : 'Please try again.' }); }
+  }
+  function printMasterInspection(items: FleetInspectionEntry[] = masterInspectionItems) {
+    if (!masterActionVehicle || !items.length) return;
+    const popup = window.open('', '_blank', 'width=1100,height=850'); if (!popup) return;
+    const details = items.map((item, index) => `<section><div class="detail-head"><h2>Inspection Detail ${masterInspectionItems.indexOf(item) + 1}</h2><span>${escapePrintText(item.status)}</span></div><table><tr><th>Vehicle Part / Activity</th><td colspan="3">${escapePrintText(item.activity)}</td></tr><tr><th>Findings</th><td>${escapePrintText(item.findings || '—')}</td><th>Action Taken</th><td>${escapePrintText(item.actionTaken || '—')}</td></tr><tr><th>Recommendation</th><td colspan="3">${escapePrintText(item.recommendation || '—')}</td></tr></table>${item.snapshot ? `<h3>Annotated 3D Snapshot</h3><img class="snapshot" src="${item.snapshot.dataUrl}" alt="3D inspection snapshot">` : ''}${(item.photos ?? []).length ? `<h3>Attached Photo Evidence</h3><div class="photos">${(item.photos ?? []).map((photo) => `<figure><img src="${photo.dataUrl}" alt="${escapePrintText(photo.name)}"><figcaption>${escapePrintText(photo.name)}</figcaption></figure>`).join('')}</div>` : ''}</section>`).join('');
+    popup.document.write(`<!doctype html><html><head><title>Vehicle Inspection Report</title><style>@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font:11px Arial,sans-serif;color:#111;margin:0}.header{display:grid;grid-template-columns:72px 1fr auto;align-items:center;border-bottom:2px solid #166534;padding-bottom:10px}.logo{width:62px;height:62px;object-fit:contain}.org{font-size:16px;font-weight:700;color:#14532d}.title{font-size:21px;font-weight:700;margin-top:3px}.generated{text-align:right;color:#555}.meta{display:grid;grid-template-columns:1fr 1fr;gap:7px 20px;margin:14px 0;padding:10px;background:#f0f7f2;border:1px solid #b8d6c1}.meta b{display:inline-block;min-width:100px}section{margin-top:18px;break-inside:avoid;border-top:2px solid #333;padding-top:9px}.detail-head{display:flex;justify-content:space-between;align-items:center}.detail-head h2{font-size:15px;margin:0 0 8px}.detail-head span{border:1px solid #777;border-radius:12px;padding:3px 9px;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #777;padding:7px;text-align:left;vertical-align:top;white-space:pre-wrap}th{width:18%;background:#eee}.snapshot{display:block;max-width:520px;max-height:310px;object-fit:contain;border:1px solid #aaa;margin-top:6px}.photos{display:flex;flex-wrap:wrap;gap:9px}.photos figure{margin:0;width:190px}.photos img{width:190px;height:135px;object-fit:cover;border:1px solid #aaa}.photos figcaption{font-size:9px;overflow-wrap:anywhere;margin-top:2px}h3{font-size:12px;margin:12px 0 4px}.actions{text-align:right;margin:0 0 10px}.actions button{background:#15803d;color:white;border:0;border-radius:5px;padding:8px 15px;font-weight:700}@media print{.actions{display:none}}</style></head><body><div class="actions"><button onclick="window.print()">Print</button></div><header class="header"><img class="logo" src="${benecoLogo}" alt="BENECO logo"><div><div class="org">Benguet Electric Cooperative</div><div class="title">Vehicle Inspection Report</div></div><div class="generated">Generated<br>${new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}</div></header><div class="meta"><div><b>Vehicle:</b> ${escapePrintText(`${masterActionVehicle.brand ?? ''} ${masterActionVehicle.model ?? masterActionVehicle.description ?? ''}`)}</div><div><b>Plate No.:</b> ${escapePrintText(masterActionVehicle.plateNo ?? '—')}</div><div><b>Inspection Date:</b> ${escapePrintText(masterInspectionForm.inspectionDate)}</div><div><b>Inspected By:</b> ${escapePrintText(masterInspectionForm.inspectedBy)}</div><div><b>Master ID:</b> ${escapePrintText(masterActionVehicle.id)}</div><div><b>Details:</b> ${items.length}${items.length === 1 ? ' item' : ' items'}</div></div>${details}<script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`); popup.document.close();
+  }
+  async function openRenewalReceipt(schedule: FleetMasterActivity['schedules'][number]) {
+    if (!token) return;
+    setRenewalReceiptSchedule(schedule); setRenewalReceiptFile(undefined); setRenewalReceiptLoading(true);
+    try { const receipt = (await fetchFleetRenewalReceipt(token, schedule.id)).receipt; setRenewalReceiptExists(Boolean(receipt)); setRenewalReceiptForm(receipt ?? {}); }
+    catch (error) { toast({ kind: 'error', title: 'Receipt details could not be loaded', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setRenewalReceiptLoading(false); }
+  }
+  async function deleteRenewalReceiptDetails() {
+    if (!token || !renewalReceiptSchedule) return;
+    setRenewalReceiptLoading(true);
+    try { await deleteFleetRenewalReceipt(token, renewalReceiptSchedule.id); setRenewalReceiptDeleteOpen(false); setRenewalReceiptSchedule(null); setRenewalReceiptExists(false); toast({ kind: 'success', title: 'Official receipt details deleted' }); }
+    catch (error) { toast({ kind: 'error', title: 'Receipt details were not deleted', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setRenewalReceiptLoading(false); }
+  }
+  async function changeRenewalStatus(scheduleId: string, status: 'Scheduled' | 'In Progress' | 'Registered') {
+    if (!token) return;
+    const previous = masterActivity;
+    setMasterActivity((current) => ({ ...current, schedules: current.schedules.map((schedule) => schedule.id === scheduleId ? { ...schedule, status } : schedule) }));
+    try { await updateFleetRenewalScheduleStatus(token, scheduleId, status); toast({ kind: 'success', title: 'Renewal status updated', description: status }); }
+    catch (error) { setMasterActivity(previous); toast({ kind: 'error', title: 'Renewal status was not updated', description: error instanceof Error ? error.message : 'Please try again.' }); }
+  }
+  async function changePreventiveMaintenance(scheduleId: string, changes: { status?: 'Scheduled' | 'Completed'; actualDate?: string }) {
+    if (!token) return;
+    const previous = masterActivity;
+    const currentSchedule = masterActivity.schedules.find((schedule) => schedule.id === scheduleId);
+    if (!currentSchedule) return;
+    const status = changes.status ?? (currentSchedule.status as 'Scheduled' | 'Completed');
+    const actualDate = changes.actualDate ?? currentSchedule.actualDate ?? '';
+    setMasterActivity((current) => ({ ...current, schedules: current.schedules.map((schedule) => schedule.id === scheduleId ? { ...schedule, status, actualDate } : schedule) }));
+    try { await updateFleetPreventiveMaintenance(token, scheduleId, { status, actualDate }); toast({ kind: 'success', title: 'Maintenance schedule updated' }); }
+    catch (error) { setMasterActivity(previous); toast({ kind: 'error', title: 'Maintenance schedule was not updated', description: error instanceof Error ? error.message : 'Please try again.' }); }
+  }
+  async function saveRenewalReceiptDetails() {
+    if (!token || !renewalReceiptSchedule) return;
+    setRenewalReceiptLoading(true);
+    try {
+      let attachment;
+      if (renewalReceiptFile) attachment = { name: renewalReceiptFile.name, dataUrl: await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(renewalReceiptFile); }) };
+      const { attachment: _currentAttachment, ...receiptDetails } = renewalReceiptForm;
+      await saveFleetRenewalReceipt(token, renewalReceiptSchedule.id, { ...receiptDetails, ...(attachment ? { attachment } : {}) });
+      setRenewalReceiptSchedule(null); toast({ kind: 'success', title: 'Official receipt details saved' });
+    } catch (error) { toast({ kind: 'error', title: 'Receipt details were not saved', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setRenewalReceiptLoading(false); }
+  }
 
   const metricCards = useMemo(() => [
-    { label: 'Fleet Size', value: vehicles.length, icon: Car, tone: 'text-brand-700 bg-brand-50' },
+    { label: 'Fleet Size', value: masterVehicles.length, icon: Car, tone: 'text-brand-700 bg-brand-50' },
     { label: 'Due on Schedule', value: due, icon: CalendarRange, tone: 'text-blue-700 bg-blue-50' },
     { label: 'Overdue', value: overdue, icon: Wrench, tone: 'text-red-700 bg-red-50' },
     { label: 'Schedule Compliance', value: `${compliance}%`, icon: Gauge, tone: 'text-emerald-700 bg-emerald-50' },
-  ], [vehicles.length, due, overdue, compliance]);
+  ], [masterVehicles, due, overdue, compliance]);
 
   return <div className="space-y-5">
-    <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={openModelLibrary}><Car className="h-4 w-4" /> Add Vehicle Model</Button><Button variant="outline" onClick={() => setSummaryOpen(true)}><List className="h-4 w-4" /> Summary View</Button><Button variant="outline" onClick={() => window.open('/workspace/vehicle-fleet/maintenance-schedule', '_blank', 'noopener,noreferrer')}><CalendarRange className="h-4 w-4" /> Maintenance Schedule <ExternalLink className="h-3.5 w-3.5" /></Button></div>
+    <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={openModelLibrary}><Car className="h-4 w-4" /> Add Vehicle Model</Button><Button variant="outline" onClick={() => void openFleetSummary()}><List className="h-4 w-4" /> Summary View</Button><Button variant="outline" onClick={() => window.open('/workspace/vehicle-fleet/maintenance-schedule', '_blank', 'noopener,noreferrer')}><CalendarRange className="h-4 w-4" /> Maintenance Schedule <ExternalLink className="h-3.5 w-3.5" /></Button><Button variant="outline" onClick={() => window.open('/workspace/vehicle-fleet/renewal-schedule', '_blank', 'noopener,noreferrer')}><CalendarRange className="h-4 w-4" /> Renewal Schedule <ExternalLink className="h-3.5 w-3.5" /></Button></div>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{metricCards.map(({ label, value, icon: Icon, tone }) => <Card key={label} className="flex items-center gap-3 p-4"><span className={`rounded-lg p-2 ${tone}`}><Icon className="h-5 w-5" /></span><div><p className="text-xs text-slate-500">{label}</p><p className="text-2xl font-bold text-slate-900">{value}</p></div></Card>)}</div>
-    <div className="grid gap-5 lg:grid-cols-[300px_1fr]">
+    <Card className="overflow-hidden" onClick={() => setMasterContext(null)}>
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 p-4">
+        <div><h3 className="font-semibold">Vehicle Registry</h3><p className="text-xs text-slate-500">Active vehicles with an assigned type from ISD.VMS_VEHICLE_MAST</p></div>
+        <div className="flex flex-1 flex-wrap justify-end gap-2"><Input className="min-w-56 max-w-sm" aria-label="Search vehicle registry" placeholder="Search plate, vehicle, driver, department…" value={masterSearch} onChange={(event) => setMasterSearch(event.target.value)} /><Select className="w-52" aria-label="Filter by vehicle type" value={masterType} onChange={(event) => setMasterType(event.target.value)}><option value="ALL">All vehicle types</option>{masterVehicleTypes.map((vehicleType) => <option key={vehicleType} value={vehicleType}>{vehicleType}</option>)}</Select></div>
+      </div>
+      {masterLoading ? <div className="p-10 text-center text-sm text-slate-500">Loading vehicle master list…</div> : masterError ? <div className="p-10 text-center text-sm text-red-600">{masterError}</div> : <div className="overflow-x-auto"><table className="w-full min-w-[1280px] text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-3 text-left">No.</th>{([['vehicle', 'Plate No.'], ['brand', 'Brand / Model'], ['description', 'Description'], ['year', 'Year'], ['acquired', 'Acquired Date'], ['type', 'Type'], ['driver', 'Driver'], ['department', 'Department'], ['fuel', 'Fuel'], ['status', 'Status']] as Array<[MasterSortKey, string]>).map(([key, label]) => <th key={key} className="px-3 py-3 text-left"><MasterSortButton label={label} sortKey={key} sort={masterSort} onSort={toggleMasterSort} /></th>)}</tr></thead><tbody className="divide-y divide-slate-100">{pagedMasterVehicles.map((vehicle, index) => <tr key={vehicle.id} onClick={() => void openMasterDetails(vehicle)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setMasterContext({ vehicle, x: event.clientX, y: event.clientY }); }} className="cursor-pointer hover:bg-slate-50 focus-within:bg-slate-50"><td className="px-3 py-3 text-slate-500">{(masterPage - 1) * masterPageSize + index + 1}</td><td className="px-3 py-3 font-medium">{vehicle.plateNo || '—'}</td><td className="px-3 py-3"><p className="font-medium">{vehicle.brand && vehicle.brand !== '-' ? vehicle.brand : '—'}</p><p className="text-xs text-slate-500">{vehicle.model && vehicle.model !== '-' ? vehicle.model : 'Model not recorded'}</p></td><td className="max-w-xs px-3 py-3 text-slate-600">{vehicle.description && vehicle.description !== '-' ? vehicle.description : '—'}</td><td className="px-3 py-3">{vehicle.yearModel || '—'}</td><td className="px-3 py-3 whitespace-nowrap">{displayDate(vehicle.acquiredDate)}</td><td className="px-3 py-3"><Badge>{vehicle.vehicleType}</Badge></td><td className="max-w-56 px-3 py-3 text-slate-600">{vehicle.driver || '—'}</td><td className="px-3 py-3">{vehicle.department || '—'}</td><td className="px-3 py-3">{vehicle.fuelType || '—'}</td><td className="px-3 py-3"><Badge>{vehicle.status || 'Unknown'}</Badge></td></tr>)}</tbody></table>{filteredMasterVehicles.length === 0 && <div className="p-10 text-center text-sm text-slate-500">No vehicles match the current filters.</div>}</div>}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-xs text-slate-500"><span>Showing {filteredMasterVehicles.length ? (masterPage - 1) * masterPageSize + 1 : 0}–{Math.min(masterPage * masterPageSize, filteredMasterVehicles.length)} of {filteredMasterVehicles.length.toLocaleString()} filtered records ({masterVehicles.length.toLocaleString()} total)</span><div className="flex items-center gap-2"><Select aria-label="Rows per page" className="w-24" value={String(masterPageSize)} onChange={(event) => setMasterPageSize(Number(event.target.value))}><option value="10">10 rows</option><option value="25">25 rows</option><option value="50">50 rows</option><option value="100">100 rows</option></Select><Button size="sm" variant="outline" disabled={masterPage <= 1} onClick={(event) => { event.stopPropagation(); setMasterPage((page) => page - 1); }}>Previous</Button><span>Page {masterPage} of {masterPageCount}</span><Button size="sm" variant="outline" disabled={masterPage >= masterPageCount} onClick={(event) => { event.stopPropagation(); setMasterPage((page) => page + 1); }}>Next</Button></div></div>
+    </Card>
+    {masterContext && <div role="menu" aria-label="Vehicle actions" onClick={(event) => event.stopPropagation()} className="fixed z-[100] min-w-64 overflow-hidden rounded-lg border border-slate-200 bg-surface py-1 shadow-xl" style={{ left: Math.min(masterContext.x, window.innerWidth - 280), top: Math.min(masterContext.y, window.innerHeight - 180) }}><div className="border-b border-slate-100 px-3 py-2"><p className="text-xs font-semibold">{masterContext.vehicle.brand || 'Vehicle'} {masterContext.vehicle.model && masterContext.vehicle.model !== '-' ? masterContext.vehicle.model : masterContext.vehicle.description || ''}</p><p className="text-[11px] text-slate-500">{masterContext.vehicle.plateNo || 'No plate'} · Master ID {masterContext.vehicle.id}</p></div><button role="menuitem" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => openMasterSchedule(masterContext.vehicle, 'Preventive Maintenance')}><Wrench className="h-4 w-4" /> Add Preventive Maintenance</button><button role="menuitem" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => openMasterSchedule(masterContext.vehicle, 'Registration Renewal')}><CalendarRange className="h-4 w-4" /> Add Registration Renewal</button><button role="menuitem" className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50" onClick={() => openMasterInspection(masterContext.vehicle)}><ClipboardCheck className="h-4 w-4" /> Record Inspection</button></div>}
+    <Dialog open={Boolean(masterDetailVehicle)} onClose={() => setMasterDetailVehicle(null)} title={`${masterDetailVehicle?.brand && masterDetailVehicle.brand !== '-' ? masterDetailVehicle.brand : 'Vehicle'} ${masterDetailVehicle?.model && masterDetailVehicle.model !== '-' ? masterDetailVehicle.model : masterDetailVehicle?.description ?? ''}`} description={`${masterDetailVehicle?.plateNo ?? 'No plate'} · Master ID ${masterDetailVehicle?.id ?? ''}`} size="xl" footer={<Button onClick={() => setMasterDetailVehicle(null)}>Close</Button>}>
+      <div className="space-y-4">
+        <div role="tablist" aria-label="Vehicle information" className="flex gap-1 border-b border-slate-200">
+          {([['details', 'Vehicle Details'], ['schedules', `Preventive Maintenance Schedules (${masterActivity.schedules.filter((schedule) => schedule.type === 'Preventive Maintenance').length})`], ['renewals', `Registration Renewal Schedules (${masterActivity.schedules.filter((schedule) => schedule.type === 'Registration Renewal').length})`], ['history', `History (${masterActivity.inspections.length})`]] as const).map(([value, label]) => <button key={value} role="tab" aria-selected={masterDetailTab === value} onClick={() => setMasterDetailTab(value)} className={`border-b-2 px-4 py-2 text-sm font-semibold ${masterDetailTab === value ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>{label}</button>)}
+        </div>
+        {masterDetailTab === 'details' && masterDetailVehicle && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[['Vehicle No.', masterDetailVehicle.vehicleNo], ['Plate No.', masterDetailVehicle.plateNo], ['Brand', masterDetailVehicle.brand], ['Model', masterDetailVehicle.model], ['Description', masterDetailVehicle.description], ['Year Model', masterDetailVehicle.yearModel], ['Vehicle Type', masterDetailVehicle.vehicleType], ['Driver / Assignee', masterDetailVehicle.driver], ['Department', masterDetailVehicle.department], ['Fuel Type', masterDetailVehicle.fuelType], ['Engine No.', masterDetailVehicle.engineNo], ['Chassis No.', masterDetailVehicle.chassisNo], ['Acquired Date', displayDate(masterDetailVehicle.acquiredDate)], ['Acquisition Cost', masterDetailVehicle.acquiredCost], ['Status', masterDetailVehicle.status]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{String(value || '—')}</p></div>)}
+          <div className="sm:col-span-2 lg:col-span-3 rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-xs font-medium text-slate-500">Remarks</p><p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{masterDetailVehicle.remarks || '—'}</p></div>
+        </div>}
+        {masterDetailTab !== 'details' && masterActivityLoading && <div className="p-10 text-center text-sm text-slate-500">Loading vehicle records…</div>}
+        {masterDetailTab !== 'details' && masterActivityError && <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{masterActivityError}</div>}
+        {masterDetailTab === 'schedules' && !masterActivityLoading && !masterActivityError && (masterActivity.schedules.some((schedule) => schedule.type === 'Preventive Maintenance') ? <div className="overflow-hidden rounded-lg border border-slate-200"><table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-2 text-left">Start</th><th className="px-3 py-2 text-left">End</th><th className="px-3 py-2 text-left">Actual Maintenance Date</th><th className="px-3 py-2 text-left">Status</th></tr></thead><tbody className="divide-y divide-slate-100">{masterActivity.schedules.filter((schedule) => schedule.type === 'Preventive Maintenance').map((schedule) => <tr key={schedule.id}><td className="px-3 py-3">{displayDate(schedule.startDate)}</td><td className="px-3 py-3">{displayDate(schedule.endDate)}</td><td className="px-3 py-3"><Input type="date" value={schedule.actualDate ?? ''} onChange={(event) => void changePreventiveMaintenance(schedule.id, { actualDate: event.target.value })} /></td><td className="px-3 py-3"><Select value={schedule.status} onChange={(event) => void changePreventiveMaintenance(schedule.id, { status: event.target.value as 'Scheduled' | 'Completed' })}><option value="Scheduled">Scheduled</option><option value="Completed">Completed</option></Select></td></tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-10 text-center text-sm text-slate-500">No preventive maintenance schedules recorded for this vehicle.</div>)}
+        {masterDetailTab === 'renewals' && !masterActivityLoading && !masterActivityError && (masterActivity.schedules.some((schedule) => schedule.type === 'Registration Renewal') ? <div className="overflow-hidden rounded-lg border border-slate-200"><table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-2 text-left">Schedule</th><th className="px-3 py-2 text-left">Start</th><th className="px-3 py-2 text-left">End</th><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-right">Official Receipt</th></tr></thead><tbody className="divide-y divide-slate-100">{masterActivity.schedules.filter((schedule) => schedule.type === 'Registration Renewal').map((schedule) => <tr key={schedule.id}><td className="px-3 py-3 font-medium">{schedule.type}</td><td className="px-3 py-3">{displayDate(schedule.startDate)}</td><td className="px-3 py-3">{displayDate(schedule.endDate)}</td><td className="px-3 py-3"><Select className="w-32" aria-label="Registration renewal status" value={schedule.status} onChange={(event) => void changeRenewalStatus(schedule.id, event.target.value as 'Scheduled' | 'In Progress' | 'Registered')}><option>Scheduled</option><option>In Progress</option><option>Registered</option></Select></td><td className="px-3 py-3 text-right"><Button size="sm" variant="outline" onClick={() => void openRenewalReceipt(schedule)}>Receipt Details</Button></td></tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-10 text-center text-sm text-slate-500">No registration renewal schedules recorded for this vehicle.</div>)}
+        {masterDetailTab === 'history' && !masterActivityLoading && !masterActivityError && (masterActivity.inspections.length ? <div className="space-y-3">{masterActivity.inspections.map((inspection) => <button type="button" key={inspection.id} onClick={() => void editMasterInspection(inspection.id)} className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 p-4 text-left hover:border-brand-300 hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"><div><p className="font-semibold">Vehicle Inspection · {displayDate(inspection.date)}</p><p className="text-xs text-slate-500">Inspected by {inspection.inspectedBy || '—'} · Click to view or edit this inspection</p></div><div className="flex items-center gap-2"><Badge>{inspection.status}</Badge><Pencil className="h-4 w-4 text-slate-400" /></div></button>)}</div> : <div className="rounded-lg border border-dashed p-10 text-center text-sm text-slate-500">No inspection history recorded for this vehicle.</div>)}
+      </div>
+    </Dialog>
+    <Dialog open={Boolean(renewalReceiptSchedule)} onClose={() => { if (!renewalReceiptLoading) setRenewalReceiptSchedule(null); }} title="Official Receipt Details" description={`${masterDetailVehicle?.plateNo ?? 'Vehicle'} · ${renewalReceiptSchedule ? `${displayDate(renewalReceiptSchedule.startDate)} to ${displayDate(renewalReceiptSchedule.endDate)}` : ''}`} size="lg" footer={<div className="flex w-full items-center justify-between gap-2"><div>{renewalReceiptExists && <Button variant="destructive" disabled={renewalReceiptLoading} onClick={() => setRenewalReceiptDeleteOpen(true)}><Trash2 className="h-4 w-4" /> Delete Receipt Details</Button>}</div><div className="flex gap-2"><Button variant="outline" disabled={renewalReceiptLoading} onClick={() => setRenewalReceiptSchedule(null)}>Cancel</Button><Button disabled={renewalReceiptLoading} onClick={() => void saveRenewalReceiptDetails()}>{renewalReceiptLoading ? 'Saving…' : 'Save Receipt Details'}</Button></div></div>}>
+      <div className="grid gap-4 sm:grid-cols-2"><Field label="Official Receipt No."><Input value={renewalReceiptForm.orNumber ?? ''} onChange={(event) => setRenewalReceiptForm((current) => ({ ...current, orNumber: event.target.value }))} /></Field><Field label="Receipt Date"><Input type="date" value={renewalReceiptForm.receiptDate ?? ''} onChange={(event) => setRenewalReceiptForm((current) => ({ ...current, receiptDate: event.target.value }))} /></Field><Field label="Amount Paid"><Input type="number" min="0" step="0.01" value={renewalReceiptForm.amountPaid ?? ''} onChange={(event) => setRenewalReceiptForm((current) => ({ ...current, amountPaid: event.target.value === '' ? undefined : Number(event.target.value) }))} /></Field><Field label="Issuing Office / Payee"><Input value={renewalReceiptForm.issuingOffice ?? ''} onChange={(event) => setRenewalReceiptForm((current) => ({ ...current, issuingOffice: event.target.value }))} /></Field><div className="sm:col-span-2"><Label>Official Receipt Attachment</Label><Input type="file" accept=".pdf,.png,.jpg,.jpeg,.bmp,application/pdf,image/png,image/jpeg,image/bmp" onChange={(event) => setRenewalReceiptFile(event.target.files?.[0])} /><p className="mt-1 text-xs text-slate-500">PDF, PNG, JPG/JPEG, or BMP. {renewalReceiptForm.attachment?.name ? `Current: ${renewalReceiptForm.attachment.name}` : 'No file attached.'}</p>{renewalReceiptForm.attachment?.name && renewalReceiptSchedule && <Button className="mt-2" size="sm" variant="outline" onClick={() => void downloadFleetRenewalReceiptAttachment(token!, renewalReceiptSchedule.id, renewalReceiptForm.attachment!.name)}><FileDown className="h-4 w-4" /> Download Current Attachment</Button>}</div></div>
+    </Dialog>
+    <ConfirmDialog open={renewalReceiptDeleteOpen} onClose={() => setRenewalReceiptDeleteOpen(false)} onConfirm={() => void deleteRenewalReceiptDetails()} title="Delete official receipt details?" description="This permanently removes the official receipt information and attached file from Oracle. The registration renewal schedule will remain." confirmLabel="Delete Receipt Details" destructive />
+    <Dialog open={masterScheduleOpen} onClose={() => { if (!savingMasterAction) setMasterScheduleOpen(false); }} title={`Add ${masterScheduleForm.scheduleType}`} description={`${masterActionVehicle?.brand ?? 'Vehicle'} ${masterActionVehicle?.model && masterActionVehicle.model !== '-' ? masterActionVehicle.model : masterActionVehicle?.description ?? ''} · ${masterActionVehicle?.plateNo ?? 'No plate'} · Master ID ${masterActionVehicle?.id ?? ''}`} footer={<><Button variant="outline" disabled={savingMasterAction} onClick={() => setMasterScheduleOpen(false)}>Cancel</Button><Button disabled={savingMasterAction || !masterScheduleForm.startDate || !masterScheduleForm.endDate} onClick={() => void saveMasterSchedule()}>{savingMasterAction ? 'Saving…' : 'Create Schedule'}</Button></>}><div className="grid gap-4 sm:grid-cols-2"><Field label="Schedule Type"><Input value={masterScheduleForm.scheduleType} disabled /></Field><Field label="Status"><Input value="Scheduled" disabled /></Field><Field label="Start Date" required><Input type="date" value={masterScheduleForm.startDate} onChange={(event) => setMasterScheduleForm((current) => ({ ...current, startDate: event.target.value }))} /></Field><Field label="End Date" required><Input type="date" value={masterScheduleForm.endDate} onChange={(event) => setMasterScheduleForm((current) => ({ ...current, endDate: event.target.value }))} /></Field><div className="sm:col-span-2"><Label>Notes</Label><Textarea value={masterScheduleForm.notes} onChange={(event) => setMasterScheduleForm((current) => ({ ...current, notes: event.target.value }))} placeholder="Schedule details or reminders" /></div></div></Dialog>
+    <Dialog open={masterInspectionOpen} onClose={() => { if (!savingMasterAction) setMasterInspectionOpen(false); }} title="Record Vehicle Inspection" description={`${masterActionVehicle?.brand ?? 'Vehicle'} ${masterActionVehicle?.model && masterActionVehicle.model !== '-' ? masterActionVehicle.model : masterActionVehicle?.description ?? ''} · ${masterActionVehicle?.plateNo ?? 'No plate'} · Master ID ${masterActionVehicle?.id ?? ''}`} size="xl" footer={<div className="flex w-full items-center justify-between gap-2"><Button type="button" variant="outline" disabled={!masterInspectionItems.length} onClick={() => printMasterInspection()}><Printer className="h-4 w-4" /> Print All Inspections</Button><div className="flex gap-2"><Button variant="outline" disabled={savingMasterAction} onClick={() => setMasterInspectionOpen(false)}>Cancel</Button><Button disabled={savingMasterAction || !masterInspectionForm.inspectionDate || !masterInspectionForm.inspectedBy.trim() || !masterInspectionItems.length} onClick={() => void saveMasterInspection()}>{savingMasterAction ? 'Saving…' : 'Save Inspection'}</Button></div></div>}>
+      <div className="space-y-5">
+        <div><div className="mb-2 flex items-center justify-between gap-2"><div><h4 className="font-semibold">3D Inspection View</h4><p className="text-xs text-slate-500">Annotations and snapshots are saved against the selected inspection detail.</p></div>{masterInspectionModelUrl && <Button type="button" size="sm" variant="outline" onClick={() => void captureMasterInspectionSnapshot()}><Camera className="h-4 w-4" /> Capture Snapshot</Button>}</div>{masterInspectionModelUrl ? <VehicleModelViewer ref={modelViewerRef} dataUrl={masterInspectionModelUrl} name={`${masterActionVehicle?.brand ?? ''} ${masterActionVehicle?.model ?? ''}`} annotations={masterInspectionItems.find((item) => item.id === activeMasterInspectionItemId)?.annotations ?? []} onAnnotationsChange={(annotations) => activeMasterInspectionItemId && updateMasterInspectionItem(activeMasterInspectionItemId, { annotations })} /> : <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500"><Car className="mx-auto mb-2 h-8 w-8 text-slate-300" />No matching GLB is attached in the Vehicle Model Library for this brand and model.</div>}</div>
+        <div className="grid gap-4 sm:grid-cols-2"><Field label="Inspection Date" required><Input type="date" value={masterInspectionForm.inspectionDate} onChange={(event) => setMasterInspectionForm((current) => ({ ...current, inspectionDate: event.target.value }))} /></Field><Field label="Inspected By" required><Input value={masterInspectionForm.inspectedBy} onChange={(event) => setMasterInspectionForm((current) => ({ ...current, inspectedBy: event.target.value }))} /></Field></div>
+        <div className="flex flex-wrap gap-2">{masterInspectionItems.map((item, index) => <Button key={item.id} type="button" size="sm" variant="outline" onClick={() => printMasterInspection([item])}><Printer className="h-4 w-4" /> Print Inspection Detail {index + 1}</Button>)}</div>
+        <div className="space-y-3">{masterInspectionItems.map((item, index) => <div key={item.id} onClick={() => setActiveMasterInspectionItemId(item.id)} className={`rounded-xl border p-4 ${activeMasterInspectionItemId === item.id ? 'border-brand-400 ring-1 ring-brand-300' : 'border-slate-200'}`}><div className="mb-3 flex items-center justify-between"><p className="font-semibold">Inspection Detail {index + 1}</p>{masterInspectionItems.length > 1 && <Button type="button" size="icon" variant="ghost" onClick={() => setMasterInspectionItems((current) => current.filter((entry) => entry.id !== item.id))}><Trash2 className="h-4 w-4 text-red-600" /></Button>}</div><div className="grid gap-4 sm:grid-cols-2"><Field label="Vehicle Part / Activity" required><Select value={item.activity} onChange={(event) => updateMasterInspectionItem(item.id, { activity: event.target.value })}>{inspectionActivities.map((activity) => <option key={activity}>{activity}</option>)}</Select></Field><Field label="Status" required><Select value={item.status} onChange={(event) => updateMasterInspectionItem(item.id, { status: event.target.value })}>{defaultInspectionStatuses.map((status) => <option key={status}>{status}</option>)}</Select></Field><div><Label>Findings</Label><Textarea value={item.findings} onChange={(event) => updateMasterInspectionItem(item.id, { findings: event.target.value })} /></div><div><Label>Action Taken</Label><Textarea value={item.actionTaken} onChange={(event) => updateMasterInspectionItem(item.id, { actionTaken: event.target.value })} /></div><div className="sm:col-span-2"><Label>Recommendation</Label><Textarea value={item.recommendation} onChange={(event) => updateMasterInspectionItem(item.id, { recommendation: event.target.value })} /></div></div><div className="mt-4 grid gap-4 sm:grid-cols-2"><div><div className="mb-2 flex items-center justify-between"><Label>3D Snapshot</Label>{item.snapshot && <Button type="button" size="sm" variant="ghost" onClick={() => updateMasterInspectionItem(item.id, { snapshot: undefined })}><Trash2 className="h-4 w-4 text-red-600" /> Remove</Button>}</div>{item.snapshot ? <img src={item.snapshot.dataUrl} alt="Annotated 3D snapshot" className="max-h-52 rounded-lg border object-contain" /> : <div className="rounded-lg border border-dashed p-6 text-center text-xs text-slate-500">Select this detail and capture a snapshot above.</div>}</div><div><Label>Files / Photo Evidence</Label><div className="mt-2 flex flex-wrap gap-2"><label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-slate-50"><ImagePlus className="h-4 w-4" /> Attach Images<input hidden type="file" accept="image/*" multiple onChange={(event) => void readFiles(event.target.files).then((files) => updateMasterInspectionItem(item.id, { photos: [...(item.photos ?? []), ...files] }))} /></label><label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold hover:bg-slate-50"><Camera className="h-4 w-4" /> Take Picture<input hidden type="file" accept="image/*" capture="environment" onChange={(event) => void readFiles(event.target.files).then((files) => updateMasterInspectionItem(item.id, { photos: [...(item.photos ?? []), ...files] }))} /></label></div>{(item.photos ?? []).length > 0 && <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">{(item.photos ?? []).map((photo, photoIndex) => <div key={`${photo.name}-${photoIndex}`} className="relative overflow-hidden rounded-lg border"><img src={photo.dataUrl} alt={photo.name} className="h-28 w-full object-cover" /><button type="button" onClick={() => updateMasterInspectionItem(item.id, { photos: (item.photos ?? []).filter((_, currentIndex) => currentIndex !== photoIndex) })} className="absolute right-1 top-1 rounded bg-black/70 p-1 text-white hover:bg-red-600"><Trash2 className="h-3.5 w-3.5" /></button><p className="truncate px-2 py-1 text-[10px] text-slate-500">{photo.name}</p></div>)}</div>}</div></div></div>)}</div>
+        <Button type="button" variant="outline" onClick={() => { const item = newInspectionEntry(); setMasterInspectionItems((current) => [...current, item]); setActiveMasterInspectionItemId(item.id); }}><Plus className="h-4 w-4" /> Add Inspection Detail</Button>
+      </div>
+    </Dialog>
+    <div className="hidden">
       <Card className="min-h-[360px] p-4" onClick={() => setSelectedId('')}><div className="mb-3 flex items-center justify-between"><div><h3 className="font-semibold">Vehicle Registry</h3><p className="text-xs text-slate-500">Click to select · double-click to edit</p></div><Button size="sm" onClick={(event) => { event.stopPropagation(); openAddVehicle(); }}><Plus className="h-4 w-4" /> Add</Button></div>
         <div className="mb-3 grid gap-2" onClick={(event) => event.stopPropagation()}><Select aria-label="Filter vehicle registry" value={registryFilterMode} onChange={(event) => { const mode = event.target.value as 'all' | 'department' | 'type'; setRegistryFilterMode(mode); setRegistryFilterValue(mode === 'department' ? registryDepartments[0] ?? '' : mode === 'type' ? registryVehicleTypes[0] ?? '' : ''); }}><option value="all">All Vehicles</option><option value="department">Department</option><option value="type">Vehicle Type</option></Select>{registryFilterMode !== 'all' && <Select aria-label={registryFilterMode === 'department' ? 'Select department' : 'Select vehicle type'} value={registryFilterValue} onChange={(event) => setRegistryFilterValue(event.target.value)}>{(registryFilterMode === 'department' ? registryDepartments : registryVehicleTypes).map((value) => <option key={value}>{registryFilterMode === 'department' ? assignmentDepartments.find((department) => department.id === value)?.name ?? value : value}</option>)}</Select>}</div>
         <div className="space-y-2">{vehicles.length === 0 ? <div className="rounded-lg border border-dashed p-7 text-center text-sm text-slate-500"><Car className="mx-auto mb-2 h-8 w-8 text-slate-300" />Add the first vehicle to begin.</div> : filteredVehicles.length === 0 ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No vehicles match this filter.</div> : filteredVehicles.map((vehicle) => <button key={vehicle.id} onClick={(event) => { event.stopPropagation(); setSelectedId(vehicle.id); }} onDoubleClick={(event) => { event.stopPropagation(); openEditVehicle(vehicle); }} className={`flex w-full gap-3 rounded-lg border p-3 text-left ${selected?.id === vehicle.id ? 'border-brand-300 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'}`}>{vehicle.image ? <img src={vehicle.image.dataUrl} className="h-12 w-16 rounded object-cover" /> : <span className="grid h-12 w-16 place-items-center rounded bg-slate-100"><Car className="h-5 w-5 text-slate-400" /></span>}<span className="min-w-0"><span className="block truncate text-sm font-semibold">{vehicle.brand} {vehicle.model}</span><span className="block text-xs text-slate-500">{vehicle.plateNumber} · {vehicle.type}</span><span className="block text-[11px] text-slate-400">Accountable: {vehicle.custodian || 'Unassigned'}</span></span></button>)}</div>
@@ -571,15 +846,16 @@ export function VehicleFleetManagement() {
         </div></div>
       </div>}</Card>
     </div>
-    <Dialog open={summaryOpen} onClose={() => setSummaryOpen(false)} title="Vehicle Fleet Schedule Summary" description="All vehicles with their next preventive maintenance and registration renewal schedules." size="xl" footer={<div className="flex w-full flex-wrap items-center justify-between gap-2"><div className="flex gap-2"><Button variant="outline" onClick={printFleetSummary}><Printer className="h-4 w-4" /> Print</Button><Button variant="outline" onClick={exportFleetSummary}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button></div><Button onClick={() => setSummaryOpen(false)}>Close</Button></div>}>
-      {vehicles.length === 0 ? <div className="rounded-lg border border-dashed p-10 text-center text-sm text-slate-500">No vehicles registered.</div> : <div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[960px] text-sm"><thead className="bg-slate-50"><tr><th className="w-12 px-3 py-2 text-left">No.</th><th className="px-3 py-2 text-left"><SummarySortButton label="Vehicle" sortKey="vehicle" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Plate No." sortKey="plate" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Department" sortKey="department" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Vehicle Type" sortKey="type" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Preventive Maintenance" sortKey="preventive" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Registration Renewal" sortKey="registration" sort={summarySort} onSort={toggleSummarySort} /></th></tr></thead><tbody className="divide-y divide-slate-100">{summaryVehicles.map((vehicle, index) => { const row = fleetSummaryRow(vehicle); return <tr key={vehicle.id}><td className="px-3 py-3 text-slate-500">{index + 1}</td><td className="px-3 py-3 font-medium">{row.vehicle}</td><td className="px-3 py-3">{row.plate}</td><td className="px-3 py-3">{assignmentDepartments.find((department) => department.id === row.department)?.name ?? row.department}</td><td className="px-3 py-3">{row.type}</td><td className="px-3 py-3 text-xs text-slate-600">{row.preventive}</td><td className="px-3 py-3 text-xs text-slate-600">{row.registration}</td></tr>; })}</tbody></table></div>}
+    <Dialog open={summaryOpen} onClose={() => setSummaryOpen(false)} title="Vehicle Fleet Schedule Summary" description="Oracle vehicle master with preventive maintenance and registration renewal schedules." size="2xl" fixedHeight contentOverflowHidden footer={<div className="flex w-full flex-wrap items-center justify-between gap-2"><div className="flex gap-2"><Button variant="outline" onClick={printFleetSummary}><Printer className="h-4 w-4" /> Print</Button><Button variant="outline" onClick={exportFleetSummary}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button></div><Button onClick={() => setSummaryOpen(false)}>Close</Button></div>}>
+      {summaryScheduleLoading ? <div className="p-10 text-center text-sm text-slate-500">Loading the Oracle fleet schedule summary…</div> : summaryVehicles.length === 0 ? <div className="rounded-lg border border-dashed p-10 text-center text-sm text-slate-500">No vehicles registered.</div> : <div className="h-full overflow-auto rounded-lg border border-slate-200"><table className="w-full min-w-[1080px] text-sm"><thead className="sticky top-0 z-10 bg-slate-50 shadow-sm"><tr><th className="w-12 px-3 py-2 text-left">No.</th><th className="px-3 py-2 text-left"><SummarySortButton label="Vehicle" sortKey="vehicle" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Plate No." sortKey="plate" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Driver" sortKey="driver" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Department" sortKey="department" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Vehicle Type" sortKey="type" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Preventive Maintenance Schedule" sortKey="preventive" sort={summarySort} onSort={toggleSummarySort} /></th><th className="px-3 py-2 text-left"><SummarySortButton label="Registration Renewal Schedule" sortKey="registration" sort={summarySort} onSort={toggleSummarySort} /></th></tr></thead><tbody className="divide-y divide-slate-100">{summaryVehicles.map((vehicle, index) => { const row = fleetSummaryRow(vehicle); return <tr key={vehicle.id}><td className="px-3 py-3 text-slate-500">{index + 1}</td><td className="px-3 py-3 font-medium">{row.vehicle}</td><td className="px-3 py-3">{row.plate}</td><td className="px-3 py-3">{row.driver}</td><td className="px-3 py-3">{assignmentDepartments.find((department) => department.id === row.department)?.name ?? row.department}</td><td className="px-3 py-3">{row.type}</td><td className="px-3 py-3 text-xs text-slate-600">{row.preventive}</td><td className="px-3 py-3 text-xs text-slate-600">{row.registration}</td></tr>; })}</tbody></table></div>}
     </Dialog>
-    <Dialog open={modelLibraryOpen} onClose={() => { if (!savingModelLibrary) setModelLibraryOpen(false); }} title="Vehicle Model Library" description="Add shared brand-model entries and manage the existing library." size="lg" footer={<><Button variant="outline" disabled={savingModelLibrary} onClick={() => setModelLibraryOpen(false)}>Close</Button><Button disabled={savingModelLibrary || !modelLibraryForm.brand.trim() || !modelLibraryForm.model.trim() || !modelLibraryFile} onClick={() => void saveModelLibraryItem()}>{savingModelLibrary ? 'Uploading…' : 'Add Vehicle Model'}</Button></>}>
-      <div className="space-y-5"><div className="grid gap-4 rounded-xl border border-slate-200 p-4 sm:grid-cols-2"><Field label="Vehicle Type"><Select value={modelLibraryForm.type} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, type: event.target.value })}>{['Car','Truck','Motorcycle','Van','Bus','Utility Vehicle','Heavy Equipment','Other'].map((value) => <option key={value}>{value}</option>)}</Select></Field><Field label="Brand" required><Input value={modelLibraryForm.brand} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, brand: event.target.value })} placeholder="e.g. ISUZU" /></Field><Field label="Model" required><Input value={modelLibraryForm.model} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, model: event.target.value })} placeholder="e.g. MUX" /></Field><div><Label required>3D Model (GLB)</Label><Input ref={modelLibraryInputRef} type="file" accept=".glb,model/gltf-binary" onChange={(event) => setModelLibraryFile(event.target.files?.[0])} /></div></div><div><h4 className="mb-2 font-semibold">Available Brand-Models</h4>{vehicleModels.length === 0 ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No shared vehicle models yet.</div> : <div className="divide-y overflow-hidden rounded-lg border border-slate-200">{[...vehicleModels].sort((a, b) => a.brand.localeCompare(b.brand) || a.model.localeCompare(b.model)).map((item) => <button type="button" key={item.id} onClick={() => editModelLibraryItem(item)} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"><div><p className="font-medium">{item.brand} {item.model}</p><p className="text-xs text-slate-500">{item.type} · {item.model3d.name}{item.model3d.size ? ` · ${(item.model3d.size / 1024 / 1024).toFixed(1)} MB` : ''}</p></div><span className="flex items-center gap-2"><Badge>Shared GLB</Badge><Pencil className="h-4 w-4 text-slate-400" /></span></button>)}</div>}</div></div>
+    <Dialog contentOverflowHidden fixedHeight open={modelLibraryOpen} onClose={() => { if (!savingModelLibrary) setModelLibraryOpen(false); }} title="Vehicle Model Library" description="Add shared brand-model entries and manage the existing library." size="lg" footer={<><Button variant="outline" disabled={savingModelLibrary} onClick={() => setModelLibraryOpen(false)}>Close</Button><Button disabled={savingModelLibrary || !modelLibraryForm.brand.trim() || !modelLibraryForm.model.trim() || !modelLibraryFile} onClick={() => void saveModelLibraryItem()}>{savingModelLibrary ? 'Uploading…' : 'Add Vehicle Model'}</Button></>}>
+      <div className="flex h-full min-h-0 flex-col gap-5"><div className="shrink-0 grid gap-4 rounded-xl border border-slate-200 p-4 sm:grid-cols-2"><Field label="Vehicle Type"><Select value={modelLibraryForm.type} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, type: event.target.value })}>{vehicleModelTypes.map((value) => <option key={value}>{value}</option>)}</Select></Field><Field label="Brand" required><Input value={modelLibraryForm.brand} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, brand: event.target.value })} placeholder="e.g. ISUZU" /></Field><Field label="Model" required><Input value={modelLibraryForm.model} onChange={(event) => setModelLibraryForm({ ...modelLibraryForm, model: event.target.value })} placeholder="e.g. MUX" /></Field><div><Label required>3D Model (GLB)</Label><Input ref={modelLibraryInputRef} type="file" accept=".glb,model/gltf-binary" onChange={(event) => setModelLibraryFile(event.target.files?.[0])} /></div></div><div className="flex min-h-0 flex-1 flex-col"><div className="mb-2 flex shrink-0 flex-wrap items-end justify-between gap-2"><div><h4 className="font-semibold">Available Brand-Models</h4><p className="text-xs text-slate-500">{filteredVehicleModels.length} of {vehicleModels.length} models</p></div><Field label="Filter by Vehicle Type"><Select className="w-52" value={modelLibraryTypeFilter} onChange={(event) => setModelLibraryTypeFilter(event.target.value)}><option value="ALL">All vehicle types</option>{vehicleModelTypes.map((value) => <option key={value}>{value}</option>)}</Select></Field></div>{vehicleModels.length === 0 ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No shared vehicle models yet.</div> : filteredVehicleModels.length === 0 ? <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">No brand-model entries match this vehicle type.</div> : <div className="min-h-0 flex-1 divide-y overflow-y-auto rounded-lg border border-slate-200">{filteredVehicleModels.map((item) => <button type="button" key={item.id} onClick={() => editModelLibraryItem(item)} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"><div><p className="font-medium">{item.brand} {item.model}</p><p className="text-xs text-slate-500">{item.type} · {item.model3d ? `${item.model3d.name}${item.model3d.size ? ` · ${(item.model3d.size / 1024 / 1024).toFixed(1)} MB` : ''}` : 'No GLB attached'}</p></div><span className="flex items-center gap-2"><Badge>{item.model3d ? 'Shared GLB' : 'Catalog'}</Badge><Pencil className="h-4 w-4 text-slate-400" /></span></button>)}</div>}</div></div>
     </Dialog>
-    <Dialog open={Boolean(editingModelLibraryId)} onClose={() => { if (!savingModelLibrary) setEditingModelLibraryId(null); }} title="Edit Vehicle Model" description={`Update ${vehicleModels.find((item) => item.id === editingModelLibraryId)?.brand ?? ''} ${vehicleModels.find((item) => item.id === editingModelLibraryId)?.model ?? ''}.`} size="md" footer={<><Button variant="outline" disabled={savingModelLibrary} onClick={() => setEditingModelLibraryId(null)}>Cancel</Button><Button disabled={savingModelLibrary || !editingModelLibraryForm.brand.trim() || !editingModelLibraryForm.model.trim()} onClick={() => void saveEditedModelLibraryItem()}>{savingModelLibrary ? 'Saving…' : 'Save Changes'}</Button></>}>
-      <div className="grid gap-4 sm:grid-cols-2"><Field label="Vehicle Type"><Select value={editingModelLibraryForm.type} onChange={(event) => setEditingModelLibraryForm({ ...editingModelLibraryForm, type: event.target.value })}>{['Car','Truck','Motorcycle','Van','Bus','Utility Vehicle','Heavy Equipment','Other'].map((value) => <option key={value}>{value}</option>)}</Select></Field><Field label="Brand" required><Input value={editingModelLibraryForm.brand} onChange={(event) => setEditingModelLibraryForm({ ...editingModelLibraryForm, brand: event.target.value })} /></Field><Field label="Model" required><Input value={editingModelLibraryForm.model} onChange={(event) => setEditingModelLibraryForm({ ...editingModelLibraryForm, model: event.target.value })} /></Field><div><Label>Replace 3D Model (GLB)</Label><Input ref={editingModelLibraryInputRef} type="file" accept=".glb,model/gltf-binary" onChange={(event) => setEditingModelLibraryFile(event.target.files?.[0])} /><p className="mt-1 text-xs text-slate-500">Leave empty to retain the current shared GLB.</p></div></div>
+    <Dialog open={Boolean(editingModelLibraryId)} onClose={() => { if (!savingModelLibrary) setEditingModelLibraryId(null); }} title="Edit Vehicle Model" description={`Update ${vehicleModels.find((item) => item.id === editingModelLibraryId)?.brand ?? ''} ${vehicleModels.find((item) => item.id === editingModelLibraryId)?.model ?? ''}.`} size="md" footer={<div className="flex w-full items-center justify-between gap-2"><Button variant="destructive" disabled={savingModelLibrary} onClick={() => setModelLibraryDeleteOpen(true)}><Trash2 className="h-4 w-4" /> Delete</Button><div className="flex gap-2"><Button variant="outline" disabled={savingModelLibrary} onClick={() => setEditingModelLibraryId(null)}>Cancel</Button><Button disabled={savingModelLibrary || !editingModelLibraryForm.brand.trim() || !editingModelLibraryForm.model.trim()} onClick={() => void saveEditedModelLibraryItem()}>{savingModelLibrary ? 'Saving…' : 'Save Changes'}</Button></div></div>}>
+      <div className="grid gap-4 sm:grid-cols-2"><Field label="Vehicle Type"><Select value={editingModelLibraryForm.type} onChange={(event) => setEditingModelLibraryForm({ ...editingModelLibraryForm, type: event.target.value })}>{vehicleModelTypes.map((value) => <option key={value}>{value}</option>)}</Select></Field><Field label="Brand" required><Input value={editingModelLibraryForm.brand} onChange={(event) => setEditingModelLibraryForm({ ...editingModelLibraryForm, brand: event.target.value })} /></Field><Field label="Model" required><Input value={editingModelLibraryForm.model} onChange={(event) => setEditingModelLibraryForm({ ...editingModelLibraryForm, model: event.target.value })} /></Field><div><Label>Replace 3D Model (GLB)</Label><Input ref={editingModelLibraryInputRef} type="file" accept=".glb,model/gltf-binary" onChange={(event) => setEditingModelLibraryFile(event.target.files?.[0])} /><p className="mt-1 text-xs text-slate-500">Leave empty to retain the current shared GLB.</p></div></div>
     </Dialog>
+    <ConfirmDialog open={modelLibraryDeleteOpen} onClose={() => setModelLibraryDeleteOpen(false)} onConfirm={() => void deleteModelLibraryItem()} title="Delete Vehicle Model?" description={`Remove ${vehicleModels.find((item) => item.id === editingModelLibraryId)?.brand ?? 'this'} ${vehicleModels.find((item) => item.id === editingModelLibraryId)?.model ?? 'model'} from the library${vehicles.some((vehicle) => vehicle.modelLibraryId === editingModelLibraryId) ? ' and unlink it from assigned fleet records' : ''}? Vehicle records will be retained.`} confirmLabel={savingModelLibrary ? 'Deleting…' : 'Delete Model'} destructive />
     <Dialog open={vehicleOpen} onClose={() => { if (!savingVehicle) setVehicleOpen(false); }} title={editingVehicleId ? 'Edit Vehicle' : 'Add Vehicle'} description={editingVehicleId ? 'Update vehicle assignment, identity, registration, and operating details.' : 'Register a car, truck, motorcycle, or other fleet asset.'} size="lg" footer={<div className="flex w-full items-center justify-between gap-2">{editingVehicleId ? <Button variant="destructive" disabled={savingVehicle} onClick={() => setVehicleDeleteOpen(true)}>Delete Vehicle</Button> : <span />}<div className="flex gap-2"><Button variant="outline" disabled={savingVehicle} onClick={() => setVehicleOpen(false)}>Cancel</Button><Button disabled={savingVehicle || !vehicleForm.brand || !vehicleForm.model || !vehicleForm.plateNumber} onClick={() => void saveVehicle()}>{savingVehicle ? 'Saving…' : editingVehicleId ? 'Save Changes' : 'Save Vehicle'}</Button></div></div>}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Vehicle Type"><Select value={vehicleForm.type} disabled={Boolean(vehicleForm.modelLibraryId)} onChange={(e) => setVehicleForm({...vehicleForm,type:e.target.value})}>{['Car','Truck','Motorcycle','Van','Bus','Utility Vehicle','Heavy Equipment','Other'].map(v=><option key={v}>{v}</option>)}</Select></Field>
@@ -596,7 +872,7 @@ export function VehicleFleetManagement() {
         <Field label="Color"><Input value={vehicleForm.color} onChange={(e)=>setVehicleForm({...vehicleForm,color:e.target.value})}/></Field>
         <Field label="Registration Expiry"><Input type="date" value={vehicleForm.registrationExpiry} onChange={(e)=>setVehicleForm({...vehicleForm,registrationExpiry:e.target.value})}/></Field>
         <div className="sm:col-span-2"><Label>Vehicle Image</Label><Input type="file" accept="image/*" onChange={(e)=>void setImage(e)}/></div>
-        <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-3"><Label>Shared 3D Vehicle Model</Label><p className="mt-1 text-sm text-slate-600">{vehicleForm.modelLibraryId ? `${vehicleModels.find((item) => item.id === vehicleForm.modelLibraryId)?.model3d.name ?? 'GLB model'} from the Vehicle Model Library` : vehicleModel3d ? `${vehicleModel3d.name} — legacy vehicle-specific model` : 'Select a Brand and Model above. Its shared GLB will be used automatically.'}</p></div>
+        <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-3"><Label>Shared 3D Vehicle Model</Label><p className="mt-1 text-sm text-slate-600">{vehicleForm.modelLibraryId ? (vehicleModels.find((item) => item.id === vehicleForm.modelLibraryId)?.model3d?.name ? `${vehicleModels.find((item) => item.id === vehicleForm.modelLibraryId)?.model3d?.name} from the Vehicle Model Library` : 'This catalog entry does not have a GLB attached yet.') : vehicleModel3d ? `${vehicleModel3d.name} — legacy vehicle-specific model` : 'Select a Brand and Model above. Its shared GLB will be used automatically when available.'}</p></div>
         <div className="sm:col-span-2"><Label>Notes</Label><Textarea value={vehicleForm.notes} onChange={(e)=>setVehicleForm({...vehicleForm,notes:e.target.value})}/></div>
       </div>
     </Dialog>
@@ -669,4 +945,9 @@ function ActivitySummaryRow({ title, fields, onClick }: { title: string; fields:
 function SummarySortButton({ label, sortKey, sort, onSort }: { label: string; sortKey: SummarySortKey; sort: { key: SummarySortKey; direction: 'asc' | 'desc' }; onSort: (key: SummarySortKey) => void }) {
   const Icon = sort.key !== sortKey ? ArrowUpDown : sort.direction === 'asc' ? ArrowUp : ArrowDown;
   return <button type="button" onClick={() => onSort(sortKey)} className="inline-flex items-center gap-1 whitespace-nowrap font-semibold hover:text-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label={`Sort by ${label}${sort.key === sortKey ? ` ${sort.direction === 'asc' ? 'descending' : 'ascending'}` : ''}`}>{label}<Icon className="h-3.5 w-3.5" /></button>;
+}
+function MasterSortButton({ label, sortKey, sort, onSort }: { label: string; sortKey: MasterSortKey; sort: { key: MasterSortKey; direction: 'asc' | 'desc' }; onSort: (key: MasterSortKey) => void }) {
+  const Icon = sort.key !== sortKey ? ArrowUpDown : sort.direction === 'asc' ? ArrowUp : ArrowDown;
+  const nextDirection = sort.key === sortKey && sort.direction === 'asc' ? 'descending' : 'ascending';
+  return <button type="button" onClick={() => onSort(sortKey)} className="inline-flex items-center gap-1 whitespace-nowrap font-semibold hover:text-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label={`Sort ${label} ${nextDirection}`} aria-pressed={sort.key === sortKey}>{label}<Icon className="h-3.5 w-3.5" /></button>;
 }

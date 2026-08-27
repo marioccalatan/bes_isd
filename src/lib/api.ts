@@ -47,6 +47,28 @@ export interface DirectoryUser {
   unitName?: string | null;
 }
 
+export interface HrEmployee {
+  employeeNo: string;
+  lastName: string;
+  firstName: string;
+  middleName?: string | null;
+  currentPositionType?: string | null;
+  officialPositionType?: string | null;
+  positionLevel?: string | null;
+  dateHired?: string | null;
+  departmentId?: string | null;
+  departmentShort?: string | null;
+  departmentName?: string | null;
+  jobLevelId?: string | null;
+  jobLevelDescription?: string | null;
+}
+
+export interface HrServiceEvidence { id: string; fileName: string; mimeType: string; fileSize: number; createdAt?: string }
+export interface HrServiceRecord {
+  id: string; employeeNo: string; positionTitle: string; positionLevel?: string | null; monthlySalary?: number | null;
+  effectiveStart: string; effectiveEnd?: string | null; remarks?: string | null; evidence: HrServiceEvidence[];
+}
+
 export interface PerformanceTarget {
   id: string;
   description: string;
@@ -410,6 +432,67 @@ export async function fetchFleetVehicles<T>(token: string) {
     headers: { authorization: `Bearer ${token}` },
   });
   return result.vehicles;
+}
+
+export async function fetchFleetMasterVehicles<T>(token: string) {
+  const result = await apiRequest<{ vehicles: T }>('/api/fleet/master-vehicles', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result.vehicles;
+}
+
+export async function fetchFleetMaintenanceSchedule<T>(token: string) {
+  const result = await apiRequest<{ vehicles: T }>('/api/fleet/maintenance-schedule', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result.vehicles;
+}
+
+export async function fetchFleetMasterVehicleActivity<T>(token: string, vehicleMasterId: string) {
+  return apiRequest<T>(`/api/fleet/master-vehicles/${encodeURIComponent(vehicleMasterId)}/activity`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+export async function createFleetMasterSchedule(token: string, input: { vehicleMasterId: string; scheduleType: 'Preventive Maintenance' | 'Registration Renewal'; startDate: string; endDate: string; notes?: string }) {
+  return apiRequest<{ schedule: { id: string } }>('/api/fleet/master-schedules', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+export async function updateFleetRenewalScheduleStatus(token: string, scheduleUid: string, status: 'Scheduled' | 'In Progress' | 'Registered') {
+  return apiRequest<{ ok: true }>(`/api/fleet/master-schedules/${encodeURIComponent(scheduleUid)}/status`, { method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) });
+}
+
+export async function updateFleetPreventiveMaintenance(token: string, scheduleUid: string, input: { status: 'Scheduled' | 'Completed'; actualDate?: string }) {
+  return apiRequest<{ ok: true }>(`/api/fleet/master-schedules/${encodeURIComponent(scheduleUid)}/maintenance`, { method: 'PATCH', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function createFleetMasterInspection(token: string, input: { vehicleMasterId: string; inspectionDate: string; inspectedBy: string; inspectionStatus: string; items: Array<{ id: string; activity: string; status: string; findings?: string; actionTaken?: string; recommendation?: string; annotations?: unknown[]; snapshot?: { name: string; dataUrl: string }; photos?: { name: string; dataUrl: string }[] }> }) {
+  return apiRequest<{ inspection: { id: string } }>('/api/fleet/master-inspections', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+export async function fetchFleetMasterInspection<T>(token: string, inspectionUid: string) {
+  return apiRequest<{ inspection: T }>(`/api/fleet/master-inspections/${encodeURIComponent(inspectionUid)}`, { headers: { authorization: `Bearer ${token}` } }).then((result) => result.inspection);
+}
+export async function updateFleetMasterInspection(token: string, inspectionUid: string, input: { inspectionDate: string; inspectedBy: string; inspectionStatus: string; items: Array<{ id: string; activity: string; status: string; findings?: string; actionTaken?: string; recommendation?: string; annotations?: unknown[]; snapshot?: { name: string; dataUrl: string }; photos?: { name: string; dataUrl: string }[] }> }) {
+  return apiRequest<{ ok: true }>(`/api/fleet/master-inspections/${encodeURIComponent(inspectionUid)}`, { method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export type FleetRenewalReceipt = { orNumber?: string; receiptDate?: string; amountPaid?: number; issuingOffice?: string; attachment?: { name: string; type: string; size: number } | null };
+export async function fetchFleetRenewalReceipt(token: string, scheduleUid: string) {
+  return apiRequest<{ receipt: FleetRenewalReceipt | null }>(`/api/fleet/renewal-receipts/${encodeURIComponent(scheduleUid)}`, { headers: { authorization: `Bearer ${token}` } });
+}
+export async function saveFleetRenewalReceipt(token: string, scheduleUid: string, input: Omit<FleetRenewalReceipt, 'attachment'> & { attachment?: { name: string; dataUrl: string } }) {
+  return apiRequest<{ ok: true }>(`/api/fleet/renewal-receipts/${encodeURIComponent(scheduleUid)}`, { method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+export async function downloadFleetRenewalReceiptAttachment(token: string, scheduleUid: string, fileName: string) {
+  const response = await fetch(`/api/fleet/renewal-receipts/${encodeURIComponent(scheduleUid)}/attachment`, { headers: { authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error('Unable to download the renewal receipt attachment.');
+  const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = fileName; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+export async function deleteFleetRenewalReceipt(token: string, scheduleUid: string) {
+  return apiRequest<{ ok: true }>(`/api/fleet/renewal-receipts/${encodeURIComponent(scheduleUid)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
 }
 
 export async function saveFleetVehicles<T>(token: string, vehicles: T[]) {
@@ -876,6 +959,51 @@ export async function fetchRecruitmentRecords(token: string) {
     headers: { authorization: `Bearer ${token}` },
   });
   return result.records;
+}
+
+export async function fetchHrEmployees(token: string) {
+  const result = await apiRequest<{ employees: HrEmployee[] }>('/api/hro/employees', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result.employees;
+}
+
+export async function updateHrEmployee(token: string, employeeNo: string, update: Pick<HrEmployee, 'lastName' | 'firstName' | 'middleName' | 'currentPositionType' | 'officialPositionType' | 'positionLevel' | 'dateHired'>) {
+  return apiRequest<{ employee: HrEmployee }>(`/api/hro/employees/${encodeURIComponent(employeeNo)}`, {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify(update),
+  });
+}
+
+export async function fetchHrServiceRecords(token: string, employeeNo: string) {
+  const result = await apiRequest<{ records: HrServiceRecord[] }>(`/api/hro/employees/${encodeURIComponent(employeeNo)}/service-records`, { headers: { authorization: `Bearer ${token}` } });
+  return result.records;
+}
+
+export async function saveHrServiceRecord(token: string, employeeNo: string, record: Omit<HrServiceRecord, 'id' | 'employeeNo' | 'evidence'>, recordId?: string) {
+  const path = recordId ? `/api/hro/service-records/${encodeURIComponent(recordId)}` : `/api/hro/employees/${encodeURIComponent(employeeNo)}/service-records`;
+  return apiRequest<{ record: HrServiceRecord }>(path, { method: recordId ? 'PATCH' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(record) });
+}
+
+export async function deleteHrServiceRecord(token: string, recordId: string) {
+  return apiRequest<{ ok: true }>(`/api/hro/service-records/${encodeURIComponent(recordId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export async function uploadHrServiceEvidence(token: string, recordId: string, file: File) {
+  const response = await fetch(`/api/hro/service-records/${encodeURIComponent(recordId)}/evidence`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name) }, body: file });
+  const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || 'Unable to upload service-record evidence.');
+  return body as { evidence: HrServiceEvidence };
+}
+
+export async function downloadHrServiceEvidence(token: string, evidence: HrServiceEvidence) {
+  const response = await fetch(`/api/hro/service-evidence/${encodeURIComponent(evidence.id)}`, { headers: { authorization: `Bearer ${token}` } });
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'Unable to download evidence.'); }
+  const url = URL.createObjectURL(await response.blob()); const anchor = document.createElement('a'); anchor.href = url; anchor.download = evidence.fileName; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export async function deleteHrServiceEvidence(token: string, evidenceId: string) {
+  return apiRequest<{ ok: true }>(`/api/hro/service-evidence/${encodeURIComponent(evidenceId)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
 }
 
 export async function fetchRecruitmentPositions(token: string) {

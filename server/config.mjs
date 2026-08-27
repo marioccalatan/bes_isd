@@ -15,6 +15,11 @@ export const config = {
   connectString: process.env.ORACLE_CONNECT_STRING ?? 'localhost:1521/FREEPDB1',
   host: process.env.API_HOST ?? '127.0.0.1',
   port: Number(process.env.API_PORT ?? 3001),
+  serverOracle: process.env.SERVER_ORACLE_USER && process.env.SERVER_ORACLE_PASSWORD && process.env.SERVER_ORACLE_CONNECT_STRING ? {
+    user: process.env.SERVER_ORACLE_USER,
+    password: process.env.SERVER_ORACLE_PASSWORD,
+    connectString: process.env.SERVER_ORACLE_CONNECT_STRING,
+  } : null,
 };
 
 if (!config.password) throw new Error('ORACLE_PASSWORD is required. Copy .env.example to .env.local.');
