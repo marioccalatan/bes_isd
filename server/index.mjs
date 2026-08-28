@@ -910,6 +910,37 @@ async function tablePrimaryKeyColumns(connection, tableName) {
   return result.rows.map((row) => row.COLUMN_NAME);
 }
 
+async function canManageBuildingFacilities(connection, user) {
+  if (!user) return false;
+  if (user.APP_ROLE === 'Administrator') return true;
+  const access = await connection.execute(`SELECT
+      (SELECT COUNT(*) FROM bes_user_roles
+        WHERE user_id = :userId AND role_code = 'Administrator' AND is_active = 'Y') administrator_count,
+      (SELECT COUNT(*) FROM bes_tool_access
+        WHERE tool_code = 'Building and Facilities Management System'
+          AND is_active = 'Y'
+          AND tool_status = 'ENABLED'
+          AND access_level IN ('ADMIN', 'EDIT')
+          AND department_code = :departmentCode
+          AND (office_name IS NULL OR LOWER(TRIM(office_name)) = LOWER(TRIM(:unitName)))
+          AND (position_name IS NULL OR LOWER(TRIM(position_name)) = LOWER(TRIM(:positionTitle)))) access_count
+    FROM dual`, {
+    userId: user.USER_ID,
+    departmentCode: user.DEPARTMENT_CODE,
+    unitName: user.UNIT_NAME,
+    positionTitle: user.POSITION_TITLE,
+  });
+  return Number(access.rows[0]?.ADMINISTRATOR_COUNT ?? 0) > 0 || Number(access.rows[0]?.ACCESS_COUNT ?? 0) > 0;
+}
+
+async function requireBuildingFacilitiesManager(token) {
+  if (!token) return null;
+  return withConnection(async (c) => {
+    const user = await currentSessionUser(c, token);
+    return await canManageBuildingFacilities(c, user) ? user : null;
+  });
+}
+
 async function tableIdentityColumns(connection, tableName) {
   const result = await connection.execute(`SELECT column_name FROM user_tab_identity_cols
     WHERE table_name=:tableName ORDER BY column_name`, { tableName });
@@ -1950,6 +1981,7 @@ async function handle(req, res) {
           username: row.USERNAME,
           email: row.EMAIL,
           firstName: row.FIRST_NAME,
+          middleName: row.MIDDLE_NAME,
           lastName: row.LAST_NAME,
           name: [row.FIRST_NAME, row.MIDDLE_NAME, row.LAST_NAME, row.SUFFIX].filter(Boolean).join(' '),
           position: row.POSITION_TITLE,
@@ -3652,9 +3684,7 @@ async function handle(req, res) {
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        const adminRole = await c.execute(`SELECT COUNT(*) role_count FROM bes_user_roles
-          WHERE user_id=:userId AND role_code='Administrator' AND is_active='Y'`, { userId: user.USER_ID });
-        return { ...(await loadBuildingFacilitiesOperations(c)), canManage: user.APP_ROLE === 'Administrator' || Number(adminRole.rows[0]?.ROLE_COUNT || 0) > 0 };
+        return { ...(await loadBuildingFacilitiesOperations(c)), canManage: await canManageBuildingFacilities(c, user) };
       });
       return result ? json(res, 200, result) : json(res, 401, { error: 'Session expired.' });
     }
@@ -3664,16 +3694,14 @@ async function handle(req, res) {
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        const adminRole = await c.execute(`SELECT COUNT(*) role_count FROM bes_user_roles
-          WHERE user_id=:userId AND role_code='Administrator' AND is_active='Y'`, { userId: user.USER_ID });
-        return { ...(await loadBuildingFacilitiesOperations(c, 'Projects')), canManage: user.APP_ROLE === 'Administrator' || Number(adminRole.rows[0]?.ROLE_COUNT || 0) > 0 };
+        return { ...(await loadBuildingFacilitiesOperations(c, 'Projects')), canManage: await canManageBuildingFacilities(c, user) };
       });
       return result ? json(res, 200, result) : json(res, 401, { error: 'Session expired.' });
     }
     if (req.method === 'POST' && req.url === '/api/bfm/facilities') {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to add facilities.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to add facilities.' });
       const body = await readBody(req);
       const name = normalize(body.name);
       const type = normalize(body.type) || 'Facility';
@@ -3703,8 +3731,8 @@ async function handle(req, res) {
     const bfmFacilityMatch = url.pathname.match(/^\/api\/bfm\/facilities\/([^/]+)$/);
     if (req.method === 'PATCH' && bfmFacilityMatch) {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to edit facilities.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to edit facilities.' });
       const facilityUid = decodeURIComponent(bfmFacilityMatch[1]);
       const body = await readBody(req);
       const name = normalize(body.name);
@@ -3728,8 +3756,8 @@ async function handle(req, res) {
     }
     if (req.method === 'DELETE' && bfmFacilityMatch) {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to delete facilities.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to delete facilities.' });
       const facilityUid = decodeURIComponent(bfmFacilityMatch[1]);
       const facilityScope = url.searchParams.get('scope') === 'Projects' ? 'Projects' : 'Operations';
       const result = await withConnection(async (c) => {
@@ -3745,8 +3773,8 @@ async function handle(req, res) {
     }
     if (req.method === 'POST' && req.url === '/api/bfm/personnel') {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to add personnel.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to add personnel.' });
       const body = await readBody(req);
       const name = normalize(body.name);
       if (!name) return json(res, 400, { error: 'Personnel name is required.' });
@@ -3766,8 +3794,8 @@ async function handle(req, res) {
     }
     if (req.method === 'POST' && req.url === '/api/bfm/todos') {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to add facility tasks.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to add facility tasks.' });
       const body = await readBody(req);
       const facilityId = normalize(body.facilityId);
       const title = normalize(body.title);
@@ -3806,8 +3834,8 @@ async function handle(req, res) {
     const bfmTodoMatch = url.pathname.match(/^\/api\/bfm\/todos\/([^/]+)$/);
     if (req.method === 'PATCH' && bfmTodoMatch) {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to edit facility tasks.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to edit facility tasks.' });
       const todoUid = decodeURIComponent(bfmTodoMatch[1]);
       const body = await readBody(req);
       const title = normalize(body.title);
@@ -3846,8 +3874,8 @@ async function handle(req, res) {
     }
     if (req.method === 'DELETE' && bfmTodoMatch) {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to delete facility tasks.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to delete facility tasks.' });
       const todoUid = decodeURIComponent(bfmTodoMatch[1]);
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
@@ -3957,8 +3985,8 @@ async function handle(req, res) {
     }
     if (req.method === 'POST' && req.url === '/api/bfm/projects') {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to add projects.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to add projects.' });
       const body = await readBody(req);
       const facilityId = normalize(body.facilityId);
       const title = normalize(body.title);
@@ -3992,7 +4020,8 @@ async function handle(req, res) {
     const bfmProjectMatch = url.pathname.match(/^\/api\/bfm\/projects\/([^/]+)$/);
     if (req.method === 'PATCH' && bfmProjectMatch) {
       const token = bearerToken(req);
-      if (!token) return json(res, 401, { error: 'Session required.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to edit projects.' });
       const projectUid = decodeURIComponent(bfmProjectMatch[1]);
       const body = await readBody(req);
       const status = ['Planned','In Progress','On Hold','Completed','Cancelled'].includes(normalize(body.status)) ? normalize(body.status) : null;
@@ -4031,8 +4060,8 @@ async function handle(req, res) {
     }
     if (req.method === 'DELETE' && bfmProjectMatch) {
       const token = bearerToken(req);
-      const admin = await requireAdministrator(token);
-      if (!admin) return json(res, 403, { error: 'Administrator access is required to delete projects.' });
+      const manager = await requireBuildingFacilitiesManager(token);
+      if (!manager) return json(res, 403, { error: 'Building and Facilities EDIT or ADMIN access is required to delete projects.' });
       const projectUid = decodeURIComponent(bfmProjectMatch[1]);
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);

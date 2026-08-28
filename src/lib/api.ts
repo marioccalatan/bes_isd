@@ -40,6 +40,7 @@ export interface DirectoryUser {
   username: string;
   name: string;
   firstName: string;
+  middleName?: string | null;
   lastName: string;
   email: string;
   position?: string | null;
