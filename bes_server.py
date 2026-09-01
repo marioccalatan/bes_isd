@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
 LOG = ROOT / "bes_server.log"
-u, g, k = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.kernel32
+u, g, k, shell = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.kernel32, ctypes.windll.shell32
 u.CreateWindowExW.restype = wintypes.HWND
 u.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
                               ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND,
@@ -15,6 +15,8 @@ u.DefWindowProcW.restype = ctypes.c_ssize_t
 u.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 u.LoadCursorW.restype = wintypes.HANDLE
 k.GetModuleHandleW.restype = wintypes.HMODULE
+shell.ShellExecuteW.restype = ctypes.c_void_p
+shell.ShellExecuteW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int]
 WM_DESTROY, WM_PAINT, WM_LBUTTONUP, WM_APP = 2, 0x0F, 0x202, 0x8000
 
 def color(s):
@@ -64,7 +66,13 @@ class App:
         if msg==WM_DESTROY: u.PostQuitMessage(0); return 0
         if msg==WM_LBUTTONUP:
             x,y=lp&0xffff,(lp>>16)&0xffff
-            if 576<=x<=628 and 110<=y<=138 and not self.busy: self.prod=not self.prod; u.InvalidateRect(hwnd,None,True)
+            if 548<=x<=650 and 297<=y<=325:
+                try:
+                    subprocess.run(['clip.exe'],input='\r\n'.join(self.log_lines),text=True,creationflags=0x08000000,check=True)
+                    self.status='Logs copied to clipboard'
+                except (OSError,subprocess.CalledProcessError): self.status='Unable to copy logs'
+                u.InvalidateRect(hwnd,None,True)
+            elif 576<=x<=628 and 110<=y<=138 and not self.busy: self.prod=not self.prod; u.InvalidateRect(hwnd,None,True)
             elif 56<=x<=336 and 219<=y<=264 and not self.busy:
                 self.busy=True; self.status='Restarting...'; u.InvalidateRect(hwnd,None,True); threading.Thread(target=self.work,args=(True,),daemon=True).start()
             elif 348<=x<=628 and 219<=y<=264 and not self.busy:
@@ -88,6 +96,8 @@ class App:
         u.FillRect(dc,ctypes.byref(RECT(56,219,336,264)),start_brush); u.FillRect(dc,ctypes.byref(RECT(348,219,628,264)),stop_brush); g.DeleteObject(start_brush); g.DeleteObject(stop_brush)
         self.text(dc,'Start / Restart',RECT(56,219,336,264),color('#04130a') if not self.busy else MUTED,self.bold,0x25); self.text(dc,'Stop',RECT(348,219,628,264),WHITE if not self.busy else MUTED,self.bold,0x25)
         self.text(dc,'Logs',RECT(34,301,650,326),WHITE,self.bold)
+        copy_brush=g.CreateSolidBrush(color('#1e293b')); u.FillRect(dc,ctypes.byref(RECT(548,297,650,325)),copy_brush); g.DeleteObject(copy_brush)
+        self.text(dc,'Copy Logs',RECT(548,297,650,325),color('#cbd5e1'),self.small,0x25)
         log_brush=g.CreateSolidBrush(color('#070c16')); u.FillRect(dc,ctypes.byref(RECT(34,329,650,545)),log_brush); g.DeleteObject(log_brush)
         for index,line in enumerate(self.log_lines[-13:]):
             lowered=line.lower(); line_color=RED if ('error' in lowered or 'failed' in lowered or 'exception' in lowered) else color('#cbd5e1')
@@ -96,7 +106,7 @@ class App:
     def ports(self): return (5000,) if self.prod else (5173,3001)
     def work(self,start):
         mode='production' if self.prod else 'development'
-        stopped=stop_ports(self.ports())
+        stopped=True if self.prod and start else stop_ports(self.ports())
         reuse_api=start and not self.prod and not pids((5173,)) and bool(pids((3001,)))
         if not stopped and not reuse_api: self.status='Stop failed - run as Administrator'
         elif not start: self.status=mode.title()+' stopped'
@@ -105,8 +115,18 @@ class App:
             if not script.exists(): self.status='Missing '+script.name
             else:
                 try:
-                    log=LOG.open('a',encoding='utf-8'); log.write(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Starting {mode}\n'); log.flush()
-                    subprocess.Popen(['cmd.exe','/d','/c',str(script)],cwd=ROOT,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,creationflags=0x08000000|0x00000200); self.status=mode.title()+' is starting...'
+                    with LOG.open('a',encoding='utf-8') as log:
+                        log.write(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Starting {mode}\n')
+                        if self.prod: log.write('Administrator permission is required. Approve the Windows prompt to continue.\n')
+                    if self.prod:
+                        params=f'/d /c ""{script}" >> "{LOG}" 2>&1 < nul"'
+                        result=shell.ShellExecuteW(self.hwnd,'runas','cmd.exe',params,str(ROOT),0) or 0
+                        if result<=32: raise OSError('Administrator permission was declined or could not be requested.')
+                        self.status='Approve administrator prompt...'
+                    else:
+                        log=LOG.open('a',encoding='utf-8')
+                        subprocess.Popen(['cmd.exe','/d','/c',str(script)],cwd=ROOT,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,creationflags=0x08000000|0x00000200)
+                        self.status=mode.title()+' is starting...'
                 except OSError as e: self.status='Start failed: '+str(e)
         self.busy=False; u.PostMessageW(self.hwnd,WM_APP+1,0,0)
     def poll(self):
