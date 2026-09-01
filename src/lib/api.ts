@@ -64,6 +64,23 @@ export interface HrEmployee {
   jobLevelDescription?: string | null;
 }
 
+export interface OrganizationNode {
+  id: string;
+  parentId?: string | null;
+  type: 'DEPARTMENT' | 'OFFICE' | 'POSITION';
+  code?: string | null;
+  name: string;
+  departmentCode: string;
+  officeShort?: string | null;
+  positionType1?: string | null;
+  positionType2?: string | null;
+  level: number;
+  quantity: number;
+  isPlantilla?: boolean | null;
+  purpose?: string | null;
+  children: OrganizationNode[];
+}
+
 export interface HrServiceEvidence { id: string; fileName: string; mimeType: string; fileSize: number; createdAt?: string }
 export interface HrServiceRecord {
   id: string; employeeNo: string; positionTitle: string; positionLevel?: string | null; monthlySalary?: number | null;
@@ -169,9 +186,39 @@ export interface UserRoleAssignmentInput {
 }
 
 export type OrgPositionClass = 'DEPARTMENT_MANAGER' | 'DEPARTMENT_SECRETARY' | 'OFFICE_SECRETARY' | 'SUPERVISOR' | 'RAF';
-export interface OrgPosition { id: string; title: string; employeeClass: OrgPositionClass }
-export interface OrgOffice { id: string; name: string; parentOfficeId?: string | null; positions: OrgPosition[] }
+export interface OrgPosition { id: string; title: string; employeeClass: OrgPositionClass; level?: number; quantity?: number; isPlantilla?: boolean; purpose?: string | null }
+export interface OrgOffice { id: string; name: string; shortName?: string | null; parentOfficeId?: string | null; positions: OrgPosition[] }
 export interface OrgDepartment { id: string; code: string; name: string; positions: OrgPosition[]; offices: OrgOffice[] }
+export interface HrPositionRequirement { id: string; positionLevel: number; subject: string; qualificationLevel?: string | null; description: string }
+export interface HrProficiencyLevel { profLevel: number; description: string }
+
+export async function fetchHrProficiencyLevels(token: string) {
+  const result = await apiRequest<{ items: HrProficiencyLevel[] }>('/api/hro/proficiency-levels', { headers: { authorization: `Bearer ${token}` } });
+  return result.items;
+}
+
+export async function saveHrProficiencyLevel(token: string, input: HrProficiencyLevel, originalLevel?: number) {
+  return apiRequest<{ ok: true }>(originalLevel == null ? '/api/hro/proficiency-levels' : `/api/hro/proficiency-levels/${originalLevel}`, { method: originalLevel == null ? 'POST' : 'PUT', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function deleteHrProficiencyLevel(token: string, profLevel: number) {
+  return apiRequest<{ ok: true }>(`/api/hro/proficiency-levels/${profLevel}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export type HrPositionDetailKind = 'qualifications' | 'duties' | 'specifications';
+
+export async function fetchHrPositionRequirements(token: string, positionId: string, kind: HrPositionDetailKind) {
+  const result = await apiRequest<{ items: HrPositionRequirement[] }>(`/api/hro/positions/${encodeURIComponent(positionId)}/${kind}`, { headers: { authorization: `Bearer ${token}` } });
+  return result.items;
+}
+
+export async function saveHrPositionRequirement(token: string, positionId: string, kind: HrPositionDetailKind, input: Omit<HrPositionRequirement, 'id'> & { id?: string }) {
+  return apiRequest<{ ok: true }>(input.id ? `/api/hro/${kind}/${input.id}` : `/api/hro/positions/${encodeURIComponent(positionId)}/${kind}`, { method: input.id ? 'PUT' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
+}
+
+export async function deleteHrPositionRequirement(token: string, kind: HrPositionDetailKind, id: string) {
+  return apiRequest<{ ok: true }>(`/api/hro/${kind}/${id}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
 
 export async function fetchRegistrationOptions() {
   const result = await apiRequest<{ departments: OrgDepartment[] }>('/api/auth/registration-options');
@@ -970,6 +1017,25 @@ export async function fetchHrEmployees(token: string) {
     headers: { authorization: `Bearer ${token}` },
   });
   return result.employees;
+}
+
+export async function fetchOrganization(token: string) {
+  const result = await apiRequest<{ organization: OrganizationNode[] }>('/api/hro/organization', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result.organization;
+}
+
+export async function saveOrganizationNode(token: string, input: Record<string, unknown>) {
+  return apiRequest<{ ok: true }>('/api/hro/organization', {
+    method: input.id ? 'PUT' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function deleteOrganizationNode(token: string, id: string) {
+  return apiRequest<{ ok: true }>(`/api/hro/organization/${encodeURIComponent(id)}`, {
+    method: 'DELETE', headers: { authorization: `Bearer ${token}` },
+  });
 }
 
 export async function updateHrEmployee(token: string, employeeNo: string, update: Pick<HrEmployee, 'lastName' | 'firstName' | 'middleName' | 'currentPositionType' | 'officialPositionType' | 'positionLevel' | 'dateHired'>) {

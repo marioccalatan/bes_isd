@@ -1448,9 +1448,9 @@ async function handle(req, res) {
       const structure = await withConnection(async (c) => {
         const user = await currentSessionUser(c, bearerToken(req));
         if (!user) return null;
-        const departments = await c.execute(`SELECT department_id, department_code, department_name FROM bes_departments WHERE is_active='Y' ORDER BY department_name`);
-        const offices = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name FROM bes_offices WHERE is_active='Y' ORDER BY office_name`);
-        const positions = await c.execute(`SELECT position_id, department_id, office_id, position_title, employee_class FROM bes_positions WHERE is_active='Y' ORDER BY position_title`);
+        const departments = await c.execute(`SELECT department_id, department_code, department_name FROM bes_departments WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY CASE WHEN department_code='OGM' THEN 0 ELSE 1 END, department_name`);
+        const offices = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name, office_short FROM bes_offices WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY office_name`);
+        const positions = await c.execute(`SELECT position_id, department_id, office_id, position_title, employee_class, position_level, position_quantity, is_plantilla, position_purpose FROM bes_positions WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY position_title`);
         const ownAssignments = !isPerformanceManager(user) ? await c.execute(`SELECT position_id FROM bes_performance_assignments
           WHERE employee_user_id=:userId AND is_active='Y' AND assignment_mode='INCLUDE'`, { userId: user.USER_ID }) : { rows: [] };
         const ownPositionIds = new Set(ownAssignments.rows.map((assignment) => assignment.POSITION_ID));
@@ -1473,12 +1473,12 @@ async function handle(req, res) {
         return visibleDepartments.map((department) => ({
           id: String(department.DEPARTMENT_ID), code: department.DEPARTMENT_CODE, name: department.DEPARTMENT_NAME,
           positions: visiblePositions.filter((position) => position.DEPARTMENT_ID === department.DEPARTMENT_ID && !position.OFFICE_ID).map((position) => ({
-            id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS,
+            id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS, level: Number(position.POSITION_LEVEL || 4), quantity: Number(position.POSITION_QUANTITY || 1), isPlantilla: position.IS_PLANTILLA === 'Y', purpose: position.POSITION_PURPOSE ?? '',
           })),
           offices: visibleOffices.filter((office) => office.DEPARTMENT_ID === department.DEPARTMENT_ID).map((office) => ({
-            id: String(office.OFFICE_ID), name: office.OFFICE_NAME, parentOfficeId: office.PARENT_OFFICE_ID ? String(office.PARENT_OFFICE_ID) : null,
+            id: String(office.OFFICE_ID), name: office.OFFICE_NAME, shortName: office.OFFICE_SHORT, parentOfficeId: office.PARENT_OFFICE_ID ? String(office.PARENT_OFFICE_ID) : null,
             positions: visiblePositions.filter((position) => position.OFFICE_ID === office.OFFICE_ID).map((position) => ({
-              id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS,
+              id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS, level: Number(position.POSITION_LEVEL || 4), quantity: Number(position.POSITION_QUANTITY || 1), isPlantilla: position.IS_PLANTILLA === 'Y', purpose: position.POSITION_PURPOSE ?? '',
             })),
           })),
         }));
@@ -2888,6 +2888,159 @@ async function handle(req, res) {
       });
       if (result === null) return json(res, 401, { error: 'Session expired.' });
       if (!result) return json(res, 404, { error: 'Policy record not found.' });
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && req.url === '/api/hro/organization') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const [departments, offices, positions] = await Promise.all([
+          c.execute(`SELECT department_id, department_code, department_name FROM bes_departments WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY department_name`),
+          c.execute(`SELECT office_id, department_id, office_name, office_short FROM bes_offices WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY office_name`),
+          c.execute(`SELECT position_id, department_id, office_id, position_title, position_type1, position_type2, position_level, position_quantity, is_plantilla, position_purpose FROM bes_positions WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY position_title`),
+        ]);
+        const nodes = [
+          ...departments.rows.map((row) => ({ id: `D${row.DEPARTMENT_ID}`, parentId: null, type: 'DEPARTMENT', code: row.DEPARTMENT_CODE, name: row.DEPARTMENT_NAME, departmentCode: row.DEPARTMENT_CODE, officeShort: null, positionType1: null, positionType2: null, level: 4, quantity: 1, isPlantilla: null, children: [], sourceRow: 0, sortOrder: 0 })),
+          ...offices.rows.map((row) => ({ id: `O${row.OFFICE_ID}`, parentId: `D${row.DEPARTMENT_ID}`, type: 'OFFICE', code: row.OFFICE_SHORT, name: row.OFFICE_NAME, departmentCode: departments.rows.find((department) => department.DEPARTMENT_ID === row.DEPARTMENT_ID)?.DEPARTMENT_CODE ?? '', officeShort: row.OFFICE_SHORT, positionType1: null, positionType2: null, level: 4, quantity: 1, isPlantilla: null, children: [], sourceRow: 0, sortOrder: 0 })),
+          ...positions.rows.map((row) => ({ id: `P${row.POSITION_ID}`, parentId: row.OFFICE_ID ? `O${row.OFFICE_ID}` : `D${row.DEPARTMENT_ID}`, type: 'POSITION', code: null, name: row.POSITION_TITLE, departmentCode: '', officeShort: row.OFFICE_ID ? offices.rows.find((office) => office.OFFICE_ID === row.OFFICE_ID)?.OFFICE_SHORT ?? null : null, positionType1: row.POSITION_TYPE1, positionType2: row.POSITION_TYPE2, level: Number(row.POSITION_LEVEL ?? 4), quantity: Number(row.POSITION_QUANTITY ?? 1), isPlantilla: row.IS_PLANTILLA === 'Y', purpose: row.POSITION_PURPOSE ?? '', children: [], sourceRow: 0, sortOrder: 0 })),
+        ];
+        const byId = new Map(nodes.map((node) => [node.id, node]));
+        const roots = [];
+        nodes.forEach((node) => { const parent = node.parentId ? byId.get(node.parentId) : null; if (parent) parent.children.push(node); else roots.push(node); });
+        const typeOrder = { DEPARTMENT: 0, OFFICE: 1, POSITION: 2 };
+        const clean = (node) => {
+          node.children.sort((left, right) => (typeOrder[left.type] - typeOrder[right.type]) || (left.sortOrder - right.sortOrder) || (left.sourceRow - right.sourceRow) || left.name.localeCompare(right.name));
+          return { id: node.id, parentId: node.parentId, type: node.type, code: node.code, name: node.name,
+            departmentCode: node.departmentCode, officeShort: node.officeShort, positionType1: node.positionType1,
+            positionType2: node.positionType2, level: node.level, quantity: node.quantity, isPlantilla: node.isPlantilla, purpose: node.purpose ?? '', children: node.children.map(clean) };
+        };
+        return roots.sort((left, right) => left.name.localeCompare(right.name)).map(clean);
+      });
+      return result ? json(res, 200, { organization: result }) : json(res, 401, { error: 'Session expired.' });
+    }
+    if (['POST', 'PUT'].includes(req.method ?? '') && req.url === '/api/hro/organization') {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const body = await readBody(req);
+      const id = Number(String(body.id || '').replace(/^\D+/, '') || 0);
+      const entity = normalize(body.entity).toLowerCase();
+      const result = await withConnection(async (c) => {
+        if (entity === 'department') {
+          const name = normalize(body.name); const code = normalize(body.code).toUpperCase();
+          if (!name || !code) throw Object.assign(new Error('Department name and code are required.'), { statusCode: 400 });
+          if (id) {
+            const updated = await c.execute(`UPDATE bes_departments SET department_code=:code, department_name=:name, is_organization_unit='Y', updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id, code, name });
+            if (!updated.rowsAffected) throw Object.assign(new Error('Department was not found.'), { statusCode: 404 });
+          }
+          else await c.execute(`INSERT INTO bes_departments (department_code,department_name,is_organization_unit) VALUES (:code,:name,'Y')`, { code, name });
+        } else if (entity === 'office') {
+          const name = normalize(body.name); const code = nullableNormalize(body.code)?.toUpperCase() ?? null;
+          const parentId = Number(String(body.parentId || body.departmentId || '').replace(/^\D+/, '') || 0);
+          const parent = await c.execute(`SELECT department_code FROM bes_departments WHERE department_id=:parentId AND is_active='Y'`, { parentId });
+          if (!name || !parent.rows[0]) throw Object.assign(new Error('Office name and parent department are required.'), { statusCode: 400 });
+          if (id) await c.execute(`UPDATE bes_offices SET department_id=:parentId, office_name=:name, office_short=:code, is_organization_unit='Y', updated_at=SYSTIMESTAMP WHERE office_id=:id`, { id, parentId, code, name });
+          else await c.execute(`INSERT INTO bes_offices (department_id,office_name,office_short,is_organization_unit) VALUES (:parentId,:name,:code,'Y')`, { parentId, code, name });
+        } else if (entity === 'position') {
+          const title = normalize(body.title); const employeeClass = normalize(body.employeeClass).toUpperCase(); const purpose = nullableNormalize(body.purpose);
+          const parentKey = String(body.parentId || body.departmentId || body.officeId || '');
+          const parentId = Number(parentKey.replace(/^\D+/, '') || 0);
+          const parentType = parentKey.startsWith('O') ? 'OFFICE' : 'DEPARTMENT';
+          const parent = parentType === 'OFFICE'
+            ? await c.execute(`SELECT office_id FROM bes_offices WHERE office_id=:parentId AND is_active='Y'`, { parentId })
+            : await c.execute(`SELECT department_id FROM bes_departments WHERE department_id=:parentId AND is_active='Y'`, { parentId });
+          const roleMap = { DEPARTMENT_MANAGER: ['Manager','Manager'], DEPARTMENT_SECRETARY: ['Secretary','Rank And File'], OFFICE_SECRETARY: ['Secretary','Rank And File'], SUPERVISOR: ['Supervisor','Supervior'], RAF: ['Personnel','Rank And File'] };
+          if (!title || !parent.rows[0] || !roleMap[employeeClass]) throw Object.assign(new Error('Position title, role, and parent are required.'), { statusCode: 400 });
+          const [type1, type2] = roleMap[employeeClass];
+          const parsedLevel = Number(body.level ?? 4);
+          const level = Number.isInteger(parsedLevel) && parsedLevel >= 1 && parsedLevel <= 5 ? parsedLevel : 4;
+          const hasQuantity = ['SUPERVISOR','RAF','DEPARTMENT_SECRETARY','OFFICE_SECRETARY'].includes(employeeClass);
+          const parsedQuantity = Number(body.quantity ?? 1);
+          const quantity = hasQuantity && Number.isFinite(parsedQuantity) ? Math.max(1, Math.floor(parsedQuantity)) : 1;
+          const isPlantilla = body.isPlantilla === false ? 'N' : 'Y';
+          const departmentId = parentType === 'DEPARTMENT' ? parentId : null; const officeId = parentType === 'OFFICE' ? parentId : null;
+          if (id) await c.execute(`UPDATE bes_positions SET department_id=:departmentId, office_id=:officeId, position_title=:title, employee_class=:employeeClass, position_type1=:type1, position_type2=:type2, position_level=:positionLevel, position_quantity=:quantity, is_plantilla=:isPlantilla, position_purpose=:purpose, is_organization_unit='Y', updated_at=SYSTIMESTAMP WHERE position_id=:id`, { id, departmentId, officeId, title, employeeClass, type1, type2, positionLevel: level, quantity, isPlantilla, purpose });
+          else await c.execute(`INSERT INTO bes_positions (department_id,office_id,position_title,employee_class,position_type1,position_type2,position_level,position_quantity,is_plantilla,position_purpose,is_organization_unit) VALUES (:departmentId,:officeId,:title,:employeeClass,:type1,:type2,:positionLevel,:quantity,:isPlantilla,:purpose,'Y')`, { departmentId, officeId, title, employeeClass, type1, type2, positionLevel: level, quantity, isPlantilla, purpose });
+        } else throw Object.assign(new Error('Entity must be department, office, or position.'), { statusCode: 400 });
+        await c.commit(); return true;
+      });
+      return json(res, 200, { ok: result });
+    }
+    const organizationDeleteMatch = req.url.match(/^\/api\/hro\/organization\/([DP]\d+)$/);
+    if (req.method === 'DELETE' && organizationDeleteMatch) {
+      const admin = await requireAdministrator(bearerToken(req));
+      if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const key = organizationDeleteMatch[1];
+      const id = Number(key.slice(1));
+      const deleted = await withConnection(async (c) => {
+        if (key.startsWith('D')) {
+          await c.execute(`UPDATE bes_positions SET is_active='N', updated_at=SYSTIMESTAMP WHERE department_id=:id OR office_id IN (SELECT office_id FROM bes_offices WHERE department_id=:id)`, { id });
+          await c.execute(`UPDATE bes_offices SET is_active='N', updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id });
+          const result = await c.execute(`UPDATE bes_departments SET is_active='N', updated_at=SYSTIMESTAMP WHERE department_id=:id AND is_active='Y'`, { id });
+          await c.commit(); return { count: Number(result.rowsAffected || 0), type: 'DEPARTMENT' };
+        }
+        const result = await c.execute(`UPDATE bes_positions SET is_active='N', updated_at=SYSTIMESTAMP WHERE position_id=:id AND is_active='Y'`, { id });
+        await c.commit(); return { count: Number(result.rowsAffected || 0), type: 'POSITION' };
+      });
+      return deleted?.count ? json(res, 200, { ok: true }) : json(res, 404, { error: 'Organization record was not found.' });
+    }
+    if (req.method === 'GET' && req.url === '/api/hro/proficiency-levels') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        if (!await currentSessionUser(c, token)) return null;
+        return c.execute(`SELECT prof_level, description FROM bes_hr_proficiency_level ORDER BY prof_level`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { items: result.rows.map((row) => ({ profLevel: Number(row.PROF_LEVEL), description: row.DESCRIPTION })) });
+    }
+    if (req.method === 'POST' && req.url === '/api/hro/proficiency-levels') {
+      const admin = await requireAdministrator(bearerToken(req)); if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const body = await readBody(req); const profLevel = Number(body.profLevel); const description = normalize(body.description);
+      if (!Number.isInteger(profLevel) || profLevel < 1 || profLevel > 5 || !description) throw Object.assign(new Error('Proficiency level 1 to 5 and description are required.'), { statusCode: 400 });
+      await withConnection(async (c) => { await c.execute(`INSERT INTO bes_hr_proficiency_level (prof_level,description) VALUES (:profLevel,:description)`, { profLevel, description }); await c.commit(); });
+      return json(res, 201, { ok: true });
+    }
+    const proficiencyLevelMatch = req.url.match(/^\/api\/hro\/proficiency-levels\/(\d+)$/);
+    if (['PUT','DELETE'].includes(req.method ?? '') && proficiencyLevelMatch) {
+      const admin = await requireAdministrator(bearerToken(req)); if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const originalLevel = Number(proficiencyLevelMatch[1]);
+      if (req.method === 'DELETE') { await withConnection(async (c) => { await c.execute(`DELETE FROM bes_hr_proficiency_level WHERE prof_level=:originalLevel`, { originalLevel }); await c.commit(); }); return json(res, 200, { ok: true }); }
+      const body = await readBody(req); const profLevel = Number(body.profLevel); const description = normalize(body.description);
+      if (!Number.isInteger(profLevel) || profLevel < 1 || profLevel > 5 || !description) throw Object.assign(new Error('Proficiency level 1 to 5 and description are required.'), { statusCode: 400 });
+      await withConnection(async (c) => { await c.execute(`UPDATE bes_hr_proficiency_level SET prof_level=:profLevel,description=:description,updated_at=SYSTIMESTAMP WHERE prof_level=:originalLevel`, { profLevel, description, originalLevel }); await c.commit(); });
+      return json(res, 200, { ok: true });
+    }
+    const positionRequirementMatch = req.url.match(/^\/api\/hro\/positions\/(?:P)?(\d+)\/(qualifications|duties|specifications)$/);
+    if (req.method === 'GET' && positionRequirementMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const positionId = Number(positionRequirementMatch[1]); const kind = positionRequirementMatch[2];
+      const result = await withConnection(async (c) => {
+        if (!await currentSessionUser(c, token)) return null;
+        const table = kind === 'qualifications' ? 'bes_hr_qualifications' : kind === 'duties' ? 'bes_hr_duties' : 'bes_hr_job_spec';
+        const idColumn = kind === 'qualifications' ? 'qualification_id' : kind === 'duties' ? 'duty_id' : 'job_spec_id';
+        const subjectColumn = kind === 'specifications' ? 'specification' : 'subject';
+        return c.execute(`SELECT ${idColumn} item_id, position_level, ${subjectColumn} subject, ${kind === 'qualifications' ? 'qualification_level,' : ''} description FROM ${table} WHERE position_id=:positionId AND is_active='Y' ORDER BY position_level, sort_order, ${idColumn}`, { positionId });
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { items: result.rows.map((row) => ({ id: String(row.ITEM_ID), positionLevel: Number(row.POSITION_LEVEL), subject: row.SUBJECT, qualificationLevel: row.QUALIFICATION_LEVEL ?? null, description: row.DESCRIPTION ?? '' })) });
+    }
+    if (req.method === 'POST' && positionRequirementMatch) {
+      const admin = await requireAdministrator(bearerToken(req)); if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const positionId = Number(positionRequirementMatch[1]); const kind = positionRequirementMatch[2]; const body = await readBody(req);
+      const positionLevel = Math.min(5, Math.max(1, Number(body.positionLevel || 4))); const subject = normalize(body.subject); const description = nullableNormalize(body.description); const qualificationLevel = nullableNormalize(body.qualificationLevel);
+      if (!subject) throw Object.assign(new Error('Subject is required.'), { statusCode: 400 });
+      await withConnection(async (c) => { if (kind === 'qualifications') await c.execute(`INSERT INTO bes_hr_qualifications (position_id,position_level,subject,qualification_level,description) VALUES (:positionId,:positionLevel,:subject,:qualificationLevel,:description)`, { positionId, positionLevel, subject, qualificationLevel, description }); else if (kind === 'duties') await c.execute(`INSERT INTO bes_hr_duties (position_id,position_level,subject,description) VALUES (:positionId,:positionLevel,:subject,:description)`, { positionId, positionLevel, subject, description }); else await c.execute(`INSERT INTO bes_hr_job_spec (position_id,position_level,specification,description) VALUES (:positionId,:positionLevel,:subject,:description)`, { positionId, positionLevel, subject, description }); await c.commit(); });
+      return json(res, 201, { ok: true });
+    }
+    const requirementItemMatch = req.url.match(/^\/api\/hro\/(qualifications|duties|specifications)\/(\d+)$/);
+    if (['PUT','DELETE'].includes(req.method ?? '') && requirementItemMatch) {
+      const admin = await requireAdministrator(bearerToken(req)); if (!admin) return json(res, 401, { error: 'Administrator session required.' });
+      const kind = requirementItemMatch[1]; const itemId = Number(requirementItemMatch[2]); const table = kind === 'qualifications' ? 'bes_hr_qualifications' : kind === 'duties' ? 'bes_hr_duties' : 'bes_hr_job_spec'; const idColumn = kind === 'qualifications' ? 'qualification_id' : kind === 'duties' ? 'duty_id' : 'job_spec_id';
+      if (req.method === 'DELETE') { await withConnection(async (c) => { await c.execute(`UPDATE ${table} SET is_active='N', updated_at=SYSTIMESTAMP WHERE ${idColumn}=:itemId`, { itemId }); await c.commit(); }); return json(res, 200, { ok: true }); }
+      const body = await readBody(req); const positionLevel = Math.min(5, Math.max(1, Number(body.positionLevel || 4))); const subject = normalize(body.subject); const description = nullableNormalize(body.description); const qualificationLevel = nullableNormalize(body.qualificationLevel);
+      if (!subject) throw Object.assign(new Error('Subject is required.'), { statusCode: 400 });
+      await withConnection(async (c) => { if (kind === 'qualifications') await c.execute(`UPDATE bes_hr_qualifications SET position_level=:positionLevel,subject=:subject,qualification_level=:qualificationLevel,description=:description,updated_at=SYSTIMESTAMP WHERE qualification_id=:itemId`, { itemId, positionLevel, subject, qualificationLevel, description }); else if (kind === 'duties') await c.execute(`UPDATE bes_hr_duties SET position_level=:positionLevel,subject=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE duty_id=:itemId`, { itemId, positionLevel, subject, description }); else await c.execute(`UPDATE bes_hr_job_spec SET position_level=:positionLevel,specification=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE job_spec_id=:itemId`, { itemId, positionLevel, subject, description }); await c.commit(); });
       return json(res, 200, { ok: true });
     }
     if (req.method === 'GET' && req.url === '/api/hro/employees') {

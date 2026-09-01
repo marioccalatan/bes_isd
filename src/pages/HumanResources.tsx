@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, Download, Paperclip, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { BarChart3, BriefcaseBusiness, Building2, ChevronDown, ChevronRight, Download, FileSpreadsheet, Network, Paperclip, Pencil, Plus, Printer, Search, Settings, Trash2 } from 'lucide-react';
 import { HroTaskProcessingDrawer } from '@/components/shared/HroTaskProcessingDrawer';
 import { MemberProgramsCsr } from '@/components/member-programs/MemberProgramsCsr';
 import { MemberProgramsOperations } from '@/components/member-programs/MemberProgramsOperations';
@@ -12,14 +12,14 @@ import { Button } from '@/components/ui/button';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { Pagination } from '@/components/ui/pagination';
 import { Drawer } from '@/components/ui/drawer';
-import { Dialog } from '@/components/ui/dialog';
-import { Input, Label, Select, Textarea } from '@/components/ui/input';
+import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
+import { Checkbox, Input, Label, Select, Textarea } from '@/components/ui/input';
 import { Tabs } from '@/components/ui/tabs';
 import { useData } from '@/context/DataContext';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { exportToCsv } from '@/hooks/useTableControls';
-import { deleteHrServiceEvidence, deleteHrServiceRecord, downloadHrServiceEvidence, fetchCsrRequests, fetchHrEmployees, fetchHrServiceRecords, fetchHroToolTaskProcessing, fetchUserDirectory, saveHrServiceRecord, updateHrEmployee, uploadHrServiceEvidence, type DirectoryUser, type HrEmployee, type HrServiceRecord, type PolicyTaskProcessing } from '@/lib/api';
+import { deleteHrPositionRequirement, deleteHrProficiencyLevel, deleteHrServiceEvidence, deleteHrServiceRecord, deleteOrganizationNode, downloadHrServiceEvidence, fetchCsrRequests, fetchHrEmployees, fetchHrPositionRequirements, fetchHrProficiencyLevels, fetchHrServiceRecords, fetchHroToolTaskProcessing, fetchOrganization, fetchUserDirectory, saveHrPositionRequirement, saveHrProficiencyLevel, saveHrServiceRecord, saveOrganizationNode, updateHrEmployee, uploadHrServiceEvidence, type DirectoryUser, type HrEmployee, type HrPositionDetailKind, type HrPositionRequirement, type HrProficiencyLevel, type HrServiceRecord, type OrganizationNode, type PolicyTaskProcessing } from '@/lib/api';
 import type { Priority, WorkItem } from '@/lib/types';
 import type { WorkspaceModuleDef, WorkspaceRecord } from '@/lib/workspace';
 import { formatDate } from '@/lib/utils';
@@ -31,6 +31,96 @@ const STATUS_STYLES: Record<WorkspaceRecord['status'], string> = {
   Ongoing: 'border-brand-200 bg-brand-50 text-brand-700',
   Scheduled: 'border-slate-200 bg-slate-100 text-slate-600',
 };
+
+function organizationDescendantCount(node: OrganizationNode, type: OrganizationNode['type']): number {
+  return node.children.reduce((total, child) => total + (child.type === type ? (type === 'POSITION' ? child.quantity : 1) : 0) + organizationDescendantCount(child, type), 0);
+}
+
+function prioritizeGeneralManagerOffice(nodes: OrganizationNode[]): OrganizationNode[] {
+  return [...nodes].sort((left, right) => {
+    const leftIsOgm = left.code?.toUpperCase() === 'OGM';
+    const rightIsOgm = right.code?.toUpperCase() === 'OGM';
+    return leftIsOgm === rightIsOgm ? 0 : leftIsOgm ? -1 : 1;
+  });
+}
+
+type OrganizationReportRow = { department: string; departmentCode: string; office: string; officeShort: string; position: string; role: string; level: number | ''; quantity: number | ''; plantilla: string };
+
+function organizationReportRows(nodes: OrganizationNode[]): OrganizationReportRow[] {
+  const rows: OrganizationReportRow[] = [];
+  for (const department of prioritizeGeneralManagerOffice(nodes)) {
+    for (const position of department.children.filter((node) => node.type === 'POSITION')) rows.push({ department: department.name, departmentCode: department.code ?? '', office: '', officeShort: '', position: position.name, role: position.positionType1 ?? '', level: position.level || 4, quantity: position.quantity || 1, plantilla: position.isPlantilla ? 'Yes' : 'No' });
+    for (const office of department.children.filter((node) => node.type === 'OFFICE')) {
+      const positions = office.children.filter((node) => node.type === 'POSITION');
+      if (!positions.length) rows.push({ department: department.name, departmentCode: department.code ?? '', office: office.name, officeShort: office.officeShort ?? office.code ?? '', position: '', role: '', level: '', quantity: '', plantilla: '' });
+      for (const position of positions) rows.push({ department: department.name, departmentCode: department.code ?? '', office: office.name, officeShort: office.officeShort ?? office.code ?? '', position: position.name, role: position.positionType1 ?? '', level: position.level || 4, quantity: position.quantity || 1, plantilla: position.isPlantilla ? 'Yes' : 'No' });
+    }
+  }
+  return rows;
+}
+
+const escapeOrganizationReport = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ?? character);
+
+function orderedOrganizationChildren(node: OrganizationNode): Array<{ child: OrganizationNode; extraDepth: number }> {
+  const positions = node.children.filter((child) => child.type === 'POSITION');
+  const branches = node.children.filter((child) => child.type !== 'POSITION');
+  const role = (position: OrganizationNode) => (position.positionType1 ?? '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  if (node.type === 'DEPARTMENT') {
+    const managers = positions.filter((position) => role(position).includes('MANAGER'));
+    const secretaries = positions.filter((position) => role(position).includes('SECRETARY'));
+    const remaining = positions.filter((position) => !role(position).includes('MANAGER') && !role(position).includes('SECRETARY'));
+    return [
+      ...managers.map((child) => ({ child, extraDepth: 1 })),
+      ...remaining.map((child) => ({ child, extraDepth: 2 })),
+      ...secretaries.map((child) => ({ child, extraDepth: 2 })),
+      ...branches.map((child) => ({ child, extraDepth: 1 })),
+    ];
+  }
+  const supervisors = positions.filter((position) => role(position).includes('SUPERVISOR') || role(position).includes('OFFICER'));
+  const personnel = positions.filter((position) => !role(position).includes('SUPERVISOR') && !role(position).includes('OFFICER'));
+  return [
+    ...supervisors.map((child) => ({ child, extraDepth: 1 })),
+    ...personnel.map((child) => ({ child, extraDepth: 2 })),
+    ...branches.map((child) => ({ child, extraDepth: 1 })),
+  ];
+}
+
+type OrganizationEditor = { entity: 'department' | 'office' | 'position'; id?: string; parentId?: string; scopeType?: 'DEPARTMENT' | 'OFFICE'; code?: string; name?: string; title?: string; employeeClass?: string; level?: number; quantity?: number; isPlantilla?: boolean; purpose?: string };
+const organizationRoleNeedsQuantity = (role?: string) => ['SUPERVISOR', 'RAF', 'DEPARTMENT_SECRETARY', 'OFFICE_SECRETARY'].includes(role ?? '');
+
+function OrganizationBranch({ node, depth = 0, canEdit, onAddOffice, onAddPosition, onEditDepartment, onEditPosition, onRequirements }: { node: OrganizationNode; depth?: number; canEdit?: boolean; onAddOffice: (department: OrganizationNode) => void; onAddPosition: (parent: OrganizationNode) => void; onEditDepartment: (department: OrganizationNode) => void; onEditPosition: (position: OrganizationNode) => void; onRequirements: (position: OrganizationNode, kind: 'qualifications' | 'duties') => void }) {
+  const [collapsed, setCollapsed] = useState(node.type === 'DEPARTMENT');
+  const isPosition = node.type === 'POSITION';
+  const positionIndent = Math.min(depth, 3) * 32;
+  if (isPosition) return <div className="relative flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-surface px-3 py-2.5 text-left before:absolute before:-left-4 before:top-1/2 before:h-px before:w-4 before:bg-slate-300" style={{ marginLeft: `${positionIndent}px`, width: `calc(100% - ${positionIndent}px)` }}>
+    <BriefcaseBusiness className="h-4 w-4 shrink-0 text-slate-400" />
+    <button type="button" disabled={!canEdit} onClick={() => onEditPosition(node)} className={`min-w-0 flex-1 text-left text-sm font-medium text-slate-700 ${canEdit ? 'hover:text-brand-700' : 'cursor-default'}`}>{node.name}</button>
+    <Button variant="outline" size="sm" onClick={() => onRequirements(node, 'qualifications')}>Job Details</Button>
+    {node.positionType1 && <Badge>{node.positionType1}</Badge>}
+    {node.quantity > 1 && <Badge>Qty {node.quantity}</Badge>}
+    <Badge className={node.isPlantilla ? 'border-brand-200 bg-brand-50 text-brand-700' : 'border-slate-200 bg-slate-100 text-slate-600'}>{node.isPlantilla ? 'Plantilla' : 'Non-plantilla'}</Badge>
+  </div>;
+  const officeCount = organizationDescendantCount(node, 'OFFICE');
+  const positionCount = organizationDescendantCount(node, 'POSITION');
+  return <div className={node.type === 'DEPARTMENT' ? 'overflow-hidden rounded-xl border border-slate-200 bg-surface' : ''} style={node.type === 'OFFICE' ? { marginLeft: `${Math.min(depth, 2) * 20}px` } : undefined}>
+    <div className={`flex items-center transition hover:bg-brand-50/40 ${node.type === 'OFFICE' ? 'rounded-lg border border-slate-200 bg-slate-50' : ''}`}>
+      <button type="button" onClick={() => setCollapsed((value) => !value)} className={`flex min-w-0 flex-1 items-center gap-3 text-left ${node.type === 'DEPARTMENT' ? 'px-4 py-3.5' : 'px-3 py-3'}`}>
+        {collapsed ? <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" /> : <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />}
+        {node.type === 'DEPARTMENT' ? <Building2 className="h-5 w-5 shrink-0 text-brand-600" /> : <Network className="h-4 w-4 shrink-0 text-brand-600" />}
+        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-900">{node.name}</span><span className="block text-xs text-slate-500">{node.code || node.officeShort}</span></span>
+        <span className="text-xs text-slate-500">{node.type === 'DEPARTMENT' ? `${officeCount} ${officeCount === 1 ? 'office' : 'offices'} · ${positionCount} ${positionCount === 1 ? 'position' : 'positions'}` : `${positionCount} ${positionCount === 1 ? 'position' : 'positions'}`}</span>
+      </button>
+      {canEdit && node.type === 'DEPARTMENT' && <button type="button" aria-label={`Edit ${node.name}`} onClick={() => onEditDepartment(node)} className="mr-3 rounded-md border border-slate-200 bg-surface p-2 text-slate-500 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"><Pencil className="h-4 w-4" /></button>}
+    </div>
+    {!collapsed && <div className={node.type === 'DEPARTMENT' ? 'space-y-2 border-t border-slate-100 px-4 py-3' : 'mt-2 space-y-2 border-l-2 border-slate-200 pl-1'}>
+      {canEdit && <div className="flex flex-wrap gap-2 pb-1" style={{ marginLeft: `${Math.min(depth + 1, 3) * 16}px` }}>
+        {node.type === 'DEPARTMENT' && <Button variant="outline" size="sm" onClick={() => onAddOffice(node)}><Plus className="h-3.5 w-3.5" /> Add Office</Button>}
+        <Button variant="outline" size="sm" onClick={() => onAddPosition(node)}><Plus className="h-3.5 w-3.5" /> Add Position</Button>
+      </div>}
+      {orderedOrganizationChildren(node).map(({ child, extraDepth }) => <OrganizationBranch key={child.id} node={child} depth={depth + extraDepth} canEdit={canEdit} onAddOffice={onAddOffice} onAddPosition={onAddPosition} onEditDepartment={onEditDepartment} onEditPosition={onEditPosition} onRequirements={onRequirements} />)}
+    </div>}
+  </div>;
+}
 
 export default function HumanResources({ module, taskSubject }: { module: WorkspaceModuleDef; taskSubject?: string }) {
   const { token, user } = useAuth();
@@ -56,6 +146,22 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   const [newTaskSubject, setNewTaskSubject] = useState('Corporate Social Responsibility');
   const [employees, setEmployees] = useState<HrEmployee[]>([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [organization, setOrganization] = useState<OrganizationNode[]>([]);
+  const [organizationLoading, setOrganizationLoading] = useState(false);
+  const [organizationEditor, setOrganizationEditor] = useState<OrganizationEditor | null>(null);
+  const [organizationSaving, setOrganizationSaving] = useState(false);
+  const [organizationDelete, setOrganizationDelete] = useState<{ id: string; name: string; entity: 'department' | 'position' } | null>(null);
+  const [requirementPanel, setRequirementPanel] = useState<{ position: OrganizationNode; kind: HrPositionDetailKind } | null>(null);
+  const [requirements, setRequirements] = useState<HrPositionRequirement[]>([]);
+  const [requirementLevelTab, setRequirementLevelTab] = useState('1');
+  const [requirementForm, setRequirementForm] = useState<{ id?: string; positionLevel: number; subject: string; qualificationLevel: string; description: string }>({ positionLevel: 4, subject: '', qualificationLevel: '', description: '' });
+  const [requirementEditorOpen, setRequirementEditorOpen] = useState(false);
+  const [requirementSaving, setRequirementSaving] = useState(false);
+  const [organizationSettingsOpen, setOrganizationSettingsOpen] = useState(false);
+  const [organizationSettingsTab, setOrganizationSettingsTab] = useState('proficiency-levels');
+  const [proficiencyLevels, setProficiencyLevels] = useState<HrProficiencyLevel[]>([]);
+  const [proficiencyForm, setProficiencyForm] = useState<{ originalLevel?: number; profLevel: number; description: string }>({ profLevel: 1, description: '' });
+  const [proficiencySaving, setProficiencySaving] = useState(false);
   const [employeeFilters, setEmployeeFilters] = useState<Record<string, string>>({});
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeSortKey, setEmployeeSortKey] = useState<string | null>('lastName');
@@ -71,6 +177,185 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   const [editingServiceRecordId, setEditingServiceRecordId] = useState<string | null>(null);
   const emptyServiceForm = { positionTitle: '', positionLevel: '', monthlySalary: '', effectiveStart: '', effectiveEnd: '', remarks: '' };
   const [serviceForm, setServiceForm] = useState(emptyServiceForm);
+  const canEditOrganization = user?.role === 'Administrator' || user?.roles?.includes('Administrator');
+
+  function printOrganization() {
+    const rows = organizationReportRows(organization);
+    const reportWindow = window.open('', '_blank');
+    if (!reportWindow) { toast({ kind: 'error', title: 'Unable to open print report', description: 'Allow pop-ups for this site, then try again.' }); return; }
+    const body = rows.map((row) => `<tr><td>${escapeOrganizationReport(row.department)}</td><td>${escapeOrganizationReport(row.departmentCode)}</td><td>${escapeOrganizationReport(row.office)}</td><td>${escapeOrganizationReport(row.officeShort)}</td><td>${escapeOrganizationReport(row.position)}</td><td>${escapeOrganizationReport(row.role)}</td><td>${row.level}</td><td>${row.quantity}</td><td>${row.plantilla}</td></tr>`).join('');
+    reportWindow.document.open();
+    reportWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>BES Organizational Structure</title><style>body{font:11px Arial,sans-serif;color:#111;padding:24px}h1{font-size:20px;margin:0}p{color:#555;margin:5px 0 18px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #aaa;padding:6px;text-align:left;vertical-align:top}th{background:#dfeee5}@page{size:landscape;margin:12mm}@media print{body{padding:0}}</style></head><body><h1>BENECO Organizational Structure</h1><p>Department → Office → Position hierarchy · Printed ${escapeOrganizationReport(new Date().toLocaleString())}</p><table><thead><tr><th>Department</th><th>Code</th><th>Office</th><th>Office Short</th><th>Position</th><th>Role</th><th>Level</th><th>Quantity</th><th>Plantilla</th></tr></thead><tbody>${body}</tbody></table></body></html>`);
+    reportWindow.document.close();
+    reportWindow.focus();
+    window.setTimeout(() => reportWindow.print(), 350);
+  }
+
+  function exportOrganizationToExcel() {
+    const rows = organizationReportRows(organization);
+    const body = rows.map((row) => `<tr><td>${escapeOrganizationReport(row.department)}</td><td>${escapeOrganizationReport(row.departmentCode)}</td><td>${escapeOrganizationReport(row.office)}</td><td>${escapeOrganizationReport(row.officeShort)}</td><td>${escapeOrganizationReport(row.position)}</td><td>${escapeOrganizationReport(row.role)}</td><td>${row.level}</td><td>${row.quantity}</td><td>${row.plantilla}</td></tr>`).join('');
+    const workbook = `<html><head><meta charset="utf-8"><style>table{border-collapse:collapse}th,td{border:1px solid #999;padding:6px}th{background:#dfeee5}</style></head><body><h2>BENECO Organizational Structure</h2><table><thead><tr><th>Department</th><th>Department Code</th><th>Office</th><th>Office Short</th><th>Position</th><th>Organizational Role</th><th>Level</th><th>Quantity</th><th>Plantilla</th></tr></thead><tbody>${body}</tbody></table></body></html>`;
+    const url = URL.createObjectURL(new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8' }));
+    const link = document.createElement('a'); link.href = url; link.download = `bes-organization-${new Date().toISOString().slice(0, 10)}.xls`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function saveOrganizationChange() {
+    if (!token || !organizationEditor) return;
+    setOrganizationSaving(true);
+    try {
+      await saveOrganizationNode(token, organizationEditor);
+      const refreshed = await fetchOrganization(token);
+      setOrganization(refreshed);
+      setOrganizationEditor(null);
+      toast({ kind: 'success', title: 'Organizational structure updated', description: 'The change was saved to Oracle.' });
+    } catch (error) {
+      toast({ kind: 'error', title: 'Unable to save organization', description: error instanceof Error ? error.message : 'Please try again.' });
+    } finally { setOrganizationSaving(false); }
+  }
+
+  async function removeOrganizationPosition() {
+    if (!token || !organizationDelete) return;
+    setOrganizationSaving(true);
+    try {
+      await deleteOrganizationNode(token, organizationDelete.id);
+      setOrganization(await fetchOrganization(token));
+      setOrganizationDelete(null); setOrganizationEditor(null);
+      toast({ kind: 'success', title: `${organizationDelete.entity === 'department' ? 'Department' : 'Position'} deleted`, description: organizationDelete.entity === 'department' ? 'The department and its complete hierarchy were removed from the active organization.' : 'The position was removed from the active hierarchy.' });
+    } catch (error) {
+      toast({ kind: 'error', title: `Unable to delete ${organizationDelete.entity}`, description: error instanceof Error ? error.message : 'Please try again.' });
+    } finally { setOrganizationSaving(false); }
+  }
+
+  async function openRequirements(position: OrganizationNode, kind: HrPositionDetailKind) {
+    if (!token) return;
+    setRequirementPanel({ position, kind });
+    setRequirementLevelTab('1');
+    setRequirementForm({ positionLevel: position.level || 4, subject: '', qualificationLevel: '', description: '' });
+    try {
+      const [items, levels] = await Promise.all([fetchHrPositionRequirements(token, position.id, kind), fetchHrProficiencyLevels(token)]);
+      setRequirements(items); setProficiencyLevels(levels);
+    }
+    catch (error) { toast({ kind: 'error', title: 'Unable to load position details', description: error instanceof Error ? error.message : 'Please try again.' }); }
+  }
+
+  async function switchRequirementKind(kind: HrPositionDetailKind) {
+    if (!token || !requirementPanel || requirementPanel.kind === kind) return;
+    setRequirementPanel((current) => current ? { ...current, kind } : current);
+    setRequirementLevelTab('1');
+    setRequirements([]);
+    try { setRequirements(await fetchHrPositionRequirements(token, requirementPanel.position.id, kind)); }
+    catch (error) { toast({ kind: 'error', title: 'Unable to load job details', description: error instanceof Error ? error.message : 'Please try again.' }); }
+  }
+
+  async function printJobDetails() {
+    if (!token || !requirementPanel) return;
+    const reportWindow = window.open('', '_blank');
+    if (!reportWindow) { toast({ kind: 'error', title: 'Unable to open print report', description: 'Allow pop-ups for this site, then try again.' }); return; }
+    try {
+      const [qualifications, duties, specifications, levels] = await Promise.all([
+        fetchHrPositionRequirements(token, requirementPanel.position.id, 'qualifications'),
+        fetchHrPositionRequirements(token, requirementPanel.position.id, 'duties'),
+        fetchHrPositionRequirements(token, requirementPanel.position.id, 'specifications'),
+        fetchHrProficiencyLevels(token),
+      ]);
+      const matrixLevels = [...new Set([...qualifications, ...duties, ...specifications].map((item) => item.positionLevel))].sort((left, right) => left - right);
+      const qualificationMatrix = new Map<string, { qualification: string; competency: string; values: Record<number, string> }>();
+      for (const item of qualifications) {
+        const associatedPrefix = /^Competency associated with:\s*/i;
+        const hasAssociatedQualification = associatedPrefix.test(item.description || '');
+        const qualification = hasAssociatedQualification ? item.description.replace(associatedPrefix, '').trim() : item.subject;
+        const competency = hasAssociatedQualification ? item.subject : (item.qualificationLevel || item.description || 'General requirement');
+        const key = `${qualification}\u0000${competency}`;
+        const row = qualificationMatrix.get(key) ?? { qualification, competency, values: {} };
+        const proficiencyMatch = (item.qualificationLevel || '').match(/(?:competency\s+level|proficiency\s+level|level)\s*(\d+)/i);
+        row.values[item.positionLevel] = proficiencyMatch?.[1] || 'Required';
+        qualificationMatrix.set(key, row);
+      }
+      const qualificationHeaders = matrixLevels.map((level) => `<th class="level-column">Position Level ${level}</th>`).join('');
+      const qualificationRows = [...qualificationMatrix.values()].map((row, index) => `<tr><td class="item-number">${index + 1}</td><td>${escapeOrganizationReport(row.qualification)}</td><td>${escapeOrganizationReport(row.competency)}</td>${matrixLevels.map((level) => `<td class="level-value">${escapeOrganizationReport(row.values[level] || '')}</td>`).join('')}</tr>`).join('');
+      const dutyMatrix = new Map<string, { subject: string; description: string; values: Record<number, string> }>();
+      for (const item of duties) {
+        const key = `${item.subject}\u0000${item.description || ''}`;
+        const row = dutyMatrix.get(key) ?? { subject: item.subject, description: item.description || '', values: {} };
+        row.values[item.positionLevel] = '✓';
+        dutyMatrix.set(key, row);
+      }
+      const dutyGroups = new Map<string, Array<{ description: string; values: Record<number, string> }>>();
+      for (const row of dutyMatrix.values()) dutyGroups.set(row.subject, [...(dutyGroups.get(row.subject) || []), { description: row.description, values: row.values }]);
+      let dutyItemNumber = 0;
+      const dutyRows = [...dutyGroups.entries()].map(([subject, rows]) => `<tr class="subject-row"><td colspan="${2 + matrixLevels.length}">${escapeOrganizationReport(subject)}</td></tr>${rows.map((row) => { dutyItemNumber += 1; return `<tr><td class="item-number">${dutyItemNumber}</td><td>${escapeOrganizationReport(row.description)}</td>${matrixLevels.map((level) => `<td class="level-value check-mark">${escapeOrganizationReport(row.values[level] || '')}</td>`).join('')}</tr>`; }).join('')}`).join('');
+      const specificationRows = specifications.map((item, index) => `<tr><td class="item-number">${index + 1}</td><td>${escapeOrganizationReport(item.subject)}</td><td>${escapeOrganizationReport(item.description || '')}</td><td class="level-value">${item.positionLevel}</td></tr>`).join('');
+      const levelRows = levels.map((item) => `<tr><td>${item.profLevel}</td><td>${escapeOrganizationReport(item.description)}</td></tr>`).join('');
+      reportWindow.document.open();
+      reportWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeOrganizationReport(requirementPanel.position.name)} Job Details</title><style>body{font:10px Arial,sans-serif;color:#111;padding:24px}h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:22px 0 7px}p{margin:4px 0 12px;line-height:1.45}.meta{color:#555}.purpose{padding:10px;border:1px solid #aaa;background:#f5f5f5}table{width:100%;border-collapse:collapse;margin-bottom:16px;table-layout:fixed}th,td{border:1px solid #999;padding:6px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#dfeee5}.item-number{width:4%;text-align:center;vertical-align:middle}.qualification-matrix th:nth-child(2),.qualification-matrix td:nth-child(2){width:28%}.qualification-matrix th:nth-child(3),.qualification-matrix td:nth-child(3){width:24%}.duty-matrix th:nth-child(2),.duty-matrix td:nth-child(2){width:60%}.subject-row td{background:#eaf4ee;font-weight:bold;font-size:11px;padding:7px}.level-column{text-align:center;width:8%}.level-value{text-align:center;font-size:12px;font-weight:bold;vertical-align:middle}.level-value.check-mark{font-family:Arial,'Segoe UI Symbol',sans-serif;font-size:16px}@page{size:landscape;margin:10mm}@media print{body{padding:0}}</style></head><body><h1>${escapeOrganizationReport(requirementPanel.position.name)}</h1><p class="meta">Complete Job Details · Printed ${escapeOrganizationReport(new Date().toLocaleString())}</p>${requirementPanel.position.purpose ? `<h2>Position Purpose</h2><p class="purpose">${escapeOrganizationReport(requirementPanel.position.purpose)}</p>` : ''}<h2>Job Specifications</h2><table><thead><tr><th class="item-number">No.</th><th>Specification</th><th>Description</th><th style="width:90px">Position Level</th></tr></thead><tbody>${specificationRows || '<tr><td colspan="4">No job specifications recorded.</td></tr>'}</tbody></table><h2>Proficiency Level Guide</h2><table><thead><tr><th style="width:70px">Level</th><th>Description</th></tr></thead><tbody>${levelRows || '<tr><td colspan="2">No proficiency levels configured.</td></tr>'}</tbody></table><h2>Qualifications and Competencies Matrix</h2><table class="qualification-matrix"><thead><tr><th class="item-number">No.</th><th>Qualification</th><th>Competencies</th>${qualificationHeaders}</tr></thead><tbody>${qualificationRows || `<tr><td colspan="${3 + matrixLevels.length}">No qualifications recorded.</td></tr>`}</tbody></table><h2>Duties &amp; Responsibilities Matrix</h2><table class="duty-matrix"><thead><tr><th class="item-number">No.</th><th>Duties &amp; Responsibilities</th>${qualificationHeaders}</tr></thead><tbody>${dutyRows || `<tr><td colspan="${2 + matrixLevels.length}">No duties recorded.</td></tr>`}</tbody></table></body></html>`);
+      reportWindow.document.close(); reportWindow.focus(); window.setTimeout(() => reportWindow.print(), 350);
+    } catch (error) {
+      reportWindow.close();
+      toast({ kind: 'error', title: 'Unable to print job details', description: error instanceof Error ? error.message : 'Please try again.' });
+    }
+  }
+
+  async function openOrganizationSettings() {
+    if (!token) return;
+    setOrganizationSettingsTab('proficiency-levels');
+    setProficiencyForm({ profLevel: 1, description: '' });
+    setOrganizationSettingsOpen(true);
+    try { setProficiencyLevels(await fetchHrProficiencyLevels(token)); }
+    catch (error) { toast({ kind: 'error', title: 'Unable to load organization settings', description: error instanceof Error ? error.message : 'Please try again.' }); }
+  }
+
+  async function submitProficiencyLevel() {
+    if (!token || !proficiencyForm.description.trim()) return;
+    setProficiencySaving(true);
+    try {
+      await saveHrProficiencyLevel(token, { profLevel: proficiencyForm.profLevel, description: proficiencyForm.description.trim() }, proficiencyForm.originalLevel);
+      setProficiencyLevels(await fetchHrProficiencyLevels(token));
+      setProficiencyForm({ profLevel: 1, description: '' });
+      toast({ kind: 'success', title: 'Proficiency level saved', description: 'The proficiency definition was saved to Oracle.' });
+    } catch (error) { toast({ kind: 'error', title: 'Unable to save proficiency level', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setProficiencySaving(false); }
+  }
+
+  async function removeProficiencyLevel(profLevel: number) {
+    if (!token) return;
+    setProficiencySaving(true);
+    try {
+      await deleteHrProficiencyLevel(token, profLevel);
+      setProficiencyLevels((current) => current.filter((item) => item.profLevel !== profLevel));
+      if (proficiencyForm.originalLevel === profLevel) setProficiencyForm({ profLevel: 1, description: '' });
+      toast({ kind: 'success', title: 'Proficiency level deleted', description: `Level ${profLevel} was removed.` });
+    } catch (error) { toast({ kind: 'error', title: 'Unable to delete proficiency level', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setProficiencySaving(false); }
+  }
+
+  function openRequirementEditor(item?: HrPositionRequirement) {
+    setRequirementForm(item
+      ? { id: item.id, positionLevel: item.positionLevel, subject: item.subject, qualificationLevel: item.qualificationLevel || '', description: item.description }
+      : { positionLevel: Number(requirementLevelTab), subject: '', qualificationLevel: '', description: '' });
+    setRequirementEditorOpen(true);
+  }
+
+  async function saveRequirement() {
+    if (!token || !requirementPanel || !requirementForm.subject.trim()) return;
+    setRequirementSaving(true);
+    try {
+      await saveHrPositionRequirement(token, requirementPanel.position.id, requirementPanel.kind, { ...requirementForm, subject: requirementForm.subject.trim(), qualificationLevel: requirementForm.qualificationLevel.trim() || null, description: requirementForm.description.trim() });
+      setRequirements(await fetchHrPositionRequirements(token, requirementPanel.position.id, requirementPanel.kind));
+      setRequirementLevelTab(String(requirementForm.positionLevel));
+      setRequirementForm({ positionLevel: requirementForm.positionLevel, subject: '', qualificationLevel: '', description: '' });
+      setRequirementEditorOpen(false);
+      toast({ kind: 'success', title: requirementPanel.kind === 'qualifications' ? 'Qualification saved' : requirementPanel.kind === 'duties' ? 'Duty saved' : 'Job specification saved', description: 'The position detail was saved to Oracle.' });
+    } catch (error) { toast({ kind: 'error', title: 'Unable to save', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setRequirementSaving(false); }
+  }
+
+  async function removeRequirement(item: HrPositionRequirement) {
+    if (!token || !requirementPanel) return;
+    setRequirementSaving(true);
+    try { await deleteHrPositionRequirement(token, requirementPanel.kind, item.id); setRequirements((current) => current.filter((entry) => entry.id !== item.id)); }
+    catch (error) { toast({ kind: 'error', title: 'Unable to delete', description: error instanceof Error ? error.message : 'Please try again.' }); }
+    finally { setRequirementSaving(false); }
+  }
 
   useEffect(() => {
     if (!taskOpen || !token) return;
@@ -124,6 +409,17 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
       .finally(() => { if (!cancelled) setEmployeesLoading(false); });
     return () => { cancelled = true; };
   }, [module.id, toast, token]);
+
+  useEffect(() => {
+    if (!token || module.id !== 'human-resources' || tab !== 'organization' || organization.length) return;
+    let cancelled = false;
+    setOrganizationLoading(true);
+    fetchOrganization(token)
+      .then((items) => { if (!cancelled) setOrganization(items); })
+      .catch((error) => { if (!cancelled) toast({ kind: 'error', title: 'Unable to load organization', description: error instanceof Error ? error.message : 'Please try again.' }); })
+      .finally(() => { if (!cancelled) setOrganizationLoading(false); });
+    return () => { cancelled = true; };
+  }, [module.id, organization.length, tab, toast, token]);
 
   const tasks = useMemo(() => workItems.filter((item) => {
     if (module.id === 'member-programs') {
@@ -317,13 +613,22 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
       </div>}
 
       <Tabs
-        tabs={[{ value: 'tasks', label: 'Tasks', count: tasks.length }, ...(module.id === 'member-programs' ? [{ value: 'csr', label: 'CSR', count: csrCount }, { value: 'community-relations', label: 'Community Relations', count: communityRelationsCount }, { value: 'operations', label: 'Operations' }, { value: 'programs', label: 'Programs' }] : [...(module.id === 'human-resources' ? [{ value: 'employees', label: 'Employees', count: employees.length }] : []), { value: 'records', label: 'Records', count: module.records.length }]) ]}
+        tabs={[{ value: 'tasks', label: 'Tasks', count: tasks.length }, ...(module.id === 'member-programs' ? [{ value: 'csr', label: 'CSR', count: csrCount }, { value: 'community-relations', label: 'Community Relations', count: communityRelationsCount }, { value: 'operations', label: 'Operations' }, { value: 'programs', label: 'Programs' }] : [...(module.id === 'human-resources' ? [{ value: 'employees', label: 'Employees', count: employees.length }, { value: 'organization', label: 'Organization', count: organization.length || undefined }] : []), { value: 'records', label: 'Records', count: module.records.length }]) ]}
         value={tab}
         onChange={(value) => { setTab(value); setSearch(''); }}
         className="mb-5"
       />
 
-      {tab === 'csr' ? <MemberProgramsCsr onCountChange={setCsrCount} /> : tab === 'community-relations' ? <MemberProgramsCsr onCountChange={setCommunityRelationsCount} programType="Linkages" title="Linkages" description="Community linkages, evaluation, project requirements, events, and funding." requestLabel="Request" /> : tab === 'operations' ? <MemberProgramsOperations /> : tab === 'programs' ? <MemberProgramsPrograms /> : tab === 'employees' ? <Card>
+      {tab === 'csr' ? <MemberProgramsCsr onCountChange={setCsrCount} /> : tab === 'community-relations' ? <MemberProgramsCsr onCountChange={setCommunityRelationsCount} programType="Linkages" title="Linkages" description="Community linkages, evaluation, project requirements, events, and funding." requestLabel="Request" /> : tab === 'operations' ? <MemberProgramsOperations /> : tab === 'programs' ? <MemberProgramsPrograms /> : tab === 'organization' ? <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-3"><div><CardTitle>Organizational Structure</CardTitle><p className="mt-1 text-sm text-slate-500">Live Department → Office → Position hierarchy from BES_DEPARTMENTS, BES_OFFICES, and BES_POSITIONS.</p></div><div className="flex flex-wrap justify-end gap-2">{canEditOrganization && <Button variant="outline" onClick={() => void openOrganizationSettings()}><Settings className="h-4 w-4" /> Settings</Button>}<Button variant="outline" onClick={printOrganization} disabled={!organization.length}><Printer className="h-4 w-4" /> Print</Button><Button variant="outline" onClick={exportOrganizationToExcel} disabled={!organization.length}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button>{canEditOrganization && <Button onClick={() => setOrganizationEditor({ entity: 'department', name: '', code: '' })}><Plus className="h-4 w-4" /> Add Department</Button>}</div></CardHeader>
+        <CardContent>
+          {organizationLoading ? <p className="py-12 text-center text-sm text-slate-500">Loading organizational structure…</p> : organization.length ? <div className="space-y-3">{prioritizeGeneralManagerOffice(organization).map((department) => <OrganizationBranch key={department.id} node={department} canEdit={canEditOrganization} onAddOffice={(parent) => setOrganizationEditor({ entity: 'office', parentId: parent.id, name: '', code: '' })} onAddPosition={(parent) => setOrganizationEditor({ entity: 'position', parentId: parent.id, scopeType: parent.type as 'DEPARTMENT' | 'OFFICE', title: '', employeeClass: parent.type === 'DEPARTMENT' ? 'DEPARTMENT_MANAGER' : 'SUPERVISOR', level: 4, quantity: 1, isPlantilla: true })} onEditDepartment={(item) => setOrganizationEditor({ entity: 'department', id: item.id, name: item.name, code: item.code ?? '' })} onEditPosition={(position) => {
+            const role = (position.positionType1 ?? '').toUpperCase();
+            const employeeClass = role.includes('MANAGER') ? 'DEPARTMENT_MANAGER' : role.includes('SECRETARY') ? (position.officeShort ? 'OFFICE_SECRETARY' : 'DEPARTMENT_SECRETARY') : role.includes('SUPERVISOR') || role.includes('OFFICER') ? 'SUPERVISOR' : 'RAF';
+            setOrganizationEditor({ entity: 'position', id: position.id, parentId: position.parentId ?? undefined, scopeType: position.officeShort ? 'OFFICE' : 'DEPARTMENT', title: position.name, employeeClass, level: position.level || 4, quantity: position.quantity || 1, isPlantilla: position.isPlantilla !== false, purpose: position.purpose || '' });
+          }} onRequirements={(position, kind) => void openRequirements(position, kind)} />)}</div> : <p className="rounded-xl border border-dashed border-slate-300 py-12 text-center text-sm text-slate-500">No active organization records found.</p>}
+        </CardContent>
+      </Card> : tab === 'employees' ? <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div><CardTitle>Active Employees</CardTitle>
           <p className="mt-1 text-sm text-slate-500">Current employee masterfile records joined with the department lookup.</p></div>
@@ -368,6 +673,46 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
           )}
         </CardContent>
       </Card>}
+
+      <Dialog open={!!organizationEditor} onClose={() => { if (!organizationSaving) setOrganizationEditor(null); }} title={`${organizationEditor?.id ? 'Edit' : 'Add'} ${organizationEditor?.entity === 'department' ? 'Department' : organizationEditor?.entity === 'office' ? 'Office' : 'Position'}`} size="sm" footer={<>{organizationEditor?.id && ['department', 'position'].includes(organizationEditor.entity) && <Button variant="destructive" disabled={organizationSaving} onClick={() => setOrganizationDelete({ id: organizationEditor.id!, name: organizationEditor.entity === 'department' ? organizationEditor.name || 'this department' : organizationEditor.title || 'this position', entity: organizationEditor.entity as 'department' | 'position' })}><Trash2 className="h-4 w-4" /> Delete</Button>}<Button variant="outline" disabled={organizationSaving} onClick={() => setOrganizationEditor(null)}>Cancel</Button><Button disabled={organizationSaving || !organizationEditor || (organizationEditor.entity === 'department' ? !organizationEditor.name?.trim() || !organizationEditor.code?.trim() : organizationEditor.entity === 'office' ? !organizationEditor.name?.trim() : !organizationEditor.title?.trim())} onClick={() => void saveOrganizationChange()}>{organizationSaving ? 'Saving…' : organizationEditor?.id ? 'Update' : 'Save'}</Button></>}>
+        {organizationEditor && <div className="space-y-4">
+          {organizationEditor.entity === 'position' && <div><Label>Purpose</Label><Textarea value={organizationEditor.purpose ?? ''} onChange={(event) => setOrganizationEditor({ ...organizationEditor, purpose: event.target.value })} rows={4} placeholder="Describe the primary purpose of this position." /></div>}
+          {organizationEditor.entity === 'department' && <><div><Label required>Department Name</Label><Input value={organizationEditor.name ?? ''} onChange={(event) => setOrganizationEditor({ ...organizationEditor, name: event.target.value })} placeholder="Institutional Services Department" autoFocus /></div><div><Label required>Initials / Code</Label><Input value={organizationEditor.code ?? ''} onChange={(event) => setOrganizationEditor({ ...organizationEditor, code: event.target.value.toUpperCase() })} placeholder="ISD" /></div></>}
+          {organizationEditor.entity === 'office' && <><div><Label required>Office Name</Label><Input value={organizationEditor.name ?? ''} onChange={(event) => setOrganizationEditor({ ...organizationEditor, name: event.target.value })} placeholder="Human Resource Office" autoFocus /></div><div><Label>Office Short</Label><Input value={organizationEditor.code ?? ''} onChange={(event) => setOrganizationEditor({ ...organizationEditor, code: event.target.value.toUpperCase() })} placeholder="HRO" /></div></>}
+          {organizationEditor.entity === 'position' && <><div><Label required>Position Title</Label><Input value={organizationEditor.title ?? ''} onChange={(event) => setOrganizationEditor({ ...organizationEditor, title: event.target.value })} autoFocus /></div><div><Label required>Organizational Role</Label><Select value={organizationEditor.employeeClass ?? ''} onChange={(event) => setOrganizationEditor({ ...organizationEditor, employeeClass: event.target.value, quantity: 1 })}>{organizationEditor.scopeType === 'DEPARTMENT' ? <><option value="DEPARTMENT_MANAGER">Department Manager</option><option value="RAF">Personnel</option><option value="DEPARTMENT_SECRETARY">Department Secretary</option></> : <><option value="SUPERVISOR">Officer / Supervisor</option><option value="RAF">Personnel</option><option value="OFFICE_SECRETARY">Office Secretary</option></>}</Select></div><div><Label required>Level</Label><Select value={String(organizationEditor.level ?? 4)} onChange={(event) => setOrganizationEditor({ ...organizationEditor, level: Number(event.target.value) })}>{[1, 2, 3, 4, 5].map((level) => <option key={level} value={level}>{level}</option>)}</Select></div>{organizationRoleNeedsQuantity(organizationEditor.employeeClass) && <div><Label required>Quantity</Label><Input type="number" min="1" step="1" value={organizationEditor.quantity ?? 1} onChange={(event) => setOrganizationEditor({ ...organizationEditor, quantity: Math.max(1, Number(event.target.value) || 1) })} /><p className="mt-1 text-xs text-slate-500">Stores the number of plantilla positions without creating duplicate rows.</p></div>}<label className="flex items-center gap-2 text-sm text-slate-700"><Checkbox checked={organizationEditor.isPlantilla !== false} onChange={(event) => setOrganizationEditor({ ...organizationEditor, isPlantilla: event.target.checked })} /> Plantilla position</label></>}
+        </div>}
+      </Dialog>
+      <ConfirmDialog open={!!organizationDelete} onClose={() => setOrganizationDelete(null)} onConfirm={() => void removeOrganizationPosition()} title={`Delete ${organizationDelete?.entity === 'department' ? 'Department' : 'Position'}?`} description={organizationDelete?.entity === 'department' ? `Remove ${organizationDelete.name} and all of its offices and positions from the active hierarchy?` : `Remove ${organizationDelete?.name ?? 'this position'} from the active organizational hierarchy?`} confirmLabel={organizationSaving ? 'Deleting…' : 'Delete'} destructive />
+
+      <Dialog open={organizationSettingsOpen} onClose={() => { if (!proficiencySaving) setOrganizationSettingsOpen(false); }} title="Organization Settings" description="Configure Human Resources organization reference data." size="lg" footer={<Button variant="outline" onClick={() => setOrganizationSettingsOpen(false)}>Close</Button>}>
+        <Tabs tabs={[{ value: 'proficiency-levels', label: 'Proficiency Levels', count: proficiencyLevels.length }]} value={organizationSettingsTab} onChange={setOrganizationSettingsTab} className="mb-5" />
+        {organizationSettingsTab === 'proficiency-levels' && <div className="space-y-5">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="mb-3 text-sm font-semibold text-slate-900">{proficiencyForm.originalLevel == null ? 'Add Proficiency Level' : `Edit Proficiency Level ${proficiencyForm.originalLevel}`}</p>
+            <div className="grid gap-3 sm:grid-cols-[140px_1fr]"><div><Label required>PROF_LEVEL</Label><Select value={String(proficiencyForm.profLevel)} onChange={(event) => setProficiencyForm((current) => ({ ...current, profLevel: Number(event.target.value) }))}>{[1,2,3,4,5].map((level) => <option key={level} value={level}>{level}</option>)}</Select></div><div><Label required>DESCRIPTION</Label><Textarea value={proficiencyForm.description} onChange={(event) => setProficiencyForm((current) => ({ ...current, description: event.target.value }))} rows={3} placeholder="Describe the proficiency level." /></div></div>
+            <div className="mt-3 flex justify-end gap-2">{proficiencyForm.originalLevel != null && <Button variant="outline" onClick={() => setProficiencyForm({ profLevel: 1, description: '' })}>Cancel Edit</Button>}<Button disabled={proficiencySaving || !proficiencyForm.description.trim()} onClick={() => void submitProficiencyLevel()}>{proficiencySaving ? 'Saving…' : proficiencyForm.originalLevel == null ? 'Add Level' : 'Update Level'}</Button></div>
+          </div>
+          <div className="space-y-2">{proficiencyLevels.map((item) => <div key={item.profLevel} className="flex items-start gap-3 rounded-lg border border-slate-200 p-4"><Badge>Level {item.profLevel}</Badge><p className="min-w-0 flex-1 text-sm leading-6 text-slate-700">{item.description}</p><div className="flex gap-1"><Button variant="outline" size="sm" onClick={() => setProficiencyForm({ originalLevel: item.profLevel, profLevel: item.profLevel, description: item.description })}>Edit</Button><Button variant="destructive" size="sm" disabled={proficiencySaving} onClick={() => void removeProficiencyLevel(item.profLevel)}>Delete</Button></div></div>)}{!proficiencyLevels.length && <p className="rounded-lg border border-dashed border-slate-300 py-8 text-center text-sm text-slate-500">No proficiency levels configured.</p>}</div>
+        </div>}
+      </Dialog>
+
+      <Dialog open={!!requirementPanel} onClose={() => { setRequirementEditorOpen(false); setRequirementPanel(null); }} title="Job Details" description={requirementPanel ? `${requirementPanel.position.name} · Level ${requirementPanel.position.level || 4}` : undefined} size="2xl" headerActions={<><Button variant="outline" size="sm" onClick={() => void printJobDetails()}><Printer className="h-4 w-4" /> Print</Button>{canEditOrganization && <Button size="sm" onClick={() => openRequirementEditor()}><Plus className="h-4 w-4" /> Add {requirementPanel?.kind === 'qualifications' ? 'Qualification' : requirementPanel?.kind === 'duties' ? 'Duty' : 'Specification'}</Button>}</>} footer={<Button variant="outline" onClick={() => setRequirementPanel(null)}>Close</Button>}>
+        <div className="space-y-4">
+          <Tabs className="!overflow-visible flex-wrap" tabs={[{ value: 'qualifications', label: 'Qualifications' }, { value: 'duties', label: 'Duties & Responsibilities' }, { value: 'specifications', label: 'Specifications' }]} value={requirementPanel?.kind ?? 'qualifications'} onChange={(value) => void switchRequirementKind(value as HrPositionDetailKind)} />
+          <Tabs className="!overflow-visible flex-wrap" tabs={[1,2,3,4,5].map((level) => ({ value: String(level), label: `Level ${level}`, count: requirements.filter((item) => item.positionLevel === level).length }))} value={requirementLevelTab} onChange={setRequirementLevelTab} />
+          {requirementPanel?.kind === 'qualifications' && proficiencyLevels.length > 0 && <div className="rounded-lg border border-brand-100 bg-brand-50/60 px-4 py-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-700">Proficiency Level Guide</p><div className="grid gap-2 lg:grid-cols-3">{proficiencyLevels.map((item) => <p key={item.profLevel} className="text-xs leading-5 text-slate-600"><span className="font-semibold text-slate-800">Level {item.profLevel}:</span> {item.description}</p>)}</div></div>}
+          <div className="space-y-2">{requirements.filter((item) => item.positionLevel === Number(requirementLevelTab)).map((item) => <div key={item.id} className="flex items-start gap-3 rounded-lg border border-slate-200 p-3"><Badge>Level {item.positionLevel}</Badge><div className="min-w-0 flex-1"><p className="font-semibold text-slate-900">{item.subject}</p>{item.qualificationLevel && <p className="mt-0.5 text-sm font-medium text-brand-700">{item.qualificationLevel}</p>}<p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{item.description || '—'}</p></div>{canEditOrganization && <div className="flex gap-1"><Button variant="outline" size="sm" onClick={() => openRequirementEditor(item)}>Edit</Button><Button variant="destructive" size="sm" disabled={requirementSaving} onClick={() => void removeRequirement(item)}>Delete</Button></div>}</div>)}{!requirements.some((item) => item.positionLevel === Number(requirementLevelTab)) && <p className="rounded-lg border border-dashed border-slate-300 py-8 text-center text-sm text-slate-500">No records added for Level {requirementLevelTab} yet.</p>}</div>
+        </div>
+      </Dialog>
+
+      <Dialog open={requirementEditorOpen} onClose={() => { if (!requirementSaving) setRequirementEditorOpen(false); }} title={`${requirementForm.id ? 'Edit' : 'Add'} ${requirementPanel?.kind === 'qualifications' ? 'Qualification' : requirementPanel?.kind === 'duties' ? 'Duty' : 'Job Specification'}`} description={requirementPanel?.position.name} size="sm" footer={<><Button variant="outline" disabled={requirementSaving} onClick={() => setRequirementEditorOpen(false)}>Cancel</Button><Button disabled={requirementSaving || !requirementForm.subject.trim()} onClick={() => void saveRequirement()}>{requirementSaving ? 'Saving…' : requirementForm.id ? 'Update' : 'Add'}</Button></>}>
+        <div className="space-y-4">
+          <div><Label>Position Level</Label><Select value={String(requirementForm.positionLevel)} onChange={(event) => setRequirementForm((current) => ({ ...current, positionLevel: Number(event.target.value) }))}>{[1,2,3,4,5].map((level) => <option key={level} value={level}>{level}</option>)}</Select></div>
+          <div><Label required>{requirementPanel?.kind === 'specifications' ? 'Specification' : 'Subject'}</Label><Input value={requirementForm.subject} onChange={(event) => setRequirementForm((current) => ({ ...current, subject: event.target.value }))} placeholder={requirementPanel?.kind === 'qualifications' ? 'e.g. Driving Skills' : requirementPanel?.kind === 'duties' ? 'Duty or responsibility' : 'e.g. Educational Attainment, License, Sex, Age'} autoFocus /></div>
+          {requirementPanel?.kind === 'qualifications' && <div><Label>Qualification / Requirement</Label><Input value={requirementForm.qualificationLevel} onChange={(event) => setRequirementForm((current) => ({ ...current, qualificationLevel: event.target.value }))} placeholder="e.g. Licensed, College Graduate" /></div>}
+          <div><Label>Description</Label><Textarea value={requirementForm.description} onChange={(event) => setRequirementForm((current) => ({ ...current, description: event.target.value }))} rows={5} placeholder={requirementPanel?.kind === 'specifications' ? 'e.g. College graduate, Licensed Electrical Engineer, 21–35 years old' : 'Describe the qualification or responsibility.'} /></div>
+        </div>
+      </Dialog>
 
       <HroTaskProcessingDrawer
         open={!!selectedTask}

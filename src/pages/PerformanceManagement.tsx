@@ -92,8 +92,11 @@ function PositionRow({ position, employees, assignments, plans, hasDrPl, onSelec
         </button>
         <button type="button" onClick={() => onOpenDrPl(position)} className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-xs font-semibold transition ${hasDrPl ? 'border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100' : 'border-slate-200 bg-surface text-slate-500 hover:bg-slate-100'}`} title="Duties and Responsibilities / Position Level"><FileText className="h-3.5 w-3.5" /> DR / PL</button>
         <Badge className="shrink-0 border-slate-200 bg-slate-50 text-slate-600">{POSITION_CLASS_LABELS[position.employeeClass] ?? position.employeeClass}</Badge>
+        <Badge className="shrink-0 border-slate-200 bg-slate-50 text-slate-600">Level {position.level ?? 4}</Badge>
+        {(position.quantity ?? 1) > 1 && <Badge className="shrink-0 border-slate-200 bg-slate-50 text-slate-600">Qty {position.quantity}</Badge>}
+        <Badge className={`shrink-0 ${position.isPlantilla === false ? 'border-slate-200 bg-slate-100 text-slate-600' : 'border-brand-200 bg-brand-50 text-brand-700'}`}>{position.isPlantilla === false ? 'Non-plantilla' : 'Plantilla'}</Badge>
       </div>
-      {open && (
+      {open && employees.length > 0 && (
         <div className="space-y-1 border-t border-slate-100 bg-slate-50/50 px-3 py-2">
           {employees.map((employee) => {
             const employeePlans = plans.filter((plan) => plan.employeeUserId === employee.id);
@@ -104,7 +107,6 @@ function PositionRow({ position, employees, assignments, plans, hasDrPl, onSelec
               <Badge>{employeePlans.length} {employeePlans.length === 1 ? 'plan' : 'plans'}</Badge>
             </button>;
           })}
-          {employees.length === 0 && <p className="px-10 py-1.5 text-xs text-slate-400">No employee assigned to this position</p>}
         </div>
       )}
       {contextMenu && <div className="fixed z-[70] min-w-44 rounded-lg border border-slate-200 bg-surface p-1 shadow-xl" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
@@ -133,7 +135,7 @@ function OfficeBranch({ office, offices, departmentCode, employees, assignments,
       >
         {open ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />}
         <Network className="h-4 w-4 shrink-0 text-brand-600" />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{office.name}</span>
+        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-800">{office.name}</span>{office.shortName && <span className="block text-xs text-slate-500">{office.shortName}</span>}</span>
         <span className="text-xs text-slate-400">{office.positions.length} {office.positions.length === 1 ? 'position' : 'positions'}</span>
       </button>
       {open && (
@@ -201,6 +203,7 @@ export default function PerformanceManagement({ module }: { module: WorkspaceMod
     try {
       const [nextDepartments, nextEmployees, nextPlans, nextAssignments, nextProfiles, nextSkillChecks] = await Promise.all([fetchOrgStructure(token), fetchUserDirectory(token), fetchPerformancePlans(token), fetchPerformanceAssignments(token), fetchPositionDrPl(token), fetchEmployeeSkillChecks(token)]);
       setDepartments(nextDepartments);
+      setCollapsed(new Set(nextDepartments.map((department) => department.id)));
       setEmployees(nextEmployees);
       setPlans(nextPlans);
       setAssignments(nextAssignments);
@@ -586,7 +589,7 @@ export default function PerformanceManagement({ module }: { module: WorkspaceMod
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle>Performance Management Structure</CardTitle>
-              <p className="mt-1 text-sm text-slate-500">Departments, offices, positions, employees, and individual performance plans.</p>
+              <p className="mt-1 text-sm text-slate-500">Read-only Department → Office → Position hierarchy maintained in Human Resources → Organization.</p>
             </div>
             {!loading && visibleDepartments.length > 0 && !isEmployeeView && (
               <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -603,7 +606,7 @@ export default function PerformanceManagement({ module }: { module: WorkspaceMod
             <div className="rounded-xl border border-dashed border-slate-200 px-5 py-12 text-center">
               <Building2 className="mx-auto h-8 w-8 text-slate-300" />
               <p className="mt-3 text-sm font-medium text-slate-700">No organizational data found</p>
-              <p className="mt-1 text-sm text-slate-500">Add departments, offices, and positions in Administration.</p>
+              <p className="mt-1 text-sm text-slate-500">Add or edit departments, offices, and positions in Human Resources → Organization.</p>
               <Button variant="outline" size="sm" className="mt-4" onClick={() => void loadStructure()}><RefreshCw className="h-3.5 w-3.5" /> Retry</Button>
             </div>
           )}

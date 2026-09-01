@@ -55,7 +55,7 @@ export async function withConnection(work) {
 
 async function runDdl(connection, sql) {
   try { await connection.execute(sql); } catch (error) {
-    if ([955, 1408].includes(error.errorNum)) return;
+    if ([955, 1408, 2264].includes(error.errorNum)) return;
     if (error.errorNum === 54) {
       const match = sql.match(/^\s*CREATE\s+(TABLE|INDEX)\s+([A-Z0-9_$#]+)/i);
       if (match) {
@@ -71,6 +71,64 @@ async function runDdl(connection, sql) {
 
 async function addColumn(connection, sql) {
   try { await connection.execute(sql); } catch (error) { if (error.errorNum !== 1430) throw error; }
+}
+
+async function migrateOrganizationLevelDefault(connection) {
+  const found = await connection.execute(`SELECT data_default FROM user_tab_columns WHERE table_name='BES_ORGANIZATION' AND column_name='POSITION_LEVEL'`);
+  const currentDefault = String(found.rows[0]?.DATA_DEFAULT ?? '').trim();
+  if (/^4\b/.test(currentDefault)) return;
+  await connection.execute(`UPDATE bes_organization SET position_level=4 WHERE organization_type='POSITION'`);
+  await connection.execute(`ALTER TABLE bes_organization MODIFY (position_level DEFAULT 4)`);
+}
+
+async function migrateNormalizedOrganization(connection) {
+  await addColumn(connection, `ALTER TABLE bes_departments ADD (is_organization_unit CHAR(1) DEFAULT 'N' NOT NULL)`);
+  await addColumn(connection, `ALTER TABLE bes_offices ADD (is_organization_unit CHAR(1) DEFAULT 'N' NOT NULL)`);
+  await addColumn(connection, `ALTER TABLE bes_positions ADD (position_type1 VARCHAR2(30))`);
+  await addColumn(connection, `ALTER TABLE bes_positions ADD (position_type2 VARCHAR2(30))`);
+  await addColumn(connection, `ALTER TABLE bes_positions ADD (position_level NUMBER DEFAULT 4 NOT NULL)`);
+  await addColumn(connection, `ALTER TABLE bes_positions ADD (position_quantity NUMBER DEFAULT 1 NOT NULL)`);
+  await addColumn(connection, `ALTER TABLE bes_positions ADD (is_plantilla CHAR(1) DEFAULT 'Y' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_positions ADD (is_organization_unit CHAR(1) DEFAULT 'N' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_positions ADD (position_purpose CLOB)`);
+    await connection.execute(`UPDATE bes_positions SET position_purpose=:purpose, updated_at=SYSTIMESTAMP WHERE UPPER(position_title)='SYSTEM PLANNING AND DESIGN OFFICER' AND position_purpose IS NULL`, { purpose: "Responsible for seeing to the preparation of engineering design standards and project costs and ensuring safe, proper, efficient and effective implementation of all line construction projects including but not limited to line expansion, line rehabilitation/upgrading, and substation upgrading/construction. Is primarily responsible for the preparation of electric distribution development plans (CAPEX, ICPM) in consonance with the requirements of the EPIRA, Philippine Grid and Distribution Codes, and all other pertinent codes subject to the requirements of regulating agencies such as the ERC and NEA." });
+  const alreadyMigrated = await connection.execute(`SELECT COUNT(*) total FROM bes_positions WHERE is_organization_unit='Y'`);
+  if (Number(alreadyMigrated.rows[0]?.TOTAL || 0) > 0) return;
+  await connection.execute(`MERGE INTO bes_departments target USING (
+      SELECT organization_code department_code, organization_name department_name
+      FROM bes_organization WHERE organization_type='DEPARTMENT' AND is_active='Y'
+    ) source ON (UPPER(target.department_code)=UPPER(source.department_code))
+    WHEN MATCHED THEN UPDATE SET target.department_name=source.department_name, target.is_active='Y', target.is_organization_unit='Y', target.updated_at=SYSTIMESTAMP
+    WHEN NOT MATCHED THEN INSERT (department_code,department_name,is_active,is_organization_unit) VALUES (source.department_code,source.department_name,'Y','Y')`);
+  await connection.execute(`MERGE INTO bes_offices target USING (
+      SELECT department.department_id, organization.organization_name office_name, organization.office_short
+      FROM bes_organization organization JOIN bes_departments department ON UPPER(department.department_code)=UPPER(organization.department_code)
+      WHERE organization.organization_type='OFFICE' AND organization.is_active='Y'
+    ) source ON (target.department_id=source.department_id AND UPPER(target.office_name)=UPPER(source.office_name))
+    WHEN MATCHED THEN UPDATE SET target.office_short=source.office_short, target.is_active='Y', target.is_organization_unit='Y', target.updated_at=SYSTIMESTAMP
+    WHEN NOT MATCHED THEN INSERT (department_id,office_name,office_short,is_active,is_organization_unit) VALUES (source.department_id,source.office_name,source.office_short,'Y','Y')`);
+  await connection.execute(`MERGE INTO bes_positions target USING (
+      SELECT CASE WHEN parent.organization_type='DEPARTMENT' THEN department.department_id END department_id,
+        CASE WHEN parent.organization_type='OFFICE' THEN office.office_id END office_id,
+        position.organization_name position_title,
+        CASE WHEN UPPER(position.position_type1)='MANAGER' THEN 'DEPARTMENT_MANAGER'
+             WHEN UPPER(position.position_type1)='SECRETARY' AND parent.organization_type='DEPARTMENT' THEN 'DEPARTMENT_SECRETARY'
+             WHEN UPPER(position.position_type1)='SECRETARY' THEN 'OFFICE_SECRETARY'
+             WHEN UPPER(position.position_type1) IN ('SUPERVISOR','OFFICER') THEN 'SUPERVISOR' ELSE 'RAF' END employee_class,
+        position.position_type1, position.position_type2, position.position_level, position.position_quantity,
+        NVL(position.is_plantilla,'Y') is_plantilla
+      FROM bes_organization position
+      JOIN bes_organization parent ON parent.organization_id=position.parent_organization_id
+      JOIN bes_departments department ON UPPER(department.department_code)=UPPER(position.department_code)
+      LEFT JOIN bes_offices office ON office.department_id=department.department_id AND UPPER(office.office_name)=UPPER(parent.organization_name)
+      WHERE position.organization_type='POSITION' AND position.is_active='Y'
+    ) source ON (NVL(target.department_id,-1)=NVL(source.department_id,-1) AND NVL(target.office_id,-1)=NVL(source.office_id,-1) AND UPPER(target.position_title)=UPPER(source.position_title))
+    WHEN MATCHED THEN UPDATE SET target.employee_class=source.employee_class, target.position_type1=source.position_type1,
+      target.position_type2=source.position_type2, target.position_level=source.position_level, target.position_quantity=source.position_quantity,
+      target.is_plantilla=source.is_plantilla, target.is_active='Y', target.is_organization_unit='Y', target.updated_at=SYSTIMESTAMP
+    WHEN NOT MATCHED THEN INSERT (department_id,office_id,position_title,employee_class,position_type1,position_type2,position_level,position_quantity,is_plantilla,is_active,is_organization_unit)
+      VALUES (source.department_id,source.office_id,source.position_title,source.employee_class,source.position_type1,source.position_type2,source.position_level,source.position_quantity,source.is_plantilla,'Y','Y')`);
+  await connection.commit();
 }
 
 async function renameTable(connection, oldName, newName) {
@@ -165,7 +223,21 @@ const BASELINE_TOOL_SUBJECTS = [
 const BASELINE_DEPARTMENTS = [
   ['ISD', 'Institutional Services Department'], ['NSD', 'Network Services Department'],
   ['NNSD', 'Non-Network Services Department'], ['AUD', 'Audit Department'],
-  ['CPD', 'Corporate Planning Department'], ['PGD', 'Power Generation Department'],
+  ['IAD', 'Internal Audit Department'], ['CPD', 'Corporate Planning Department'],
+  ['PGD', 'Power Generation Department'], ['OGM', 'Office of the General Manager'],
+];
+
+// Source: 201.xlsx, Position sheet (DEPARTMENT, OFFICE, OFFICE_SHORT, POSITION,
+// TYPE1, TYPE2, PLANTILLA). This is the canonical organizational hierarchy.
+const POSITION_SHEET_ORGANIZATION = [
+  ['CPD',null,null,'Department Manager','Manager','Manager','Yes'],['CPD',null,null,'Department Secretary','Secretary','Rank And File','Yes'],
+  ['CPD','Business Development and Regulatory Compliance Office','BDRCO','Business Development and Regulatory Compliance Officer','Supervisor','Supervior','Yes'],['CPD','Business Development and Regulatory Compliance Office','BDRCO','Business Development and Regulatory Compliance Associate','Personnel','Rank And File','Yes'],['CPD','Power Supply and Energy Trading Office','PSETO','Power Supply and Energy Trading Officer','Supervisor','Supervior','Yes'],['CPD','Power Supply and Energy Trading Office','PSETO','Power Supply and Energy Trading Associate','Personnel','Rank And File','Yes'],
+  ['IAD',null,null,'Department Manager','Manager','Manager','Yes'],['IAD',null,null,'Department Secretary','Secretary','Rank And File','Yes'],['IAD','Internal Audit Office','IAO','Internal Audit Supervisor','Supervisor','Supervior','Yes'],['IAD','Internal Audit Office','IAO','Operations Auditor','Personnel','Rank And File','Yes'],['IAD','Internal Audit Office','IAO','Technical Auditor','Personnel','Rank And File','Yes'],
+  ['ISD',null,null,'Department Manager','Manager','Manager','Yes'],['ISD',null,null,'Department Secretary','Secretary','Rank And File','Yes'],['ISD','Community Relations Office','CRO','Community Relations Associate','Personnel','Rank And File','Yes'],['ISD','Community Relations Office','CRO','Community Relations Officer','Supervisor','Supervior','Yes'],['ISD','General Services Office','GSO','Courier','Personnel','Rank And File','Yes'],['ISD','General Services Office','GSO','General Services Officer','Supervisor','Supervior','Yes'],['ISD','General Services Office','GSO','Utitlity Personnel','Personnel','Rank And File','Yes'],['ISD','General Services Office','GSO','Mechanic','Personnel','Rank And File','Yes'],['ISD','Human Resource Office','HRO','Human Resource Associate','Personnel','Rank And File','Yes'],['ISD','Human Resource Office','HRO','Human Resource Officer','Supervisor','Supervior','Yes'],['ISD','Material Equipment and Management Office','MEMO','Material Inventory Associate','Personnel','Rank And File','Yes'],['ISD','Material Equipment and Management Office','MEMO','Material Equipment and Management Officer','Supervisor','Supervior','Yes'],
+  ['NNSD',null,null,'Department Manager','Manager','Manager','Yes'],['NNSD',null,null,'Department Secretary','Secretary','Rank And File','Yes'],['NNSD','Accounting Office','AO','Accounting Associate','Personnel','Rank And File','Yes'],['NNSD','Accounting Office','AO','Accounting Officer','Supervisor','Supervior','Yes'],['NNSD','Collection Office','CO','Collection Associate','Personnel','Rank And File','Yes'],['NNSD','Collection Office','CO','Collection Officer','Supervisor','Supervior','Yes'],['NNSD','Consumer Welfare Office','CWO','Consumer Welfare and Call Center Associate','Personnel','Rank And File','Yes'],['NNSD','Consumer Welfare Office','CWO','Consumer Welfare Officer','Supervisor','Supervior','Yes'],['NNSD','Meter Reading, Billing and Disconnection Office','MRBDO','Meter Reading, Billing and Disconnection Officer','Supervisor','Supervior','Yes'],['NNSD','Meter Reading, Billing and Disconnection Office','MRBDO','Meter Reader','Personnel','Rank And File','Yes'],['NNSD','Meter Reading, Billing and Disconnection Office','MRBDO','Disconnection Associate','Personnel','Rank And File','No'],['NNSD','Accounting Office','AO','Procurement Associate','Personnel','Rank And File','Yes'],['NNSD','Accounting Office','AO','Rate Analyst','Personnel','Rank And File','Yes'],
+  ['NSD',null,null,'Department Manager','Manager','Manager','Yes'],['NSD','Construction and Maintenance Office','CMO','Construction and Maintenance Officer','Supervisor','Supervior','Yes'],['NSD','System Planning and Design Office','SPDO','System Planning and Design Officer','Supervisor','Supervior','Yes'],['NSD','Special Equipment and Metering Office','SEMO','Special Equipment and Metering Officer','Supervisor','Supervior','Yes'],['NSD','Systems Control and Protection Office','SCPO','Systems Control and Protection Officer','Supervisor','Supervior','Yes'],['NSD','System Planning and Design Office','SPDO','System Planning and Design Engineer','Personnel','Rank And File','Yes'],['NSD','Construction and Maintenance Office','CMO','Lineman','Personnel','Rank And File','Yes'],['NSD','Special Equipment and Metering Office','SEMO','Special Equipment and Metering Engineer','Personnel','Rank And File','Yes'],['NSD','Systems Control and Protection Office','SCPO','Systems Control and Protection Engineer','Personnel','Rank And File','Yes'],['NSD','System Planning and Design Office','SPDO','GIS Engineer','Personnel','Rank And File','No'],['NSD','Special Equipment and Metering Office','SEMO','Special Equipment and Metering Associate','Personnel','Rank And File','Yes'],['NSD',null,null,'Department Secretary','Secretary','Rank And File','Yes'],
+  ['OGM',null,null,'Assistant General Manager','Manager','Manager','Yes'],['OGM',null,null,'Company Nurse','Personnel','Rank And File','Yes'],['OGM',null,null,'Driver','Personnel','Rank And File','Yes'],['OGM','Health and Safety Office','HSO','Health and Safety Officer','Supervisor','Supervior','Yes'],['OGM','Health and Safety Office','HSO','Health and Safety Engineer','Personnel','Rank And File','Yes'],['OGM','Management Information and Communication Services Office','MICS','Information System Associate','Personnel','Rank And File','Yes'],['OGM','Management Information and Communication Services Office','MICS','Information Technology Associate','Personnel','Rank And File','Yes'],['OGM','Legal Office','LO','Legal Officer','Supervisor','Supervior','Yes'],['OGM','Management Information and Communication Services Office','MICS','Management Information and Communication Services Officer','Supervisor','Supervior','Yes'],['OGM','Health and Safety Office','HSO','Safety Associate','Personnel','Rank And File','Yes'],['OGM',null,null,'Secretary to the Board','Personnel','Rank And File','Yes'],['OGM',null,null,'Executive Secretary','Secretary','Rank And File','Yes'],
+  ['PGD',null,null,'Department Manager','Manager','Manager','Yes'],['PGD','Hydroelectric Power Plant Operation Office','HEPPO','Forester, Pollution Control and Safety Officer','Supervisor','Supervior','Yes'],['PGD','Hydroelectric Power Plant Operation Office','HEPPO','Compliance and Records Officer','Supervisor','Supervior','Yes'],['PGD','Hydroelectric Power Plant Operation Office','HEPPO','Hydroelectric Power Plant Operation Superintendent','Personnel','Rank And File','Yes'],['PGD','Hydroelectric Power Plant Operation Office','HEPPO','Power Plant Shift Engineer','Personnel','Rank And File','Yes'],['PGD','Hydroelectric Power Plant Operation Office','HEPPO','Power Plant Maintenance Facilities Associate','Personnel','Rank And File','Yes'],['PGD','Hydroelectric Power Plant Operation Office','HEPPO','Weir/Desander Tender','Personnel','Rank And File','No'],['PGD',null,null,'Project Site Nurse','Personnel','Rank And File','Yes'],['PGD',null,null,'Department Secretary','Secretary','Rank And File','Yes'],
 ];
 
 const BASELINE_OFFICES = {
@@ -198,6 +270,8 @@ const BASELINE_POSITIONS = [
 ];
 
 async function seedOrganizationalStructure(connection) {
+  const splitCompleted = await connection.execute(`SELECT 1 FROM user_tables WHERE table_name='BES_MIG_ORG_POSITIONS_BAK'`);
+  if (splitCompleted.rows[0]) return;
   for (const [departmentCode, departmentName] of BASELINE_DEPARTMENTS) {
     await connection.execute(`MERGE INTO bes_departments d USING (SELECT :departmentCode department_code FROM dual) src
       ON (d.department_code = src.department_code)
@@ -226,6 +300,73 @@ async function seedOrganizationalStructure(connection) {
         WHEN MATCHED THEN UPDATE SET employee_class=:employeeClass, is_active='Y', updated_at=SYSTIMESTAMP
         WHEN NOT MATCHED THEN INSERT (department_id,position_title,employee_class,is_active) VALUES (src.department_id,src.position_title,:employeeClass,'Y')`, { departmentCode, positionTitle, employeeClass });
     }
+  }
+}
+
+async function seedCanonicalOrganization(connection) {
+  const departmentCodes = [...new Set(POSITION_SHEET_ORGANIZATION.map(([departmentCode]) => departmentCode))];
+  for (const departmentCode of departmentCodes) {
+    const department = await connection.execute(`SELECT department_id, department_name FROM bes_departments WHERE department_code=:departmentCode`, { departmentCode });
+    if (!department.rows[0]) continue;
+    const sourceName = `201.xlsx/Position/Department/${departmentCode}`;
+    await connection.execute(`UPDATE bes_organization SET source_name=:sourceName
+      WHERE parent_organization_id IS NULL AND organization_type='DEPARTMENT' AND organization_code=:departmentCode
+        AND NVL(source_name,'201.xlsx/Position')='201.xlsx/Position'`, { sourceName, departmentCode });
+    await connection.execute(`MERGE INTO bes_organization target
+      USING (SELECT :departmentCode organization_code, :departmentName organization_name, :sourceName source_name FROM dual) src
+      ON (target.source_name=src.source_name OR (target.parent_organization_id IS NULL AND target.organization_type='DEPARTMENT' AND target.organization_code=src.organization_code))
+      WHEN NOT MATCHED THEN INSERT (parent_organization_id,organization_type,organization_code,organization_name,department_code,source_name,is_active)
+        VALUES (NULL,'DEPARTMENT',src.organization_code,src.organization_name,:departmentCode,src.source_name,'Y')`, {
+      departmentCode, departmentName: department.rows[0].DEPARTMENT_NAME, sourceName,
+    });
+  }
+
+  const offices = new Map();
+  POSITION_SHEET_ORGANIZATION.forEach(([departmentCode, officeName, officeShort]) => {
+    if (officeName) offices.set(`${departmentCode}\u0000${officeShort}`, { departmentCode, officeName, officeShort });
+  });
+  for (const { departmentCode, officeName, officeShort } of offices.values()) {
+    await connection.execute(`MERGE INTO bes_offices target USING (
+        SELECT d.department_id, :officeName office_name, :officeShort office_short FROM bes_departments d WHERE d.department_code=:departmentCode
+      ) src ON (target.department_id=src.department_id AND UPPER(target.office_name)=UPPER(src.office_name))
+      WHEN MATCHED THEN UPDATE SET office_short=src.office_short, is_active='Y', updated_at=SYSTIMESTAMP
+      WHEN NOT MATCHED THEN INSERT (department_id,office_name,office_short,is_active) VALUES (src.department_id,src.office_name,src.office_short,'Y')`, {
+      departmentCode, officeName, officeShort,
+    });
+    await connection.execute(`MERGE INTO bes_organization target USING (
+        SELECT department.organization_id parent_id, :officeShort organization_code, :officeName organization_name
+        FROM bes_organization department WHERE department.parent_organization_id IS NULL
+          AND department.organization_type='DEPARTMENT' AND department.organization_code=:departmentCode
+      ) src ON (target.parent_organization_id=src.parent_id AND target.organization_type='OFFICE' AND UPPER(target.organization_name)=UPPER(src.organization_name))
+      WHEN MATCHED THEN UPDATE SET organization_code=src.organization_code, department_code=:departmentCode, office_short=:officeShort, source_name='201.xlsx/Position', is_active='Y', updated_at=SYSTIMESTAMP
+      WHEN NOT MATCHED THEN INSERT (parent_organization_id,organization_type,organization_code,organization_name,department_code,office_short,source_name,is_active)
+        VALUES (src.parent_id,'OFFICE',src.organization_code,src.organization_name,:departmentCode,:officeShort,'201.xlsx/Position','Y')`, {
+      departmentCode, officeName, officeShort,
+    });
+  }
+  await connection.execute(`UPDATE bes_offices office SET office.is_active='N', office.updated_at=SYSTIMESTAMP
+    WHERE EXISTS (SELECT 1 FROM bes_departments department
+      WHERE department.department_id=office.department_id
+        AND department.department_code IN ('AUD','CPD','IAD','ISD','NNSD','NSD','OGM','PGD'))
+      AND NOT EXISTS (SELECT 1 FROM bes_organization organization
+        WHERE organization.organization_type='OFFICE' AND organization.is_active='Y'
+          AND organization.department_code=(SELECT department_code FROM bes_departments WHERE department_id=office.department_id)
+          AND (UPPER(organization.organization_name)=UPPER(office.office_name)
+            OR UPPER(organization.office_short)=UPPER(office.office_short)))`);
+
+  for (const [sourceIndex, [departmentCode, officeName, officeShort, positionName, type1, type2, plantilla]] of POSITION_SHEET_ORGANIZATION.entries()) {
+    await connection.execute(`MERGE INTO bes_organization target USING (
+        SELECT parent.organization_id parent_id, :positionName organization_name FROM bes_organization parent
+        WHERE parent.organization_type=:parentType AND parent.is_active='Y'
+          AND parent.department_code=:departmentCode
+          AND ((:officeShort IS NULL AND parent.organization_type='DEPARTMENT') OR parent.office_short=:officeShort)
+      ) src ON ((target.source_name='201.xlsx/Position' AND target.source_row_number=:sourceRow)
+        OR (target.parent_organization_id=src.parent_id AND target.organization_type='POSITION' AND UPPER(target.organization_name)=UPPER(src.organization_name)))
+      WHEN NOT MATCHED THEN INSERT (parent_organization_id,organization_type,organization_name,department_code,office_short,position_type1,position_type2,is_plantilla,source_name,source_row_number,is_active)
+        VALUES (src.parent_id,'POSITION',src.organization_name,:departmentCode,:officeShort,:type1,:type2,:isPlantilla,'201.xlsx/Position',:sourceRow,'Y')`, {
+      departmentCode, officeShort, positionName, type1, type2, isPlantilla: plantilla === 'Yes' ? 'Y' : 'N',
+      parentType: officeName ? 'OFFICE' : 'DEPARTMENT', sourceRow: sourceIndex + 2,
+    });
   }
 }
 
@@ -668,12 +809,18 @@ export async function initializeDatabase() {
       department_id NUMBER NOT NULL REFERENCES bes_departments(department_id),
       parent_office_id NUMBER REFERENCES bes_offices(office_id),
       office_name VARCHAR2(180) NOT NULL,
+      office_short VARCHAR2(30),
       is_active CHAR(1) DEFAULT 'Y' NOT NULL,
       created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
       updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
       CONSTRAINT chk_bes_offices_active CHECK (is_active IN ('Y','N'))
     )`);
+    await addColumn(connection, `ALTER TABLE bes_offices ADD (office_short VARCHAR2(30))`);
     await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_office_dept_name ON bes_offices (department_id, UPPER(office_name))`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_office_dept_short ON bes_offices (
+      CASE WHEN office_short IS NOT NULL THEN department_id END,
+      CASE WHEN office_short IS NOT NULL THEN UPPER(office_short) END
+    )`);
     await runDdl(connection, `CREATE TABLE bes_positions (
       position_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       department_id NUMBER REFERENCES bes_departments(department_id),
@@ -695,6 +842,99 @@ export async function initializeDatabase() {
     await runDdl(connection, `ALTER TABLE bes_positions ADD CONSTRAINT chk_bes_position_scope CHECK ((department_id IS NOT NULL AND office_id IS NULL) OR (department_id IS NULL AND office_id IS NOT NULL))`);
     await dropIndex(connection, 'UX_BES_POSITION_OFFICE');
     await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_position_scope ON bes_positions (NVL(department_id, -1), NVL(office_id, -1), UPPER(position_title))`);
+    await runDdl(connection, `CREATE TABLE bes_hr_qualifications (
+      qualification_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      position_id NUMBER NOT NULL REFERENCES bes_positions(position_id) ON DELETE CASCADE,
+      position_level NUMBER DEFAULT 4 NOT NULL,
+      subject VARCHAR2(180) NOT NULL,
+      qualification_level VARCHAR2(180),
+      description VARCHAR2(2000),
+      sort_order NUMBER DEFAULT 0 NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_hr_qual_level CHECK (position_level BETWEEN 1 AND 5),
+      CONSTRAINT chk_bes_hr_qual_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_hr_qual_position ON bes_hr_qualifications (position_id, position_level, is_active)`);
+    await runDdl(connection, `CREATE TABLE bes_hr_duties (
+      duty_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      position_id NUMBER NOT NULL REFERENCES bes_positions(position_id) ON DELETE CASCADE,
+      position_level NUMBER DEFAULT 4 NOT NULL,
+      subject VARCHAR2(180) NOT NULL,
+      description VARCHAR2(2000),
+      sort_order NUMBER DEFAULT 0 NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_hr_duty_level CHECK (position_level BETWEEN 1 AND 5),
+      CONSTRAINT chk_bes_hr_duty_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_hr_duty_position ON bes_hr_duties (position_id, position_level, is_active)`);
+    await runDdl(connection, `CREATE TABLE bes_hr_job_spec (
+      job_spec_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      position_id NUMBER NOT NULL REFERENCES bes_positions(position_id) ON DELETE CASCADE,
+      position_level NUMBER DEFAULT 4 NOT NULL,
+      specification VARCHAR2(180) NOT NULL,
+      description VARCHAR2(2000),
+      sort_order NUMBER DEFAULT 0 NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_hr_job_spec_level CHECK (position_level BETWEEN 1 AND 5),
+      CONSTRAINT chk_bes_hr_job_spec_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await runDdl(connection, `CREATE INDEX ix_bes_hr_job_spec_position ON bes_hr_job_spec (position_id, position_level, is_active)`);
+    await runDdl(connection, `CREATE TABLE bes_hr_proficiency_level (
+      prof_level NUMBER PRIMARY KEY,
+      description VARCHAR2(2000) NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_hr_prof_level CHECK (prof_level BETWEEN 1 AND 5)
+    )`);
+    for (const proficiency of [
+      { level: 2, description: 'Basic (basic/general understanding of the field to perform job duties)' },
+      { level: 3, description: 'Proficient (sufficient understanding and experience to perform job duties. Can generalize basic principles to effectively function in both predictable and new situations)' },
+      { level: 4, description: 'Advanced (broad and deep understanding and skills, with substantial experience in this area. Can apply the competency regularly and display this competency in complex, varied situations)' },
+    ]) {
+      await connection.execute(`MERGE INTO bes_hr_proficiency_level target
+        USING (SELECT :profLevel prof_level, :description description FROM dual) source
+        ON (target.prof_level=source.prof_level)
+        WHEN NOT MATCHED THEN INSERT (prof_level,description) VALUES (source.prof_level,source.description)`, { profLevel: proficiency.level, description: proficiency.description });
+    }
+    await runDdl(connection, `CREATE TABLE bes_organization (
+      organization_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      parent_organization_id NUMBER REFERENCES bes_organization(organization_id) ON DELETE CASCADE,
+      organization_type VARCHAR2(20) NOT NULL,
+      organization_code VARCHAR2(30),
+      organization_name VARCHAR2(180) NOT NULL,
+      department_code VARCHAR2(30) NOT NULL,
+      office_short VARCHAR2(30),
+      position_type1 VARCHAR2(30),
+      position_type2 VARCHAR2(30),
+      position_level NUMBER DEFAULT 4 NOT NULL,
+      position_quantity NUMBER DEFAULT 1 NOT NULL,
+      is_plantilla CHAR(1),
+      source_name VARCHAR2(180),
+      source_row_number NUMBER,
+      sort_order NUMBER DEFAULT 0 NOT NULL,
+      is_active CHAR(1) DEFAULT 'Y' NOT NULL,
+      created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+      CONSTRAINT chk_bes_org_type CHECK (organization_type IN ('DEPARTMENT','OFFICE','POSITION')),
+      CONSTRAINT chk_bes_org_level CHECK (position_level BETWEEN 1 AND 5),
+      CONSTRAINT chk_bes_org_quantity CHECK (position_quantity > 0),
+      CONSTRAINT chk_bes_org_plantilla CHECK (is_plantilla IS NULL OR is_plantilla IN ('Y','N')),
+      CONSTRAINT chk_bes_org_active CHECK (is_active IN ('Y','N'))
+    )`);
+    await addColumn(connection, `ALTER TABLE bes_organization ADD (position_level NUMBER DEFAULT 4 NOT NULL)`);
+    await migrateOrganizationLevelDefault(connection);
+    await addColumn(connection, `ALTER TABLE bes_organization ADD (position_quantity NUMBER DEFAULT 1 NOT NULL)`);
+    await runDdl(connection, `ALTER TABLE bes_organization ADD CONSTRAINT chk_bes_org_level CHECK (position_level BETWEEN 1 AND 5)`);
+    await runDdl(connection, `ALTER TABLE bes_organization ADD CONSTRAINT chk_bes_org_quantity CHECK (position_quantity > 0)`);
+    await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_org_parent_name ON bes_organization (NVL(parent_organization_id,-1), organization_type, UPPER(organization_name))`);
+    await runDdl(connection, `CREATE INDEX ix_bes_org_department ON bes_organization (department_code, office_short, organization_type, is_active)`);
+    await migrateNormalizedOrganization(connection);
     await renameTable(connection, 'BES_ISD_TOOL_ACCESS', 'BES_TOOL_ACCESS');
     await renameTable(connection, 'BES_ISD_TASK_SUBJECTS', 'BES_TASK_SUBJECTS');
     await runDdl(connection, `CREATE TABLE bes_tool_access (
@@ -1442,6 +1682,7 @@ export async function initializeDatabase() {
     await createHroToolTaskTables(connection);
     await seedAccessControl(connection);
     await seedOrganizationalStructure(connection);
+    await seedCanonicalOrganization(connection);
     await seedPositionDrPl(connection);
     await seedToolRegistry(connection);
     await seedCalendarEvents(connection);
