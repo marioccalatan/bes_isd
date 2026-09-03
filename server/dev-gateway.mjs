@@ -2,7 +2,7 @@ import http from 'node:http'
 
 const targetHost = '127.0.0.1'
 const targetPort = 3001
-const listenPort = 5173
+const listenPort = 5174
 
 const server = http.createServer((request, response) => {
   const proxy = http.request({

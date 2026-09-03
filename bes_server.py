@@ -91,7 +91,7 @@ class App:
         brush=g.CreateSolidBrush(WHITE); old=g.SelectObject(dc,brush); x=612 if self.prod else 590; g.Ellipse(dc,x-9,115,x+9,133); g.SelectObject(dc,old); g.DeleteObject(brush)
         brush=g.CreateSolidBrush(AMBER if self.busy else (GREEN if self.running else MUTED)); old=g.SelectObject(dc,brush); g.Ellipse(dc,57,169,67,179); g.SelectObject(dc,old); g.DeleteObject(brush)
         self.text(dc,self.status,RECT(75,159,230,190),WHITE,self.normal)
-        detail='192.168.62.14:5000 | 192.168.10.14:5000' if self.prod else '127.0.0.1:5173'; self.text(dc,detail,RECT(395,159,628,190),MUTED,self.small,0x26)
+        detail='192.168.62.14:5000 | 192.168.10.14:5000' if self.prod else '127.0.0.1:5174'; self.text(dc,detail,RECT(395,159,628,190),MUTED,self.small,0x26)
         start_brush=g.CreateSolidBrush(color('#475569') if self.busy else GREEN); stop_brush=g.CreateSolidBrush(color('#475569') if self.busy else RED)
         u.FillRect(dc,ctypes.byref(RECT(56,219,336,264)),start_brush); u.FillRect(dc,ctypes.byref(RECT(348,219,628,264)),stop_brush); g.DeleteObject(start_brush); g.DeleteObject(stop_brush)
         self.text(dc,'Start / Restart',RECT(56,219,336,264),color('#04130a') if not self.busy else MUTED,self.bold,0x25); self.text(dc,'Stop',RECT(348,219,628,264),WHITE if not self.busy else MUTED,self.bold,0x25)
@@ -103,11 +103,11 @@ class App:
             lowered=line.lower(); line_color=RED if ('error' in lowered or 'failed' in lowered or 'exception' in lowered) else color('#cbd5e1')
             self.text(dc,line[:94],RECT(48,339+index*15,636,356+index*15),line_color,self.mono,0x20)
         self.text(dc,'Server controls apply to the selected environment.',RECT(0,559,684,584),MUTED,self.small,0x25)
-    def ports(self): return (5000,) if self.prod else (5173,3001)
+    def ports(self): return (5000,) if self.prod else (5174,3001)
     def work(self,start):
         mode='production' if self.prod else 'development'
         stopped=True if self.prod and start else stop_ports(self.ports())
-        reuse_api=start and not self.prod and not pids((5173,)) and bool(pids((3001,)))
+        reuse_api=start and not self.prod and not pids((5174,)) and bool(pids((3001,)))
         if not stopped and not reuse_api: self.status='Stop failed - run as Administrator'
         elif not start: self.status=mode.title()+' stopped'
         else:

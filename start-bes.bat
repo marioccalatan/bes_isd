@@ -42,7 +42,7 @@ if not exist "node_modules" (
 
 echo.
 echo Starting BENECO Enterprise System (BES)...
-echo Once ready, open http://localhost:5173 in your browser.
+echo Once ready, open http://127.0.0.1:5174 in your browser.
 echo Press Ctrl+C to stop the servers.
 echo.
 
@@ -54,7 +54,7 @@ if errorlevel 1 start "" /b "%BES_NODE%" server\index.mjs
 if defined BES_BUNDLED_RUNTIME if exist "node_modules\vite\bin\vite.js" (
     call "%BES_NODE%" server\dev-gateway.mjs
 ) else (
-    call %PACKAGE_RUNNER% run dev
+    call %PACKAGE_RUNNER% run dev -- --host 127.0.0.1 --port 5174 --strictPort
 )
 
 pause
