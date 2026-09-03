@@ -3167,6 +3167,15 @@ async function handle(req, res) {
         }
         const departmentColumns = await describe('HR_DEPARTMENT_LOOKUP');
         const jobLevelColumns = await describe('HR_JOBLEVEL_LOOKUP');
+        const departmentId = findColumn(departmentColumns, ['DEPT_ID', 'DEPARTMENT_ID', 'DEPT_CODE', 'DEPARTMENT_CODE']);
+        const departmentShort = findColumn(departmentColumns, ['DEPT_SHORT', 'DEPARTMENT_SHORT', 'DEPT_CODE', 'DEPARTMENT_CODE']);
+        const departmentLong = findColumn(departmentColumns, ['DEPT_LONG', 'DEPARTMENT_NAME', 'DEPT_NAME']);
+        const departmentActiveStatus = findColumn(departmentColumns, ['ACTIVE_STAT', 'ACTIVE_STATUS', 'STATUS', 'IS_ACTIVE']);
+        const jobLevelId = findColumn(jobLevelColumns, ['JL_ID', 'JOB_LEVEL_ID', 'JOB_LEVEL']);
+        const jobLevelDescription = findColumn(jobLevelColumns, ['JL_DESC', 'JOB_LEVEL_DESCRIPTION', 'DESCRIPTION']);
+        const jobLevelActiveStatus = findColumn(jobLevelColumns, ['ACTIVE_STAT', 'ACTIVE_STATUS', 'STATUS', 'IS_ACTIVE']);
+        const hasDepartmentJoin = Boolean(employeeColumn.departmentId && departmentId);
+        const hasJobLevelJoin = Boolean(employeeColumn.jobLevelId && jobLevelId);
         const employeeField = (column, alias) => column ? `e.${column} ${alias}` : `NULL ${alias}`;
         const hiredColumn = employeeColumn.dateHired ? employeeColumns.get(employeeColumn.dateHired) : null;
         const hiredExpression = !hiredColumn ? 'NULL DATE_HIRED'
@@ -3178,20 +3187,16 @@ async function handle(req, res) {
           employeeField(employeeColumn.officialPositionType, 'OFFICIAL_POSITION_TYPE'), employeeField(employeeColumn.positionLevel, 'POSITION_LEVEL'),
           hiredExpression,
           employeeField(employeeColumn.departmentId, 'DEPT_ID'),
-          departmentColumns.has('DEPT_SHORT') ? 'd.DEPT_SHORT' : 'NULL DEPT_SHORT',
-          departmentColumns.has('DEPT_LONG') ? 'd.DEPT_LONG' : 'NULL DEPT_LONG',
+          hasDepartmentJoin && departmentShort ? `d.${departmentShort} DEPT_SHORT` : 'NULL DEPT_SHORT',
+          hasDepartmentJoin && departmentLong ? `d.${departmentLong} DEPT_LONG` : 'NULL DEPT_LONG',
           employeeField(employeeColumn.jobLevelId, 'JL_ID'),
-          jobLevelColumns.has('JL_DESC') ? 'jl.JL_DESC' : 'NULL JL_DESC',
+          hasJobLevelJoin && jobLevelDescription ? `jl.${jobLevelDescription} JL_DESC` : 'NULL JL_DESC',
         ];
         const joins = [];
-        const departmentId = findColumn(departmentColumns, ['DEPT_ID', 'DEPARTMENT_ID', 'DEPT_CODE', 'DEPARTMENT_CODE']);
-        const departmentActiveStatus = findColumn(departmentColumns, ['ACTIVE_STAT', 'ACTIVE_STATUS', 'STATUS', 'IS_ACTIVE']);
-        if (employeeColumn.departmentId && departmentId) {
+        if (hasDepartmentJoin) {
           joins.push(`LEFT JOIN HR_DEPARTMENT_LOOKUP d ON TRIM(TO_CHAR(d.${departmentId}))=TRIM(TO_CHAR(e.${employeeColumn.departmentId}))${departmentActiveStatus ? ` AND UPPER(TRIM(TO_CHAR(d.${departmentActiveStatus}))) IN ('ACTIVE','Y','1')` : ''}`);
         }
-        const jobLevelId = findColumn(jobLevelColumns, ['JL_ID', 'JOB_LEVEL_ID', 'JOB_LEVEL']);
-        const jobLevelActiveStatus = findColumn(jobLevelColumns, ['ACTIVE_STAT', 'ACTIVE_STATUS', 'STATUS', 'IS_ACTIVE']);
-        if (employeeColumn.jobLevelId && jobLevelId) {
+        if (hasJobLevelJoin) {
           joins.push(`LEFT JOIN HR_JOBLEVEL_LOOKUP jl ON TRIM(TO_CHAR(jl.${jobLevelId}))=TRIM(TO_CHAR(e.${employeeColumn.jobLevelId}))${jobLevelActiveStatus ? ` AND UPPER(TRIM(TO_CHAR(jl.${jobLevelActiveStatus}))) IN ('ACTIVE','Y','1')` : ''}`);
         }
         const filters = [];
