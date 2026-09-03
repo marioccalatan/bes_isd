@@ -3138,19 +3138,48 @@ async function handle(req, res) {
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        return c.execute(`SELECT e.EMPNO, e.E_LAST, e.E_FIRST, e.E_MIDDLE,
-            e.CURRENT_POSITION_TYPE, e.OFFICIAL_POSITION_TYPE, e.POSITION_LEVEL,
-            TO_CHAR(e.DATE_HIRED, 'YYYY-MM-DD') DATE_HIRED,
-            e.DEPT_ID, d.DEPT_SHORT, d.DEPT_LONG, e.JL_ID, jl.JL_DESC
-          FROM HR_EMP_MASTERFILE e
-          LEFT JOIN HR_DEPARTMENT_LOOKUP d ON d.DEPT_ID = e.DEPT_ID
-            AND UPPER(TRIM(d.ACTIVE_STAT)) = 'ACTIVE'
-          LEFT JOIN HR_JOBLEVEL_LOOKUP jl ON jl.JL_ID = LPAD(TRIM(TO_CHAR(e.JL_ID)), 2, '0')
-            AND UPPER(TRIM(jl.ACTIVE_STAT)) = 'ACTIVE'
-          WHERE UPPER(TRIM(e.ACTIVE_STAT)) = 'ACTIVE'
-            AND UPPER(TRIM(NVL(e.CURRENT_POSITION_TYPE, '-'))) <> 'BOD MEMBER'
-            AND UPPER(TRIM(NVL(e.OFFICIAL_POSITION_TYPE, '-'))) <> 'BOD MEMBER'
-          ORDER BY UPPER(e.E_LAST), UPPER(e.E_FIRST), e.EMPNO`);
+        const describe = async (table) => {
+          try {
+            const described = await c.execute(`SELECT * FROM ${table} WHERE 1=0`);
+            return new Map((described.metaData || []).map((column) => [column.name.toUpperCase(), column]));
+          } catch (error) {
+            if (error?.errorNum === 942) return new Map();
+            throw error;
+          }
+        };
+        const employeeColumns = await describe('HR_EMP_MASTERFILE');
+        if (!employeeColumns.has('EMPNO') || !employeeColumns.has('E_LAST') || !employeeColumns.has('E_FIRST')) {
+          throw Object.assign(new Error('HR_EMP_MASTERFILE must contain EMPNO, E_LAST, and E_FIRST.'), { statusCode: 503 });
+        }
+        const departmentColumns = await describe('HR_DEPARTMENT_LOOKUP');
+        const jobLevelColumns = await describe('HR_JOBLEVEL_LOOKUP');
+        const employeeField = (column, expression = `e.${column}`) => employeeColumns.has(column) ? `${expression} ${column}` : `NULL ${column}`;
+        const hiredColumn = employeeColumns.get('DATE_HIRED');
+        const hiredExpression = !hiredColumn ? 'NULL DATE_HIRED'
+          : /DATE|TIMESTAMP/i.test(hiredColumn.dbTypeName || '') ? `TO_CHAR(e.DATE_HIRED, 'YYYY-MM-DD') DATE_HIRED`
+          : 'e.DATE_HIRED DATE_HIRED';
+        const select = [
+          'e.EMPNO', 'e.E_LAST', 'e.E_FIRST', employeeField('E_MIDDLE'),
+          employeeField('CURRENT_POSITION_TYPE'), employeeField('OFFICIAL_POSITION_TYPE'), employeeField('POSITION_LEVEL'),
+          hiredExpression,
+          employeeField('DEPT_ID'),
+          departmentColumns.has('DEPT_SHORT') ? 'd.DEPT_SHORT' : 'NULL DEPT_SHORT',
+          departmentColumns.has('DEPT_LONG') ? 'd.DEPT_LONG' : 'NULL DEPT_LONG',
+          employeeField('JL_ID'),
+          jobLevelColumns.has('JL_DESC') ? 'jl.JL_DESC' : 'NULL JL_DESC',
+        ];
+        const joins = [];
+        if (employeeColumns.has('DEPT_ID') && departmentColumns.has('DEPT_ID')) {
+          joins.push(`LEFT JOIN HR_DEPARTMENT_LOOKUP d ON d.DEPT_ID=e.DEPT_ID${departmentColumns.has('ACTIVE_STAT') ? " AND UPPER(TRIM(d.ACTIVE_STAT))='ACTIVE'" : ''}`);
+        }
+        if (employeeColumns.has('JL_ID') && jobLevelColumns.has('JL_ID')) {
+          joins.push(`LEFT JOIN HR_JOBLEVEL_LOOKUP jl ON TRIM(TO_CHAR(jl.JL_ID))=TRIM(TO_CHAR(e.JL_ID))${jobLevelColumns.has('ACTIVE_STAT') ? " AND UPPER(TRIM(jl.ACTIVE_STAT))='ACTIVE'" : ''}`);
+        }
+        const filters = [];
+        if (employeeColumns.has('ACTIVE_STAT')) filters.push(`UPPER(TRIM(e.ACTIVE_STAT))='ACTIVE'`);
+        if (employeeColumns.has('CURRENT_POSITION_TYPE')) filters.push(`UPPER(TRIM(NVL(e.CURRENT_POSITION_TYPE,'-'))) <> 'BOD MEMBER'`);
+        if (employeeColumns.has('OFFICIAL_POSITION_TYPE')) filters.push(`UPPER(TRIM(NVL(e.OFFICIAL_POSITION_TYPE,'-'))) <> 'BOD MEMBER'`);
+        return c.execute(`SELECT ${select.join(', ')} FROM HR_EMP_MASTERFILE e ${joins.join(' ')}${filters.length ? ` WHERE ${filters.join(' AND ')}` : ''} ORDER BY UPPER(e.E_LAST),UPPER(e.E_FIRST),e.EMPNO`);
       });
       return result ? json(res, 200, { employees: result.rows.map((row) => ({
         employeeNo: row.EMPNO,
