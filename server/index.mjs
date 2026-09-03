@@ -3148,38 +3148,57 @@ async function handle(req, res) {
           }
         };
         const employeeColumns = await describe('HR_EMP_MASTERFILE');
-        if (!employeeColumns.has('EMPNO') || !employeeColumns.has('E_LAST') || !employeeColumns.has('E_FIRST')) {
-          throw Object.assign(new Error('HR_EMP_MASTERFILE must contain EMPNO, E_LAST, and E_FIRST.'), { statusCode: 503 });
+        const findColumn = (columns, candidates) => candidates.find((column) => columns.has(column)) || null;
+        const employeeColumn = {
+          employeeNo: findColumn(employeeColumns, ['EMPNO', 'EMPLOYEE_NO', 'EMP_NO', 'EMPLOYEE_ID', 'EMPLOYEE_NUMBER', 'EMP_NUMBER', 'ID_NUMBER']),
+          lastName: findColumn(employeeColumns, ['E_LAST', 'LAST_NAME', 'LASTNAME', 'SURNAME', 'LNAME']),
+          firstName: findColumn(employeeColumns, ['E_FIRST', 'FIRST_NAME', 'FIRSTNAME', 'GIVEN_NAME', 'FNAME']),
+          middleName: findColumn(employeeColumns, ['E_MIDDLE', 'MIDDLE_NAME', 'MIDDLENAME', 'MIDDLE_INITIAL', 'MI']),
+          currentPositionType: findColumn(employeeColumns, ['CURRENT_POSITION_TYPE', 'POSITION_TYPE']),
+          officialPositionType: findColumn(employeeColumns, ['OFFICIAL_POSITION_TYPE']),
+          positionLevel: findColumn(employeeColumns, ['POSITION_LEVEL', 'LEVEL_NO']),
+          dateHired: findColumn(employeeColumns, ['DATE_HIRED', 'HIRE_DATE', 'DATE_OF_HIRE']),
+          departmentId: findColumn(employeeColumns, ['DEPT_ID', 'DEPARTMENT_ID', 'DEPT_CODE', 'DEPARTMENT_CODE']),
+          jobLevelId: findColumn(employeeColumns, ['JL_ID', 'JOB_LEVEL_ID', 'JOB_LEVEL']),
+          activeStatus: findColumn(employeeColumns, ['ACTIVE_STAT', 'ACTIVE_STATUS', 'EMPLOYEE_STATUS', 'EMP_STATUS', 'STATUS', 'IS_ACTIVE']),
+        };
+        if (!employeeColumn.employeeNo || !employeeColumn.lastName || !employeeColumn.firstName) {
+          throw Object.assign(new Error('HR_EMP_MASTERFILE does not expose recognizable employee number, last-name, and first-name columns.'), { statusCode: 503 });
         }
         const departmentColumns = await describe('HR_DEPARTMENT_LOOKUP');
         const jobLevelColumns = await describe('HR_JOBLEVEL_LOOKUP');
-        const employeeField = (column, expression = `e.${column}`) => employeeColumns.has(column) ? `${expression} ${column}` : `NULL ${column}`;
-        const hiredColumn = employeeColumns.get('DATE_HIRED');
+        const employeeField = (column, alias) => column ? `e.${column} ${alias}` : `NULL ${alias}`;
+        const hiredColumn = employeeColumn.dateHired ? employeeColumns.get(employeeColumn.dateHired) : null;
         const hiredExpression = !hiredColumn ? 'NULL DATE_HIRED'
-          : /DATE|TIMESTAMP/i.test(hiredColumn.dbTypeName || '') ? `TO_CHAR(e.DATE_HIRED, 'YYYY-MM-DD') DATE_HIRED`
-          : 'e.DATE_HIRED DATE_HIRED';
+          : /DATE|TIMESTAMP/i.test(hiredColumn.dbTypeName || '') ? `TO_CHAR(e.${employeeColumn.dateHired}, 'YYYY-MM-DD') DATE_HIRED`
+          : `e.${employeeColumn.dateHired} DATE_HIRED`;
         const select = [
-          'e.EMPNO', 'e.E_LAST', 'e.E_FIRST', employeeField('E_MIDDLE'),
-          employeeField('CURRENT_POSITION_TYPE'), employeeField('OFFICIAL_POSITION_TYPE'), employeeField('POSITION_LEVEL'),
+          employeeField(employeeColumn.employeeNo, 'EMPNO'), employeeField(employeeColumn.lastName, 'E_LAST'), employeeField(employeeColumn.firstName, 'E_FIRST'),
+          employeeField(employeeColumn.middleName, 'E_MIDDLE'), employeeField(employeeColumn.currentPositionType, 'CURRENT_POSITION_TYPE'),
+          employeeField(employeeColumn.officialPositionType, 'OFFICIAL_POSITION_TYPE'), employeeField(employeeColumn.positionLevel, 'POSITION_LEVEL'),
           hiredExpression,
-          employeeField('DEPT_ID'),
+          employeeField(employeeColumn.departmentId, 'DEPT_ID'),
           departmentColumns.has('DEPT_SHORT') ? 'd.DEPT_SHORT' : 'NULL DEPT_SHORT',
           departmentColumns.has('DEPT_LONG') ? 'd.DEPT_LONG' : 'NULL DEPT_LONG',
-          employeeField('JL_ID'),
+          employeeField(employeeColumn.jobLevelId, 'JL_ID'),
           jobLevelColumns.has('JL_DESC') ? 'jl.JL_DESC' : 'NULL JL_DESC',
         ];
         const joins = [];
-        if (employeeColumns.has('DEPT_ID') && departmentColumns.has('DEPT_ID')) {
-          joins.push(`LEFT JOIN HR_DEPARTMENT_LOOKUP d ON d.DEPT_ID=e.DEPT_ID${departmentColumns.has('ACTIVE_STAT') ? " AND UPPER(TRIM(d.ACTIVE_STAT))='ACTIVE'" : ''}`);
+        const departmentId = findColumn(departmentColumns, ['DEPT_ID', 'DEPARTMENT_ID', 'DEPT_CODE', 'DEPARTMENT_CODE']);
+        const departmentActiveStatus = findColumn(departmentColumns, ['ACTIVE_STAT', 'ACTIVE_STATUS', 'STATUS', 'IS_ACTIVE']);
+        if (employeeColumn.departmentId && departmentId) {
+          joins.push(`LEFT JOIN HR_DEPARTMENT_LOOKUP d ON TRIM(TO_CHAR(d.${departmentId}))=TRIM(TO_CHAR(e.${employeeColumn.departmentId}))${departmentActiveStatus ? ` AND UPPER(TRIM(TO_CHAR(d.${departmentActiveStatus}))) IN ('ACTIVE','Y','1')` : ''}`);
         }
-        if (employeeColumns.has('JL_ID') && jobLevelColumns.has('JL_ID')) {
-          joins.push(`LEFT JOIN HR_JOBLEVEL_LOOKUP jl ON TRIM(TO_CHAR(jl.JL_ID))=TRIM(TO_CHAR(e.JL_ID))${jobLevelColumns.has('ACTIVE_STAT') ? " AND UPPER(TRIM(jl.ACTIVE_STAT))='ACTIVE'" : ''}`);
+        const jobLevelId = findColumn(jobLevelColumns, ['JL_ID', 'JOB_LEVEL_ID', 'JOB_LEVEL']);
+        const jobLevelActiveStatus = findColumn(jobLevelColumns, ['ACTIVE_STAT', 'ACTIVE_STATUS', 'STATUS', 'IS_ACTIVE']);
+        if (employeeColumn.jobLevelId && jobLevelId) {
+          joins.push(`LEFT JOIN HR_JOBLEVEL_LOOKUP jl ON TRIM(TO_CHAR(jl.${jobLevelId}))=TRIM(TO_CHAR(e.${employeeColumn.jobLevelId}))${jobLevelActiveStatus ? ` AND UPPER(TRIM(TO_CHAR(jl.${jobLevelActiveStatus}))) IN ('ACTIVE','Y','1')` : ''}`);
         }
         const filters = [];
-        if (employeeColumns.has('ACTIVE_STAT')) filters.push(`UPPER(TRIM(e.ACTIVE_STAT))='ACTIVE'`);
-        if (employeeColumns.has('CURRENT_POSITION_TYPE')) filters.push(`UPPER(TRIM(NVL(e.CURRENT_POSITION_TYPE,'-'))) <> 'BOD MEMBER'`);
-        if (employeeColumns.has('OFFICIAL_POSITION_TYPE')) filters.push(`UPPER(TRIM(NVL(e.OFFICIAL_POSITION_TYPE,'-'))) <> 'BOD MEMBER'`);
-        return c.execute(`SELECT ${select.join(', ')} FROM HR_EMP_MASTERFILE e ${joins.join(' ')}${filters.length ? ` WHERE ${filters.join(' AND ')}` : ''} ORDER BY UPPER(e.E_LAST),UPPER(e.E_FIRST),e.EMPNO`);
+        if (employeeColumn.activeStatus) filters.push(`UPPER(TRIM(TO_CHAR(e.${employeeColumn.activeStatus}))) IN ('ACTIVE','Y','1')`);
+        if (employeeColumn.currentPositionType) filters.push(`UPPER(TRIM(NVL(e.${employeeColumn.currentPositionType},'-'))) <> 'BOD MEMBER'`);
+        if (employeeColumn.officialPositionType) filters.push(`UPPER(TRIM(NVL(e.${employeeColumn.officialPositionType},'-'))) <> 'BOD MEMBER'`);
+        return c.execute(`SELECT ${select.join(', ')} FROM HR_EMP_MASTERFILE e ${joins.join(' ')}${filters.length ? ` WHERE ${filters.join(' AND ')}` : ''} ORDER BY UPPER(e.${employeeColumn.lastName}),UPPER(e.${employeeColumn.firstName}),e.${employeeColumn.employeeNo}`);
       });
       return result ? json(res, 200, { employees: result.rows.map((row) => ({
         employeeNo: row.EMPNO,
