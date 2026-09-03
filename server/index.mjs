@@ -553,66 +553,6 @@ const canAccessPerformanceEmployee = (user, employee, manage = false) => {
   return !manage && Number(employee.EMPLOYEE_USER_ID ?? employee.USER_ID) === Number(user.USER_ID);
 };
 
-const DB_SYNC_TABLES = [
-  'BES_USERS',
-  'BES_ROLES',
-  'BES_PERMISSIONS',
-  'BES_ROLE_PERMISSIONS',
-  'BES_USER_ROLES',
-  'BES_DEPARTMENTS',
-  'BES_OFFICES',
-  'BES_POSITIONS',
-  'BES_TOOL_ACCESS',
-  'BES_TASK_SUBJECTS',
-  'BES_MODULE_REGISTRY',
-  'BES_MODULE_ACCESS',
-  'BES_CALENDAR_EVENTS',
-  'BES_WORK_TASKS',
-  'BES_WORK_COMMENTS',
-  'BES_HRO_RECRUITMENT_AND_ONBOARDING',
-  'BES_HRO_RECRUITMENT_COMMENTS',
-  'BES_HRO_RECRUITMENT_POSITIONS',
-  'BES_POLICY_RECORDS',
-  'BES_POLICY_TASK_PROCESSING',
-  'BES_PERFORMANCE_PLANS',
-  'BES_PERFORMANCE_TARGETS',
-  'BES_PERFORMANCE_ASSIGNMENTS',
-  'BES_POSITION_DR_PL',
-  'BES_EMPLOYEE_SKILL_CHECKS',
-  'BES_FLEET_STORE',
-  'BES_FLEET_VEHICLE_MODELS',
-  'BES_FLEET_MODEL_LIBRARY',
-  'BES_FLEET_SCHEDULES',
-  'BES_FLEET_RENEWAL_RECEIPTS',
-  'BES_FLEET_INSPECTIONS',
-  'BES_FLEET_INSPECTION_ITEMS',
-  'BES_FLEET_INSPECTION_PHOTOS',
-  'BES_CSR_SECTORS',
-  'BES_BARANGAY_LOCATIONS',
-  'BES_CSR_REQUESTS',
-  'BES_CSR_EVENTS',
-  'BES_CSR_ATTACHMENTS',
-  'BES_MEMBER_PROGRAMS',
-  'BES_MEMBER_OPS_PROGRAMS',
-  'BES_MEMBER_OPS_ACTIVITIES',
-  'BES_MEMBER_OPS_SCHEDULES',
-  'BES_BFM_FACILITIES',
-  'BES_BFM_PERSONNEL',
-  'BES_BFM_TODOS',
-  'BES_BFM_TODO_WORKERS',
-  'BES_BFM_ACTIVITY',
-  'BES_BFM_WORK_DETAILS',
-  'BES_BFM_PROJECTS',
-  'BES_HRO_REC_TASK_PROCESSING',
-  'BES_HRO_HR_TASK_PROCESSING',
-  'BES_HRO_LD_TASK_PROCESSING',
-  'BES_HRO_PM_TASK_PROCESSING',
-  'BES_HRO_ER_TASK_PROCESSING',
-  'BES_HRO_IC_TASK_PROCESSING',
-  'BES_HRO_MCP_TASK_PROCESSING',
-  'BES_HRO_RM_TASK_PROCESSING',
-  'BES_HRO_EM_TASK_PROCESSING',
-];
 const DB_SYNC_DELETE_ORDER = [
   'BES_MEMBER_OPS_SCHEDULES',
   'BES_MEMBER_OPS_ACTIVITIES',
@@ -733,7 +673,8 @@ const DB_SYNC_INSERT_ORDER = [
   'BES_HRO_RM_TASK_PROCESSING',
   'BES_HRO_EM_TASK_PROCESSING',
 ];
-const DB_SYNC_ALLOWED = new Set(DB_SYNC_TABLES);
+const DB_SYNC_PROTECTED_TABLES = new Set(['BES_AUTH_SESSIONS', 'BES_PASSWORD_RESETS']);
+const isSyncableTableName = (tableName) => /^BES_[A-Z0-9_]+$/.test(tableName) && !DB_SYNC_PROTECTED_TABLES.has(tableName);
 const DB_SYNC_KEY_OVERRIDES = new Map([
   ['BES_DEPARTMENTS', ['DEPARTMENT_NAME']],
   ['BES_HRO_RECRUITMENT_POSITIONS', ['POSITION_NAME']],
@@ -762,6 +703,10 @@ const DB_SYNC_CASE_INSENSITIVE_KEYS = new Set([
   'DEPARTMENT_NAME', 'OFFICE_NAME', 'POSITION_TITLE', 'POSITION_NAME', 'TASK_SUBJECT', 'SECTOR_NAME', 'MUNICIPALITY', 'BARANGAY',
 ]);
 const DB_SYNC_DEPENDENCIES = new Map([
+  ['BES_ROLE_PERMISSIONS', ['BES_ROLES', 'BES_PERMISSIONS']],
+  ['BES_USER_ROLES', ['BES_USERS', 'BES_ROLES']],
+  ['BES_OFFICES', ['BES_DEPARTMENTS']],
+  ['BES_POSITIONS', ['BES_DEPARTMENTS', 'BES_OFFICES']],
   ['BES_FLEET_RENEWAL_RECEIPTS', ['BES_FLEET_SCHEDULES']],
   ['BES_FLEET_INSPECTION_ITEMS', ['BES_FLEET_INSPECTIONS']],
   ['BES_FLEET_INSPECTION_PHOTOS', ['BES_FLEET_INSPECTIONS', 'BES_FLEET_INSPECTION_ITEMS']],
@@ -769,9 +714,39 @@ const DB_SYNC_DEPENDENCIES = new Map([
   ['BES_MEMBER_OPS_SCHEDULES', ['BES_MEMBER_OPS_PROGRAMS', 'BES_MEMBER_OPS_ACTIVITIES']],
 ]);
 function expandSyncSelection(requestedTables) {
-  const selected = new Set(Array.isArray(requestedTables) ? requestedTables.map((table) => normalize(table).toUpperCase()).filter((table) => DB_SYNC_ALLOWED.has(table)) : []);
+  const selected = new Set(Array.isArray(requestedTables) ? requestedTables.map((table) => normalize(table).toUpperCase()).filter(isSyncableTableName) : []);
   for (const table of [...selected]) for (const dependency of DB_SYNC_DEPENDENCIES.get(table) ?? []) selected.add(dependency);
   return [...selected];
+}
+
+async function orderSyncTablesForInsert(connection, selectedTables) {
+  const selected = new Set(selectedTables);
+  const knownPosition = new Map(DB_SYNC_INSERT_ORDER.map((table, index) => [table, index]));
+  const compare = (left, right) => (knownPosition.get(left) ?? Number.MAX_SAFE_INTEGER) - (knownPosition.get(right) ?? Number.MAX_SAFE_INTEGER) || left.localeCompare(right);
+  const dependencies = new Map(selectedTables.map((table) => [table, new Set()]));
+  const result = await connection.execute(`SELECT child.table_name child_table, parent.table_name parent_table
+    FROM user_constraints child
+    JOIN user_constraints parent ON parent.owner=child.r_owner AND parent.constraint_name=child.r_constraint_name
+    WHERE child.constraint_type='R'`);
+  for (const row of result.rows) {
+    if (selected.has(row.CHILD_TABLE) && selected.has(row.PARENT_TABLE) && row.CHILD_TABLE !== row.PARENT_TABLE) {
+      dependencies.get(row.CHILD_TABLE).add(row.PARENT_TABLE);
+    }
+  }
+  const ordered = [];
+  const remaining = new Set(selectedTables);
+  while (remaining.size) {
+    const ready = [...remaining].filter((table) => [...dependencies.get(table)].every((dependency) => !remaining.has(dependency))).sort(compare);
+    if (!ready.length) {
+      ordered.push(...[...remaining].sort(compare));
+      break;
+    }
+    for (const table of ready) {
+      ordered.push(table);
+      remaining.delete(table);
+    }
+  }
+  return ordered;
 }
 
 const oracleConnectString = (details) => {
@@ -875,8 +850,9 @@ async function prepareServerDatabase(databaseConfig, admin, token) {
 async function listSyncTables(connection) {
   const tableResult = await connection.execute(`SELECT table_name
     FROM user_tables
-    WHERE table_name IN (${DB_SYNC_TABLES.map((_, index) => `:t${index}`).join(',')})
-    ORDER BY table_name`, Object.fromEntries(DB_SYNC_TABLES.map((table, index) => [`t${index}`, table])));
+    WHERE REGEXP_LIKE(table_name, '^BES_[A-Z0-9_]+$')
+      AND table_name NOT IN ('BES_AUTH_SESSIONS', 'BES_PASSWORD_RESETS')
+    ORDER BY table_name`);
   const rows = [];
   for (const table of tableResult.rows.map((row) => row.TABLE_NAME)) {
     const countResult = await connection.execute(`SELECT COUNT(*) row_count FROM ${table}`);
@@ -886,7 +862,7 @@ async function listSyncTables(connection) {
 }
 
 async function tableColumns(connection, tableName) {
-  if (!DB_SYNC_ALLOWED.has(tableName)) throw Object.assign(new Error(`Table ${tableName} is not allowed for sync.`), { statusCode: 400 });
+  if (!isSyncableTableName(tableName)) throw Object.assign(new Error(`Table ${tableName} is not allowed for sync.`), { statusCode: 400 });
   const result = await connection.execute(`SELECT column_name
     FROM user_tab_columns
     WHERE table_name = :tableName
@@ -895,7 +871,7 @@ async function tableColumns(connection, tableName) {
 }
 
 async function tableColumnMetadata(connection, tableName) {
-  if (!DB_SYNC_ALLOWED.has(tableName)) throw Object.assign(new Error(`Table ${tableName} is not allowed for sync.`), { statusCode: 400 });
+  if (!isSyncableTableName(tableName)) throw Object.assign(new Error(`Table ${tableName} is not allowed for sync.`), { statusCode: 400 });
   const result = await connection.execute(`SELECT column_name, data_type, data_length, char_length, char_used, data_precision, data_scale
     FROM user_tab_columns WHERE table_name=:tableName ORDER BY column_id`, { tableName });
   return result.rows;
@@ -908,6 +884,31 @@ async function tablePrimaryKeyColumns(connection, tableName) {
     WHERE c.table_name=:tableName AND c.constraint_type='P'
     ORDER BY cc.position`, { tableName });
   return result.rows.map((row) => row.COLUMN_NAME);
+}
+
+async function tableHasForeignKey(connection, tableName, columnName, parentTableName) {
+  const result = await connection.execute(`SELECT 1
+    FROM user_constraints child
+    JOIN user_cons_columns child_columns ON child_columns.owner=child.owner AND child_columns.constraint_name=child.constraint_name
+    JOIN user_constraints parent ON parent.owner=child.r_owner AND parent.constraint_name=child.r_constraint_name
+    WHERE child.constraint_type='R' AND child.table_name=:tableName
+      AND child_columns.column_name=:columnName AND parent.table_name=:parentTableName
+      AND ROWNUM=1`, { tableName, columnName, parentTableName });
+  return Boolean(result.rows[0]);
+}
+
+async function oracleForeignKeyDetail(connection, error) {
+  if (error?.errorNum !== 2291) return '';
+  const constraintName = normalize(error.message).match(/\([^.)]+\.([^)]+)\)/)?.[1];
+  if (!constraintName) return '';
+  const result = await connection.execute(`SELECT child.table_name, child_columns.column_name, parent.table_name parent_table, parent_columns.column_name parent_column
+    FROM user_constraints child
+    JOIN user_cons_columns child_columns ON child_columns.owner=child.owner AND child_columns.constraint_name=child.constraint_name
+    JOIN user_constraints parent ON parent.owner=child.r_owner AND parent.constraint_name=child.r_constraint_name
+    JOIN user_cons_columns parent_columns ON parent_columns.owner=parent.owner AND parent_columns.constraint_name=parent.constraint_name AND parent_columns.position=child_columns.position
+    WHERE child.constraint_name=:constraintName
+    ORDER BY child_columns.position`, { constraintName });
+  return result.rows.map((row) => `${row.TABLE_NAME}.${row.COLUMN_NAME} requires ${row.PARENT_TABLE}.${row.PARENT_COLUMN}`).join(', ');
 }
 
 async function canManageBuildingFacilities(connection, user) {
@@ -1075,11 +1076,66 @@ async function remapPositionScopeIds(source, destination, rows) {
   return rows.map((row) => {
     const departmentCode = sourceDepartmentCodes.get(String(row.DEPARTMENT_ID ?? '')) ?? '';
     const officeScope = row.OFFICE_ID == null ? null : sourceOfficeScopes.get(String(row.OFFICE_ID));
+    const destinationDepartmentId = departmentCode ? targetDepartmentIds.get(departmentCode) : null;
+    const destinationOfficeId = officeScope ? targetOfficeIds.get(`${officeScope.departmentCode}\u0000${officeScope.officeName}`) : null;
+    if (row.DEPARTMENT_ID != null && destinationDepartmentId == null) throw Object.assign(new Error(`Position ${row.POSITION_TITLE} references department ${departmentCode || row.DEPARTMENT_ID}, which is not present in the destination.`), { statusCode: 400 });
+    if (row.OFFICE_ID != null && destinationOfficeId == null) throw Object.assign(new Error(`Position ${row.POSITION_TITLE} references office ${officeScope?.officeName || row.OFFICE_ID}, which is not present in the destination.`), { statusCode: 400 });
     return {
       ...row,
-      DEPARTMENT_ID: departmentCode ? (targetDepartmentIds.get(departmentCode) ?? row.DEPARTMENT_ID) : row.DEPARTMENT_ID,
-      OFFICE_ID: officeScope ? (targetOfficeIds.get(`${officeScope.departmentCode}\u0000${officeScope.officeName}`) ?? row.OFFICE_ID) : null,
+      DEPARTMENT_ID: destinationDepartmentId,
+      OFFICE_ID: destinationOfficeId,
     };
+  });
+}
+
+async function remapOfficeScopeIds(source, destination, rows) {
+  if (!rows.length) return { rows, parentRelations: [] };
+  const [sourceDepartments, destinationDepartments, sourceOffices] = await Promise.all([
+    source.execute(`SELECT department_id, department_code FROM bes_departments`),
+    destination.execute(`SELECT department_id, department_code FROM bes_departments`),
+    source.execute(`SELECT office_id, department_id, parent_office_id, office_name FROM bes_offices`),
+  ]);
+  const sourceDepartmentCodes = new Map(sourceDepartments.rows.map((row) => [String(row.DEPARTMENT_ID), normalize(row.DEPARTMENT_CODE).toUpperCase()]));
+  const destinationDepartmentIds = new Map(destinationDepartments.rows.map((row) => [normalize(row.DEPARTMENT_CODE).toUpperCase(), row.DEPARTMENT_ID]));
+  const sourceOfficeById = new Map(sourceOffices.rows.map((row) => [String(row.OFFICE_ID), row]));
+  const officeIdentity = (row) => `${sourceDepartmentCodes.get(String(row.DEPARTMENT_ID)) ?? ''}\u0000${normalize(row.OFFICE_NAME).toUpperCase()}`;
+  const parentRelations = sourceOffices.rows.map((row) => ({
+    officeIdentity: officeIdentity(row),
+    parentIdentity: row.PARENT_OFFICE_ID == null ? null : officeIdentity(sourceOfficeById.get(String(row.PARENT_OFFICE_ID)) ?? {}),
+  }));
+  return {
+    rows: rows.map((row) => {
+      const departmentCode = sourceDepartmentCodes.get(String(row.DEPARTMENT_ID)) ?? '';
+      const destinationDepartmentId = destinationDepartmentIds.get(departmentCode);
+      if (destinationDepartmentId == null) throw Object.assign(new Error(`Office ${row.OFFICE_NAME} references department ${departmentCode || row.DEPARTMENT_ID}, which is not present in the destination.`), { statusCode: 400 });
+      return { ...row, DEPARTMENT_ID: destinationDepartmentId, PARENT_OFFICE_ID: null };
+    }),
+    parentRelations,
+  };
+}
+
+async function remapPositionReferenceIds(source, destination, rows) {
+  if (!rows.length) return rows;
+  const positionSql = `SELECT position.position_id, position.position_title,
+      COALESCE(department.department_code, office_department.department_code) department_code,
+      office.office_name
+    FROM bes_positions position
+    LEFT JOIN bes_departments department ON department.department_id=position.department_id
+    LEFT JOIN bes_offices office ON office.office_id=position.office_id
+    LEFT JOIN bes_departments office_department ON office_department.department_id=office.department_id`;
+  const [sourcePositions, destinationPositions] = await Promise.all([
+    source.execute(positionSql),
+    destination.execute(positionSql),
+  ]);
+  const positionIdentity = (row) => `${normalize(row.DEPARTMENT_CODE).toUpperCase()}\u0000${normalize(row.OFFICE_NAME).toUpperCase()}\u0000${normalize(row.POSITION_TITLE).toUpperCase()}`;
+  const sourceIdentityById = new Map(sourcePositions.rows.map((row) => [String(row.POSITION_ID), positionIdentity(row)]));
+  const destinationIdByIdentity = new Map(destinationPositions.rows.map((row) => [positionIdentity(row), row.POSITION_ID]));
+  return rows.map((row) => {
+    if (row.POSITION_ID == null) return row;
+    const identity = sourceIdentityById.get(String(row.POSITION_ID));
+    const destinationPositionId = identity ? destinationIdByIdentity.get(identity) : null;
+    if (destinationPositionId == null) throw Object.assign(new Error(`Position reference ${row.POSITION_ID} is not present in the destination organization.`), { statusCode: 400 });
+    return { ...row, POSITION_ID: destinationPositionId };
   });
 }
 
@@ -1127,7 +1183,7 @@ async function pushOracleSchema(targetDetails, requestedTables) {
       if (missingSource.length) throw Object.assign(new Error(`Local schema is missing: ${missingSource.join(', ')}`), { statusCode: 400 });
       let targetTables = new Set((await listSyncTables(target)).map((table) => table.tableName));
       const report = [];
-      for (const table of DB_SYNC_INSERT_ORDER.filter((item) => selected.includes(item))) {
+      for (const table of await orderSyncTablesForInsert(source, selected)) {
         if (!targetTables.has(table)) {
           await source.execute(`BEGIN
             DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'STORAGE', false);
@@ -1163,7 +1219,7 @@ async function copyOracleTables(source, destination, selected, direction) {
   const addedColumns = new Map();
   for (const table of selected) addedColumns.set(table, await alignDestinationColumns(source, destination, table));
   const report = [];
-  for (const table of DB_SYNC_INSERT_ORDER.filter((table) => selected.includes(table))) {
+  for (const table of await orderSyncTablesForInsert(source, selected)) {
     let syncStage = 'reading metadata';
     try {
       const columnMetadata = await tableColumnMetadata(source, table);
@@ -1176,7 +1232,17 @@ async function copyOracleTables(source, destination, selected, direction) {
       const sourceResult = await source.execute(`SELECT ${columns.join(', ')} FROM ${table}`);
       sourceResult.rows = await materializeOracleLobs(sourceResult.rows, columnMetadata);
       let memberProgramParents = null;
+      let officeParents = null;
+      if (table === 'BES_USER_ROLES') sourceResult.rows = await remapUserReferenceIds(source, destination, sourceResult.rows, ['USER_ID']);
+      if (table === 'BES_OFFICES') {
+        const remapped = await remapOfficeScopeIds(source, destination, sourceResult.rows);
+        sourceResult.rows = remapped.rows;
+        officeParents = remapped.parentRelations;
+      }
       if (table === 'BES_POSITIONS') sourceResult.rows = await remapPositionScopeIds(source, destination, sourceResult.rows);
+      if (table !== 'BES_POSITIONS' && columns.includes('POSITION_ID') && await tableHasForeignKey(source, table, 'POSITION_ID', 'BES_POSITIONS')) {
+        sourceResult.rows = await remapPositionReferenceIds(source, destination, sourceResult.rows);
+      }
       if (table === 'BES_CSR_EVENTS' || table === 'BES_CSR_ATTACHMENTS') sourceResult.rows = await remapCsrEventRequestIds(source, destination, sourceResult.rows);
       if (table === 'BES_MEMBER_OPS_PROGRAMS') sourceResult.rows = parentFirstRows(sourceResult.rows, 'PROGRAM_UID', 'PARENT_PROGRAM_UID');
       if (['BES_MEMBER_PROGRAMS','BES_MEMBER_OPS_PROGRAMS','BES_MEMBER_OPS_ACTIVITIES'].includes(table)) {
@@ -1188,19 +1254,27 @@ async function copyOracleTables(source, destination, selected, direction) {
         sourceResult.rows = sourceResult.rows.map((row) => ({ ...row, PARENT_PROGRAM_ID: null }));
       }
       const immutableColumns = new Set([...syncKeyColumns, ...primaryKeyColumns]);
+      if (table === 'BES_OFFICES') {
+        immutableColumns.delete('OFFICE_NAME');
+        immutableColumns.add('PARENT_OFFICE_ID');
+      }
       const updateColumns = columns.filter((column) => !immutableColumns.has(column));
       const usesLogicalKey = syncKeyColumns.some((column) => !primaryKeyColumns.includes(column));
-      const insertColumns = usesLogicalKey ? columns.filter((column) => !identityColumns.includes(column)) : columns;
+      const insertColumns = (usesLogicalKey ? columns.filter((column) => !identityColumns.includes(column)) : columns)
+        .filter((column) => table !== 'BES_OFFICES' || column !== 'PARENT_OFFICE_ID');
       if (usesLogicalKey && identityColumns.length) {
         syncStage = 'aligning destination identity';
         await alignIdentitySequences(destination, table);
       }
       const usingColumns = columns.map((column) => `:${column} ${column}`).join(', ');
-      const match = syncKeyColumns.map((column) => {
+      const defaultMatch = syncKeyColumns.map((column) => {
         const destinationValue = DB_SYNC_CASE_INSENSITIVE_KEYS.has(column) ? `UPPER(destination.${column})` : `destination.${column}`;
         const sourceValue = DB_SYNC_CASE_INSENSITIVE_KEYS.has(column) ? `UPPER(source.${column})` : `source.${column}`;
         return `(${destinationValue}=${sourceValue} OR (destination.${column} IS NULL AND source.${column} IS NULL))`;
       }).join(' AND ');
+      const match = table === 'BES_OFFICES'
+        ? `destination.DEPARTMENT_ID=source.DEPARTMENT_ID AND ((source.OFFICE_SHORT IS NOT NULL AND UPPER(destination.OFFICE_SHORT)=UPPER(source.OFFICE_SHORT)) OR UPPER(destination.OFFICE_NAME)=UPPER(source.OFFICE_NAME))`
+        : defaultMatch;
       const update = updateColumns.length ? `WHEN MATCHED THEN UPDATE SET ${updateColumns.map((column) => `destination.${column}=source.${column}`).join(', ')}` : '';
       const mergeSql = `MERGE INTO ${table} destination
         USING (SELECT ${usingColumns} FROM dual) source ON (${match})
@@ -1220,11 +1294,26 @@ async function copyOracleTables(source, destination, selected, direction) {
           await destination.execute(`UPDATE bes_member_programs SET parent_program_id=:parentId WHERE program_uid=:programUid`, { programUid: relation.programUid, parentId: relation.parentUid ? destinationIdByUid.get(relation.parentUid) ?? null : null });
         }
       }
+      if (table === 'BES_OFFICES' && officeParents?.length) {
+        const [destinationDepartments, destinationOffices] = await Promise.all([
+          destination.execute(`SELECT department_id, department_code FROM bes_departments`),
+          destination.execute(`SELECT office_id, department_id, office_name FROM bes_offices`),
+        ]);
+        const departmentCodes = new Map(destinationDepartments.rows.map((row) => [String(row.DEPARTMENT_ID), normalize(row.DEPARTMENT_CODE).toUpperCase()]));
+        const destinationOfficeIds = new Map(destinationOffices.rows.map((row) => [`${departmentCodes.get(String(row.DEPARTMENT_ID)) ?? ''}\u0000${normalize(row.OFFICE_NAME).toUpperCase()}`, row.OFFICE_ID]));
+        for (const relation of officeParents) {
+          const officeId = destinationOfficeIds.get(relation.officeIdentity);
+          const parentOfficeId = relation.parentIdentity ? destinationOfficeIds.get(relation.parentIdentity) : null;
+          if (officeId != null) await destination.execute(`UPDATE bes_offices SET parent_office_id=:parentOfficeId WHERE office_id=:officeId`, { officeId, parentOfficeId: parentOfficeId ?? null });
+        }
+      }
       report.push({ tableName: table, rowCount: sourceResult.rows.length, columns: columns.length, addedColumns: addedColumns.get(table), direction, syncKey: syncKeyColumns, note: 'Upserted; destination-only rows preserved.' });
     } catch (error) {
       if (error?.statusCode) throw error;
       const detail = normalize(error?.message) || 'Unknown Oracle error.';
-      throw Object.assign(new Error(`${table} sync failed while ${syncStage}: ${detail}`), { statusCode: error?.errorNum === 1 ? 409 : 400, cause: error });
+      let foreignKeyDetail = '';
+      try { foreignKeyDetail = await oracleForeignKeyDetail(destination, error); } catch {}
+      throw Object.assign(new Error(`${table} sync failed while ${syncStage}: ${detail}${foreignKeyDetail ? ` (${foreignKeyDetail})` : ''}`), { statusCode: error?.errorNum === 1 ? 409 : 400, cause: error });
     }
   }
   await destination.commit();

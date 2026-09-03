@@ -36,6 +36,12 @@ function organizationDescendantCount(node: OrganizationNode, type: OrganizationN
   return node.children.reduce((total, child) => total + (child.type === type ? (type === 'POSITION' ? child.quantity : 1) : 0) + organizationDescendantCount(child, type), 0);
 }
 
+function organizationPlantillaQuantity(node: OrganizationNode): number {
+  return node.children.reduce((total, child) => total
+    + (child.type === 'POSITION' && child.isPlantilla ? Math.max(1, child.quantity || 1) : 0)
+    + organizationPlantillaQuantity(child), 0);
+}
+
 function prioritizeGeneralManagerOffice(nodes: OrganizationNode[]): OrganizationNode[] {
   return [...nodes].sort((left, right) => {
     const leftIsOgm = left.code?.toUpperCase() === 'OGM';
@@ -411,7 +417,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   }, [module.id, toast, token]);
 
   useEffect(() => {
-    if (!token || module.id !== 'human-resources' || tab !== 'organization' || organization.length) return;
+    if (!token || module.id !== 'human-resources' || organization.length) return;
     let cancelled = false;
     setOrganizationLoading(true);
     fetchOrganization(token)
@@ -419,7 +425,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
       .catch((error) => { if (!cancelled) toast({ kind: 'error', title: 'Unable to load organization', description: error instanceof Error ? error.message : 'Please try again.' }); })
       .finally(() => { if (!cancelled) setOrganizationLoading(false); });
     return () => { cancelled = true; };
-  }, [module.id, organization.length, tab, toast, token]);
+  }, [module.id, organization.length, toast, token]);
 
   const tasks = useMemo(() => workItems.filter((item) => {
     if (module.id === 'member-programs') {
@@ -502,17 +508,21 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   const employeePageCount = Math.max(1, Math.ceil(filteredEmployees.length / employeePageSize));
   const safeEmployeePage = Math.min(employeePage, employeePageCount);
   const employeePageRows = filteredEmployees.slice((safeEmployeePage - 1) * employeePageSize, safeEmployeePage * employeePageSize);
+  const totalPlantillaPositions = useMemo(() => organization.reduce((total, department) => total + organizationPlantillaQuantity(department), 0), [organization]);
   const employeeDepartmentCounts = useMemo(() => {
-    const counts = new Map<string, { code: string; name: string; count: number }>();
+    const plantillaByDepartment = new Map(organization
+      .filter((node) => node.type === 'DEPARTMENT' && node.code)
+      .map((node) => [String(node.code).toUpperCase(), organizationPlantillaQuantity(node)]));
+    const counts = new Map<string, { code: string; name: string; count: number; plantillaQuantity: number }>();
     for (const employee of employees) {
       const code = employee.departmentShort || employee.departmentId || 'Unassigned';
       const name = employee.departmentName || (code === 'Unassigned' ? 'No department lookup' : code);
       const current = counts.get(code);
       if (current) current.count += 1;
-      else counts.set(code, { code, name, count: 1 });
+      else counts.set(code, { code, name, count: 1, plantillaQuantity: plantillaByDepartment.get(code.toUpperCase()) ?? 0 });
     }
     return [...counts.values()].sort((left, right) => left.code.localeCompare(right.code));
-  }, [employees]);
+  }, [employees, organization]);
 
   function toggleEmployeeSort(key: string) {
     if (employeeSortKey === key) setEmployeeSortDir((direction) => direction === 'asc' ? 'desc' : 'asc');
@@ -602,11 +612,11 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
       <PageHeader title={module.name} description={module.description} crumbs={[{ label: 'My Workspace', to: '/workspace' }, { label: module.name }]} />
       {module.id !== 'member-programs' && <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {module.id === 'human-resources' ? <>
-          <Card className="p-4"><p className="text-xs text-slate-500">Active Employees</p><p className="mt-1 text-2xl font-bold text-slate-900">{employees.length || '—'}</p></Card>
+          <Card className="p-4"><div className="grid h-full grid-cols-2 gap-4"><div><p className="text-xs text-slate-500">Active Employees</p><p className="mt-1 text-2xl font-bold text-slate-900">{employees.length || '—'}</p></div><div className="border-l border-slate-200 pl-4"><p className="text-xs text-slate-500">Total Plantilla Positions</p><p className="mt-1 text-2xl font-bold text-brand-700">{organizationLoading && !organization.length ? '—' : totalPlantillaPositions}</p></div></div></Card>
           <Card className="p-4 sm:col-span-2">
             <p className="text-xs font-medium text-slate-500">Employees per Department</p>
             <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2 sm:grid-cols-3">
-              {employeeDepartmentCounts.map((department) => <div key={department.code} className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1" title={department.name}><span className="truncate text-xs font-medium text-slate-700">{department.code}</span><span className="text-sm font-bold text-brand-700">{department.count}</span></div>)}
+              {employeeDepartmentCounts.map((department) => <div key={department.code} className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1" title={`${department.name}: ${department.count} active employees / ${department.plantillaQuantity} approved plantilla positions`}><span className="truncate text-xs font-medium text-slate-700">{department.code}</span><span className="text-sm font-bold text-brand-700"><span>{department.count}</span><span className="px-1 text-slate-400">/</span><span>{department.plantillaQuantity}</span></span></div>)}
             </div>
           </Card>
         </> : module.stats.map((stat) => <Card key={stat.label} className="p-4"><p className="text-xs text-slate-500">{stat.label}</p><p className="mt-1 text-xl font-bold text-slate-900">{stat.value}</p></Card>)}
