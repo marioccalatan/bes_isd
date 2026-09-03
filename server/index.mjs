@@ -81,6 +81,16 @@ const nullableNormalize = (value) => {
   const text = normalize(value);
   return text ? text : null;
 };
+async function userTableColumns(connection, tableName) {
+  const result = await connection.execute(`SELECT column_name FROM user_tab_columns WHERE table_name=:tableName`, { tableName: tableName.toUpperCase() });
+  return new Set(result.rows.map((row) => row.COLUMN_NAME));
+}
+const selectColumn = (columns, columnName, fallbackExpression = 'NULL') =>
+  columns.has(columnName.toUpperCase()) ? columnName.toLowerCase() : `${fallbackExpression} AS ${columnName.toLowerCase()}`;
+const selectPositionNameColumn = (columns) =>
+  columns.has('POSITION_NAME') ? 'position_name' : columns.has('POSITION_TITLE') ? 'position_title AS position_name' : `'' AS position_name`;
+const positionNameOrderColumn = (columns) =>
+  columns.has('POSITION_NAME') ? 'position_name' : columns.has('POSITION_TITLE') ? 'position_title' : 'position_id';
 const toDbTimestamp = (value) => {
   const text = normalize(value);
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return null;
@@ -1537,9 +1547,19 @@ async function handle(req, res) {
       const structure = await withConnection(async (c) => {
         const user = await currentSessionUser(c, bearerToken(req));
         if (!user) return null;
-        const departments = await c.execute(`SELECT department_id, department_code, dept_id, department_name FROM bes_departments WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY CASE WHEN department_code='OGM' THEN 0 ELSE 1 END, department_name`);
+        const departmentColumns = await userTableColumns(c, 'BES_DEPARTMENTS');
+        const positionColumns = await userTableColumns(c, 'BES_POSITIONS');
+        const departmentWhere = [
+          departmentColumns.has('IS_ACTIVE') ? `is_active='Y'` : '1=1',
+          departmentColumns.has('IS_ORGANIZATION_UNIT') ? `is_organization_unit='Y'` : '1=1',
+        ].join(' AND ');
+        const positionWhere = [
+          positionColumns.has('IS_ACTIVE') ? `is_active='Y'` : '1=1',
+          positionColumns.has('IS_ORGANIZATION_UNIT') ? `is_organization_unit='Y'` : '1=1',
+        ].join(' AND ');
+        const departments = await c.execute(`SELECT department_id, department_code, ${selectColumn(departmentColumns, 'dept_id')}, department_name FROM bes_departments WHERE ${departmentWhere} ORDER BY CASE WHEN department_code='OGM' THEN 0 ELSE 1 END, department_name`);
         const offices = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name, office_short FROM bes_offices WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY office_name`);
-        const positions = await c.execute(`SELECT position_id, department_id, dept_id, office_id, position_name, employee_class, position_level, position_quantity, is_plantilla, position_purpose FROM bes_positions WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY position_name`);
+        const positions = await c.execute(`SELECT position_id, ${selectColumn(positionColumns, 'department_id')}, ${selectColumn(positionColumns, 'dept_id')}, ${selectColumn(positionColumns, 'office_id')}, ${selectPositionNameColumn(positionColumns)}, employee_class, ${selectColumn(positionColumns, 'position_level', '4')}, ${selectColumn(positionColumns, 'position_quantity', '1')}, ${selectColumn(positionColumns, 'is_plantilla', `'Y'`)}, ${selectColumn(positionColumns, 'position_purpose')} FROM bes_positions WHERE ${positionWhere} ORDER BY ${positionNameOrderColumn(positionColumns)}`);
         const ownAssignments = !isPerformanceManager(user) ? await c.execute(`SELECT position_id FROM bes_performance_assignments
           WHERE employee_user_id=:userId AND is_active='Y' AND assignment_mode='INCLUDE'`, { userId: user.USER_ID }) : { rows: [] };
         const ownPositionIds = new Set(ownAssignments.rows.map((assignment) => assignment.POSITION_ID));
@@ -2985,26 +3005,42 @@ async function handle(req, res) {
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
-        const [departments, offices, positions] = await Promise.all([
-          c.execute(`SELECT department.department_id, department.department_code, department.dept_id, department.department_name
-            FROM bes_departments department
-            WHERE department.is_active='Y' AND department.is_organization_unit='Y'
-            ORDER BY department.department_name`),
-          c.execute(`SELECT o_id, dept_id, o_short, o_long
-            FROM bes_hr_office_lookup office
-            WHERE office.is_office='Y'
-              AND EXISTS (
+        const departmentColumns = await userTableColumns(c, 'BES_DEPARTMENTS');
+        const officeLookupColumns = await userTableColumns(c, 'BES_HR_OFFICE_LOOKUP');
+        const positionColumns = await userTableColumns(c, 'BES_POSITIONS');
+        const departmentWhere = [
+          departmentColumns.has('IS_ACTIVE') ? `department.is_active='Y'` : '1=1',
+          departmentColumns.has('IS_ORGANIZATION_UNIT') ? `department.is_organization_unit='Y'` : '1=1',
+        ].join(' AND ');
+        const officeWhere = [
+          officeLookupColumns.has('IS_OFFICE') ? `office.is_office='Y'` : '1=1',
+          officeLookupColumns.has('DEPT_ID') ? `EXISTS (
                 SELECT 1 FROM bes_departments department
-                WHERE department.is_active='Y'
-                  AND department.is_organization_unit='Y'
+                WHERE ${departmentWhere}
                   AND department.dept_id=office.dept_id
-              )
-            ORDER BY o_long`),
-          c.execute(`SELECT position_id, department_id, dept_id, o_id, office_id, position_name, employee_class, position_type1, position_type2, position_level, position_quantity, is_plantilla, position_purpose
+              )` : '1=1',
+        ].join(' AND ');
+        const officeOrderColumn = officeLookupColumns.has('O_LONG') ? 'o_long' : officeLookupColumns.has('O_SHORT') ? 'o_short' : 'o_id';
+        const positionWhere = positionColumns.has('IS_ACTIVE') ? [`is_active='Y'`] : ['1=1'];
+        if (positionColumns.has('IS_ORGANIZATION_UNIT')) {
+          const managerCondition = positionColumns.has('EMPLOYEE_CLASS') && (positionColumns.has('O_ID') || positionColumns.has('OFFICE_ID'))
+            ? ` OR (employee_class IN ('GENERAL_MANAGER','ASSISTANT_GENERAL_MANAGER','DEPARTMENT_MANAGER')${positionColumns.has('O_ID') ? ' AND o_id IS NULL' : ''}${positionColumns.has('OFFICE_ID') ? ' AND office_id IS NULL' : ''})`
+            : '';
+          positionWhere.push(`(is_organization_unit='Y'${managerCondition})`);
+        }
+        const [departments, offices, positions] = await Promise.all([
+          c.execute(`SELECT department.department_id, department.department_code, ${selectColumn(departmentColumns, 'dept_id')}, department.department_name
+            FROM bes_departments department
+            WHERE ${departmentWhere}
+            ORDER BY department.department_name`),
+          c.execute(`SELECT ${selectColumn(officeLookupColumns, 'o_id')}, ${selectColumn(officeLookupColumns, 'dept_id')}, ${selectColumn(officeLookupColumns, 'o_short')}, ${selectColumn(officeLookupColumns, 'o_long')}
+            FROM bes_hr_office_lookup office
+            WHERE ${officeWhere}
+            ORDER BY ${officeOrderColumn}`),
+          c.execute(`SELECT position_id, ${selectColumn(positionColumns, 'department_id')}, ${selectColumn(positionColumns, 'dept_id')}, ${selectColumn(positionColumns, 'o_id')}, ${selectColumn(positionColumns, 'office_id')}, ${selectPositionNameColumn(positionColumns)}, employee_class, ${selectColumn(positionColumns, 'position_type1')}, ${selectColumn(positionColumns, 'position_type2')}, ${selectColumn(positionColumns, 'position_level', '4')}, ${selectColumn(positionColumns, 'position_quantity', '1')}, ${selectColumn(positionColumns, 'is_plantilla', `'Y'`)}, ${selectColumn(positionColumns, 'position_purpose')}
             FROM bes_positions
-            WHERE is_active='Y'
-              AND (is_organization_unit='Y' OR (employee_class IN ('GENERAL_MANAGER','ASSISTANT_GENERAL_MANAGER','DEPARTMENT_MANAGER') AND o_id IS NULL AND office_id IS NULL))
-            ORDER BY position_name`),
+            WHERE ${positionWhere.join(' AND ')}
+            ORDER BY ${positionNameOrderColumn(positionColumns)}`),
         ]);
         const departmentByDeptId = new Map(departments.rows.map((department) => [department.DEPT_ID, department]));
         const officeByOId = new Map(offices.rows.map((office) => [office.O_ID, office]));
