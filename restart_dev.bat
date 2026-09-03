@@ -6,6 +6,7 @@ cd /d "%~dp0"
 set "BES_DEV_HOST=127.0.0.1"
 set "BES_API_PORT=3001"
 set "BES_VITE_PORT=5173"
+if not defined BES_DATABASE set "BES_DATABASE=server"
 set "API_HOST=%BES_DEV_HOST%"
 set "API_PORT=%BES_API_PORT%"
 

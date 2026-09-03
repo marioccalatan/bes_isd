@@ -69,6 +69,7 @@ export interface OrganizationNode {
   parentId?: string | null;
   type: 'DEPARTMENT' | 'OFFICE' | 'POSITION';
   code?: string | null;
+  deptId?: string | null;
   name: string;
   departmentCode: string;
   officeShort?: string | null;

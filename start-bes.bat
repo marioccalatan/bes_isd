@@ -46,6 +46,10 @@ echo Once ready, open http://127.0.0.1:5174 in your browser.
 echo Press Ctrl+C to stop the servers.
 echo.
 
+rem Use the configured shared Oracle server for normal GUI startup. Set
+rem BES_DATABASE=local before launching this file to target local FREEPDB1.
+if not defined BES_DATABASE set "BES_DATABASE=server"
+
 rem Authentication and data requests require the API on port 3001. Reuse a
 rem healthy existing API when Windows permissions prevent the launcher from
 rem stopping it; otherwise start it in this console group with Vite.

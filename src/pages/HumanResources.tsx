@@ -511,17 +511,18 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   const totalPlantillaPositions = useMemo(() => organization.reduce((total, department) => total + organizationPlantillaQuantity(department), 0), [organization]);
   const employeeDepartmentCounts = useMemo(() => {
     const plantillaByDepartment = new Map(organization
-      .filter((node) => node.type === 'DEPARTMENT' && node.code)
-      .map((node) => [String(node.code).toUpperCase(), organizationPlantillaQuantity(node)]));
-    const counts = new Map<string, { code: string; name: string; count: number; plantillaQuantity: number }>();
+      .filter((node) => node.type === 'DEPARTMENT' && (node.deptId || node.code))
+      .map((node) => [String(node.deptId || node.code).toUpperCase(), organizationPlantillaQuantity(node)]));
+    const counts = new Map<string, { id: string; label: string; name: string; count: number; plantillaQuantity: number }>();
     for (const employee of employees) {
-      const code = employee.departmentShort || employee.departmentId || 'Unassigned';
-      const name = employee.departmentName || (code === 'Unassigned' ? 'No department lookup' : code);
-      const current = counts.get(code);
+      const id = employee.departmentId || employee.departmentShort || 'Unassigned';
+      const label = employee.departmentShort || employee.departmentId || 'Unassigned';
+      const name = employee.departmentName || (id === 'Unassigned' ? 'No department lookup' : label);
+      const current = counts.get(id);
       if (current) current.count += 1;
-      else counts.set(code, { code, name, count: 1, plantillaQuantity: plantillaByDepartment.get(code.toUpperCase()) ?? 0 });
+      else counts.set(id, { id, label, name, count: 1, plantillaQuantity: plantillaByDepartment.get(id.toUpperCase()) ?? 0 });
     }
-    return [...counts.values()].sort((left, right) => left.code.localeCompare(right.code));
+    return [...counts.values()].sort((left, right) => left.id.localeCompare(right.id));
   }, [employees, organization]);
 
   function toggleEmployeeSort(key: string) {
@@ -616,7 +617,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
           <Card className="p-4 sm:col-span-2">
             <p className="text-xs font-medium text-slate-500">Employees per Department</p>
             <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2 sm:grid-cols-3">
-              {employeeDepartmentCounts.map((department) => <div key={department.code} className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1" title={`${department.name}: ${department.count} active employees / ${department.plantillaQuantity} approved plantilla positions`}><span className="truncate text-xs font-medium text-slate-700">{department.code}</span><span className="text-sm font-bold text-brand-700"><span>{department.count}</span><span className="px-1 text-slate-400">/</span><span>{department.plantillaQuantity}</span></span></div>)}
+              {employeeDepartmentCounts.map((department) => <div key={department.id} className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1" title={`${department.name}: ${department.count} active employees / ${department.plantillaQuantity} approved plantilla positions`}><span className="truncate text-xs font-medium text-slate-700">{department.label}</span><span className="text-sm font-bold text-brand-700"><span>{department.count}</span><span className="px-1 text-slate-400">/</span><span>{department.plantillaQuantity}</span></span></div>)}
             </div>
           </Card>
         </> : module.stats.map((stat) => <Card key={stat.label} className="p-4"><p className="text-xs text-slate-500">{stat.label}</p><p className="mt-1 text-xl font-bold text-slate-900">{stat.value}</p></Card>)}

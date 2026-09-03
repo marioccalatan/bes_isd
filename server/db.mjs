@@ -10,8 +10,8 @@ const localDatabaseConfig = Object.freeze({
   connectString: config.connectString,
 });
 
-let activeDatabase = 'local';
-let serverDatabaseConfig = null;
+let activeDatabase = config.databaseMode;
+let serverDatabaseConfig = config.serverOracle;
 
 export function getDatabaseRuntimeStatus() {
   return {
@@ -73,6 +73,29 @@ async function addColumn(connection, sql) {
   try { await connection.execute(sql); } catch (error) { if (error.errorNum !== 1430) throw error; }
 }
 
+async function syncPositionDepartmentLookupIds(connection) {
+  await addColumn(connection, `ALTER TABLE bes_positions ADD (dept_id VARCHAR2(3))`);
+  await connection.execute(`UPDATE bes_positions position
+    SET dept_id = (
+      SELECT lookup.dept_id
+      FROM hr_department_lookup lookup
+      JOIN bes_departments department ON UPPER(TRIM(department.department_code)) = UPPER(TRIM(lookup.dept_short))
+      LEFT JOIN bes_offices office ON office.office_id = position.office_id
+      WHERE lookup.active_stat = 'ACTIVE'
+        AND department.department_id = NVL(position.department_id, office.department_id)
+        AND ROWNUM = 1
+    )
+    WHERE EXISTS (
+      SELECT 1
+      FROM hr_department_lookup lookup
+      JOIN bes_departments department ON UPPER(TRIM(department.department_code)) = UPPER(TRIM(lookup.dept_short))
+      LEFT JOIN bes_offices office ON office.office_id = position.office_id
+      WHERE lookup.active_stat = 'ACTIVE'
+        AND department.department_id = NVL(position.department_id, office.department_id)
+    )`);
+  await runDdl(connection, `CREATE INDEX ix_bes_positions_dept_id ON bes_positions (dept_id)`);
+}
+
 async function migrateOrganizationLevelDefault(connection) {
   const found = await connection.execute(`SELECT data_default FROM user_tab_columns WHERE table_name='BES_ORGANIZATION' AND column_name='POSITION_LEVEL'`);
   const currentDefault = String(found.rows[0]?.DATA_DEFAULT ?? '').trim();
@@ -91,6 +114,7 @@ async function migrateNormalizedOrganization(connection) {
   await addColumn(connection, `ALTER TABLE bes_positions ADD (is_plantilla CHAR(1) DEFAULT 'Y' NOT NULL)`);
     await addColumn(connection, `ALTER TABLE bes_positions ADD (is_organization_unit CHAR(1) DEFAULT 'N' NOT NULL)`);
     await addColumn(connection, `ALTER TABLE bes_positions ADD (position_purpose CLOB)`);
+    await syncPositionDepartmentLookupIds(connection);
     await connection.execute(`UPDATE bes_positions SET position_purpose=:purpose, updated_at=SYSTIMESTAMP WHERE UPPER(position_title)='SYSTEM PLANNING AND DESIGN OFFICER' AND position_purpose IS NULL`, { purpose: "Responsible for seeing to the preparation of engineering design standards and project costs and ensuring safe, proper, efficient and effective implementation of all line construction projects including but not limited to line expansion, line rehabilitation/upgrading, and substation upgrading/construction. Is primarily responsible for the preparation of electric distribution development plans (CAPEX, ICPM) in consonance with the requirements of the EPIRA, Philippine Grid and Distribution Codes, and all other pertinent codes subject to the requirements of regulating agencies such as the ERC and NEA." });
   const alreadyMigrated = await connection.execute(`SELECT COUNT(*) total FROM bes_positions WHERE is_organization_unit='Y'`);
   if (Number(alreadyMigrated.rows[0]?.TOTAL || 0) > 0) return;
@@ -115,19 +139,21 @@ async function migrateNormalizedOrganization(connection) {
              WHEN UPPER(position.position_type1)='SECRETARY' AND parent.organization_type='DEPARTMENT' THEN 'DEPARTMENT_SECRETARY'
              WHEN UPPER(position.position_type1)='SECRETARY' THEN 'OFFICE_SECRETARY'
              WHEN UPPER(position.position_type1) IN ('SUPERVISOR','OFFICER') THEN 'SUPERVISOR' ELSE 'RAF' END employee_class,
-        position.position_type1, position.position_type2, position.position_level, position.position_quantity,
+        position.department_code, lookup.dept_id, position.position_type1, position.position_type2, position.position_level, position.position_quantity,
         NVL(position.is_plantilla,'Y') is_plantilla
       FROM bes_organization position
       JOIN bes_organization parent ON parent.organization_id=position.parent_organization_id
       JOIN bes_departments department ON UPPER(department.department_code)=UPPER(position.department_code)
+      LEFT JOIN hr_department_lookup lookup ON lookup.active_stat='ACTIVE' AND UPPER(TRIM(lookup.dept_short))=UPPER(TRIM(position.department_code))
       LEFT JOIN bes_offices office ON office.department_id=department.department_id AND UPPER(office.office_name)=UPPER(parent.organization_name)
       WHERE position.organization_type='POSITION' AND position.is_active='Y'
     ) source ON (NVL(target.department_id,-1)=NVL(source.department_id,-1) AND NVL(target.office_id,-1)=NVL(source.office_id,-1) AND UPPER(target.position_title)=UPPER(source.position_title))
     WHEN MATCHED THEN UPDATE SET target.employee_class=source.employee_class, target.position_type1=source.position_type1,
       target.position_type2=source.position_type2, target.position_level=source.position_level, target.position_quantity=source.position_quantity,
-      target.is_plantilla=source.is_plantilla, target.is_active='Y', target.is_organization_unit='Y', target.updated_at=SYSTIMESTAMP
-    WHEN NOT MATCHED THEN INSERT (department_id,office_id,position_title,employee_class,position_type1,position_type2,position_level,position_quantity,is_plantilla,is_active,is_organization_unit)
-      VALUES (source.department_id,source.office_id,source.position_title,source.employee_class,source.position_type1,source.position_type2,source.position_level,source.position_quantity,source.is_plantilla,'Y','Y')`);
+      target.is_plantilla=source.is_plantilla, target.dept_id=source.dept_id, target.is_active='Y', target.is_organization_unit='Y', target.updated_at=SYSTIMESTAMP
+    WHEN NOT MATCHED THEN INSERT (department_id,dept_id,office_id,position_title,employee_class,position_type1,position_type2,position_level,position_quantity,is_plantilla,is_active,is_organization_unit)
+      VALUES (source.department_id,source.dept_id,source.office_id,source.position_title,source.employee_class,source.position_type1,source.position_type2,source.position_level,source.position_quantity,source.is_plantilla,'Y','Y')`);
+  await syncPositionDepartmentLookupIds(connection);
   await connection.commit();
 }
 
@@ -288,19 +314,23 @@ async function seedOrganizationalStructure(connection) {
   for (const [departmentCode, officeName, positionTitle, employeeClass] of BASELINE_POSITIONS) {
     if (officeName) {
       await connection.execute(`MERGE INTO bes_positions p USING (
-          SELECT o.office_id, :positionTitle position_title FROM bes_offices o JOIN bes_departments d ON d.department_id=o.department_id
+          SELECT o.office_id, l.dept_id, :positionTitle position_title FROM bes_offices o JOIN bes_departments d ON d.department_id=o.department_id
+          LEFT JOIN hr_department_lookup l ON l.active_stat='ACTIVE' AND UPPER(TRIM(l.dept_short))=UPPER(TRIM(d.department_code))
           WHERE d.department_code=:departmentCode AND UPPER(o.office_name)=UPPER(:officeName)
         ) src ON (p.office_id=src.office_id AND UPPER(p.position_title)=UPPER(src.position_title))
-        WHEN MATCHED THEN UPDATE SET employee_class=:employeeClass, department_id=NULL, is_active='Y', updated_at=SYSTIMESTAMP
-        WHEN NOT MATCHED THEN INSERT (office_id,position_title,employee_class,is_active) VALUES (src.office_id,src.position_title,:employeeClass,'Y')`, { departmentCode, officeName, positionTitle, employeeClass });
+        WHEN MATCHED THEN UPDATE SET employee_class=:employeeClass, department_id=NULL, dept_id=src.dept_id, is_active='Y', updated_at=SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (office_id,dept_id,position_title,employee_class,is_active) VALUES (src.office_id,src.dept_id,src.position_title,:employeeClass,'Y')`, { departmentCode, officeName, positionTitle, employeeClass });
     } else {
       await connection.execute(`MERGE INTO bes_positions p USING (
-          SELECT d.department_id, :positionTitle position_title FROM bes_departments d WHERE d.department_code=:departmentCode
+          SELECT d.department_id, l.dept_id, :positionTitle position_title FROM bes_departments d
+          LEFT JOIN hr_department_lookup l ON l.active_stat='ACTIVE' AND UPPER(TRIM(l.dept_short))=UPPER(TRIM(d.department_code))
+          WHERE d.department_code=:departmentCode
         ) src ON (p.department_id=src.department_id AND p.office_id IS NULL AND UPPER(p.position_title)=UPPER(src.position_title))
-        WHEN MATCHED THEN UPDATE SET employee_class=:employeeClass, is_active='Y', updated_at=SYSTIMESTAMP
-        WHEN NOT MATCHED THEN INSERT (department_id,position_title,employee_class,is_active) VALUES (src.department_id,src.position_title,:employeeClass,'Y')`, { departmentCode, positionTitle, employeeClass });
+        WHEN MATCHED THEN UPDATE SET employee_class=:employeeClass, dept_id=src.dept_id, is_active='Y', updated_at=SYSTIMESTAMP
+        WHEN NOT MATCHED THEN INSERT (department_id,dept_id,position_title,employee_class,is_active) VALUES (src.department_id,src.dept_id,src.position_title,:employeeClass,'Y')`, { departmentCode, positionTitle, employeeClass });
     }
   }
+  await syncPositionDepartmentLookupIds(connection);
 }
 
 async function seedCanonicalOrganization(connection) {
@@ -824,6 +854,7 @@ export async function initializeDatabase() {
     await runDdl(connection, `CREATE TABLE bes_positions (
       position_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       department_id NUMBER REFERENCES bes_departments(department_id),
+      dept_id VARCHAR2(3),
       office_id NUMBER REFERENCES bes_offices(office_id),
       position_title VARCHAR2(180) NOT NULL,
       employee_class VARCHAR2(20) DEFAULT 'RAF' NOT NULL,
@@ -835,6 +866,7 @@ export async function initializeDatabase() {
       CONSTRAINT chk_bes_positions_active CHECK (is_active IN ('Y','N'))
     )`);
     await addColumn(connection, `ALTER TABLE bes_positions ADD (department_id NUMBER REFERENCES bes_departments(department_id))`);
+    await addColumn(connection, `ALTER TABLE bes_positions ADD (dept_id VARCHAR2(3))`);
     await makeColumnNullable(connection, 'BES_POSITIONS', 'OFFICE_ID');
     await dropConstraint(connection, 'BES_POSITIONS', 'CHK_BES_POSITION_CLASS');
     await runDdl(connection, `ALTER TABLE bes_positions ADD CONSTRAINT chk_bes_position_class CHECK (employee_class IN ('DEPARTMENT_MANAGER','DEPARTMENT_SECRETARY','OFFICE_SECRETARY','SUPERVISOR','RAF'))`);
@@ -842,6 +874,7 @@ export async function initializeDatabase() {
     await runDdl(connection, `ALTER TABLE bes_positions ADD CONSTRAINT chk_bes_position_scope CHECK ((department_id IS NOT NULL AND office_id IS NULL) OR (department_id IS NULL AND office_id IS NOT NULL))`);
     await dropIndex(connection, 'UX_BES_POSITION_OFFICE');
     await runDdl(connection, `CREATE UNIQUE INDEX ux_bes_position_scope ON bes_positions (NVL(department_id, -1), NVL(office_id, -1), UPPER(position_title))`);
+    await syncPositionDepartmentLookupIds(connection);
     await runDdl(connection, `CREATE TABLE bes_hr_qualifications (
       qualification_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
       position_id NUMBER NOT NULL REFERENCES bes_positions(position_id) ON DELETE CASCADE,
