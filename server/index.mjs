@@ -679,7 +679,7 @@ const DB_SYNC_KEY_OVERRIDES = new Map([
   ['BES_DEPARTMENTS', ['DEPARTMENT_NAME']],
   ['BES_HRO_RECRUITMENT_POSITIONS', ['POSITION_NAME']],
   ['BES_OFFICES', ['DEPARTMENT_ID', 'OFFICE_NAME']],
-  ['BES_POSITIONS', ['DEPARTMENT_ID', 'OFFICE_ID', 'POSITION_TITLE']],
+  ['BES_POSITIONS', ['DEPARTMENT_ID', 'OFFICE_ID', 'POSITION_NAME']],
   ['BES_TASK_SUBJECTS', ['TOOL_CODE', 'TASK_SUBJECT']],
   ['BES_TOOL_ACCESS', ['TOOL_CODE', 'DEPARTMENT_CODE', 'OFFICE_NAME', 'POSITION_NAME']],
   ['BES_USER_ROLES', ['USER_ID', 'ROLE_CODE', 'SCOPE_DEPARTMENT_CODE', 'SCOPE_UNIT_NAME']],
@@ -1078,8 +1078,8 @@ async function remapPositionScopeIds(source, destination, rows) {
     const officeScope = row.OFFICE_ID == null ? null : sourceOfficeScopes.get(String(row.OFFICE_ID));
     const destinationDepartmentId = departmentCode ? targetDepartmentIds.get(departmentCode) : null;
     const destinationOfficeId = officeScope ? targetOfficeIds.get(`${officeScope.departmentCode}\u0000${officeScope.officeName}`) : null;
-    if (row.DEPARTMENT_ID != null && destinationDepartmentId == null) throw Object.assign(new Error(`Position ${row.POSITION_TITLE} references department ${departmentCode || row.DEPARTMENT_ID}, which is not present in the destination.`), { statusCode: 400 });
-    if (row.OFFICE_ID != null && destinationOfficeId == null) throw Object.assign(new Error(`Position ${row.POSITION_TITLE} references office ${officeScope?.officeName || row.OFFICE_ID}, which is not present in the destination.`), { statusCode: 400 });
+    if (row.DEPARTMENT_ID != null && destinationDepartmentId == null) throw Object.assign(new Error(`Position ${row.POSITION_NAME} references department ${departmentCode || row.DEPARTMENT_ID}, which is not present in the destination.`), { statusCode: 400 });
+    if (row.OFFICE_ID != null && destinationOfficeId == null) throw Object.assign(new Error(`Position ${row.POSITION_NAME} references office ${officeScope?.officeName || row.OFFICE_ID}, which is not present in the destination.`), { statusCode: 400 });
     return {
       ...row,
       DEPARTMENT_ID: destinationDepartmentId,
@@ -1116,18 +1116,18 @@ async function remapOfficeScopeIds(source, destination, rows) {
 
 async function remapPositionReferenceIds(source, destination, rows) {
   if (!rows.length) return rows;
-  const positionSql = `SELECT position.position_id, position.position_title,
+  const positionSql = `SELECT position.position_id, position.position_name,
       COALESCE(department.department_code, office_department.department_code) department_code,
       office.office_name
     FROM bes_positions position
-    LEFT JOIN bes_departments department ON department.department_id=position.department_id
+    LEFT JOIN bes_departments department ON department.dept_id=position.dept_id
     LEFT JOIN bes_offices office ON office.office_id=position.office_id
     LEFT JOIN bes_departments office_department ON office_department.department_id=office.department_id`;
   const [sourcePositions, destinationPositions] = await Promise.all([
     source.execute(positionSql),
     destination.execute(positionSql),
   ]);
-  const positionIdentity = (row) => `${normalize(row.DEPARTMENT_CODE).toUpperCase()}\u0000${normalize(row.OFFICE_NAME).toUpperCase()}\u0000${normalize(row.POSITION_TITLE).toUpperCase()}`;
+  const positionIdentity = (row) => `${normalize(row.DEPARTMENT_CODE).toUpperCase()}\u0000${normalize(row.OFFICE_NAME).toUpperCase()}\u0000${normalize(row.POSITION_NAME).toUpperCase()}`;
   const sourceIdentityById = new Map(sourcePositions.rows.map((row) => [String(row.POSITION_ID), positionIdentity(row)]));
   const destinationIdByIdentity = new Map(destinationPositions.rows.map((row) => [positionIdentity(row), row.POSITION_ID]));
   return rows.map((row) => {
@@ -1537,16 +1537,16 @@ async function handle(req, res) {
       const structure = await withConnection(async (c) => {
         const user = await currentSessionUser(c, bearerToken(req));
         if (!user) return null;
-        const departments = await c.execute(`SELECT department_id, department_code, department_name FROM bes_departments WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY CASE WHEN department_code='OGM' THEN 0 ELSE 1 END, department_name`);
+        const departments = await c.execute(`SELECT department_id, department_code, dept_id, department_name FROM bes_departments WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY CASE WHEN department_code='OGM' THEN 0 ELSE 1 END, department_name`);
         const offices = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name, office_short FROM bes_offices WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY office_name`);
-        const positions = await c.execute(`SELECT position_id, department_id, office_id, position_title, employee_class, position_level, position_quantity, is_plantilla, position_purpose FROM bes_positions WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY position_title`);
+        const positions = await c.execute(`SELECT position_id, department_id, dept_id, office_id, position_name, employee_class, position_level, position_quantity, is_plantilla, position_purpose FROM bes_positions WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY position_name`);
         const ownAssignments = !isPerformanceManager(user) ? await c.execute(`SELECT position_id FROM bes_performance_assignments
           WHERE employee_user_id=:userId AND is_active='Y' AND assignment_mode='INCLUDE'`, { userId: user.USER_ID }) : { rows: [] };
         const ownPositionIds = new Set(ownAssignments.rows.map((assignment) => assignment.POSITION_ID));
-        const visiblePositions = !isPerformanceManager(user) ? positions.rows.filter((position) => ownPositionIds.has(position.POSITION_ID) || position.POSITION_TITLE === user.POSITION_TITLE) : positions.rows;
-        const employeeDepartmentIds = new Set(visiblePositions.map((position) => position.DEPARTMENT_ID ?? offices.rows.find((office) => office.OFFICE_ID === position.OFFICE_ID)?.DEPARTMENT_ID).filter(Boolean));
+        const visiblePositions = !isPerformanceManager(user) ? positions.rows.filter((position) => ownPositionIds.has(position.POSITION_ID) || position.POSITION_NAME === user.POSITION_TITLE) : positions.rows;
+        const employeeDepartmentKeys = new Set(visiblePositions.map((position) => position.DEPT_ID ?? offices.rows.find((office) => office.OFFICE_ID === position.OFFICE_ID)?.DEPARTMENT_ID).filter(Boolean));
         const visibleDepartments = user.APP_ROLE === 'Administrator' ? departments.rows
-          : !isPerformanceManager(user) ? departments.rows.filter((department) => employeeDepartmentIds.has(department.DEPARTMENT_ID))
+          : !isPerformanceManager(user) ? departments.rows.filter((department) => employeeDepartmentKeys.has(department.DEPT_ID) || employeeDepartmentKeys.has(department.DEPARTMENT_ID))
           : departments.rows.filter((department) => department.DEPARTMENT_CODE === user.DEPARTMENT_CODE);
         const visibleOfficeIds = new Set();
         if (isOfficePerformanceManager(user) || !isPerformanceManager(user)) {
@@ -1560,14 +1560,14 @@ async function handle(req, res) {
         }
         const visibleOffices = (isOfficePerformanceManager(user) || !isPerformanceManager(user)) ? offices.rows.filter((office) => visibleOfficeIds.has(office.OFFICE_ID)) : offices.rows;
         return visibleDepartments.map((department) => ({
-          id: String(department.DEPARTMENT_ID), code: department.DEPARTMENT_CODE, name: department.DEPARTMENT_NAME,
-          positions: visiblePositions.filter((position) => position.DEPARTMENT_ID === department.DEPARTMENT_ID && !position.OFFICE_ID).map((position) => ({
-            id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS, level: Number(position.POSITION_LEVEL || 4), quantity: Number(position.POSITION_QUANTITY || 1), isPlantilla: position.IS_PLANTILLA === 'Y', purpose: position.POSITION_PURPOSE ?? '',
+          id: String(department.DEPARTMENT_ID), code: department.DEPARTMENT_CODE, deptId: department.DEPT_ID, name: department.DEPARTMENT_NAME,
+          positions: visiblePositions.filter((position) => position.DEPT_ID === department.DEPT_ID && !position.OFFICE_ID).map((position) => ({
+            id: String(position.POSITION_ID), title: position.POSITION_NAME, employeeClass: position.EMPLOYEE_CLASS, level: Number(position.POSITION_LEVEL || 4), quantity: Number(position.POSITION_QUANTITY || 1), isPlantilla: position.IS_PLANTILLA === 'Y', purpose: position.POSITION_PURPOSE ?? '',
           })),
           offices: visibleOffices.filter((office) => office.DEPARTMENT_ID === department.DEPARTMENT_ID).map((office) => ({
             id: String(office.OFFICE_ID), name: office.OFFICE_NAME, shortName: office.OFFICE_SHORT, parentOfficeId: office.PARENT_OFFICE_ID ? String(office.PARENT_OFFICE_ID) : null,
             positions: visiblePositions.filter((position) => position.OFFICE_ID === office.OFFICE_ID).map((position) => ({
-              id: String(position.POSITION_ID), title: position.POSITION_TITLE, employeeClass: position.EMPLOYEE_CLASS, level: Number(position.POSITION_LEVEL || 4), quantity: Number(position.POSITION_QUANTITY || 1), isPlantilla: position.IS_PLANTILLA === 'Y', purpose: position.POSITION_PURPOSE ?? '',
+              id: String(position.POSITION_ID), title: position.POSITION_NAME, employeeClass: position.EMPLOYEE_CLASS, level: Number(position.POSITION_LEVEL || 4), quantity: Number(position.POSITION_QUANTITY || 1), isPlantilla: position.IS_PLANTILLA === 'Y', purpose: position.POSITION_PURPOSE ?? '',
             })),
           })),
         }));
@@ -1589,12 +1589,12 @@ async function handle(req, res) {
           if (id) {
             const previous = await c.execute(`SELECT department_code FROM bes_departments WHERE department_id=:id`, { id });
             const oldCode = previous.rows[0]?.DEPARTMENT_CODE;
-            await c.execute(`UPDATE bes_departments SET department_code=:code, department_name=:name, updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id, code, name });
+            await c.execute(`UPDATE bes_departments SET department_code=:code, dept_id=(SELECT dept_id FROM hr_department_lookup WHERE active_stat='ACTIVE' AND UPPER(TRIM(dept_short))=UPPER(TRIM(:code)) AND ROWNUM=1), department_name=:name, updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id, code, name });
             if (oldCode && oldCode !== code) {
               await c.execute(`UPDATE bes_tool_access SET department_code=:code, updated_at=SYSTIMESTAMP WHERE department_code=:oldCode`, { code, oldCode });
               await c.execute(`UPDATE bes_tool_access SET owner_department_code=:code, updated_at=SYSTIMESTAMP WHERE owner_department_code=:oldCode`, { code, oldCode });
             }
-          } else await c.execute(`INSERT INTO bes_departments (department_code, department_name) VALUES (:code,:name)`, { code, name });
+          } else await c.execute(`INSERT INTO bes_departments (department_code, dept_id, department_name) VALUES (:code,(SELECT dept_id FROM hr_department_lookup WHERE active_stat='ACTIVE' AND UPPER(TRIM(dept_short))=UPPER(TRIM(:code)) AND ROWNUM=1),:name)`, { code, name });
         } else if (entity === 'office') {
           const name = normalize(body.name);
           const departmentId = Number(body.departmentId);
@@ -1611,12 +1611,12 @@ async function handle(req, res) {
           const officeId = body.officeId ? Number(body.officeId) : null;
           const departmentId = body.departmentId ? Number(body.departmentId) : null;
           const employeeClass = normalize(body.employeeClass).toUpperCase();
-          const departmentRoles = ['DEPARTMENT_MANAGER', 'DEPARTMENT_SECRETARY'];
+          const departmentRoles = ['GENERAL_MANAGER', 'ASSISTANT_GENERAL_MANAGER', 'DEPARTMENT_MANAGER', 'DEPARTMENT_SECRETARY'];
           const officeRoles = ['OFFICE_SECRETARY', 'SUPERVISOR', 'RAF'];
           const validScope = departmentRoles.includes(employeeClass) ? !!departmentId && !officeId : officeRoles.includes(employeeClass) && !!officeId && !departmentId;
           if (!title || !validScope) throw Object.assign(new Error('Select a valid role and its corresponding department or office.'), { statusCode: 400 });
-          if (id) await c.execute(`UPDATE bes_positions SET department_id=:departmentId, office_id=:officeId, dept_id=(SELECT lookup.dept_id FROM hr_department_lookup lookup JOIN bes_departments department ON UPPER(TRIM(department.department_code))=UPPER(TRIM(lookup.dept_short)) WHERE lookup.active_stat='ACTIVE' AND department.department_id=NVL(:departmentId,(SELECT office.department_id FROM bes_offices office WHERE office.office_id=:officeId)) AND ROWNUM=1), position_title=:title, employee_class=:employeeClass, updated_at=SYSTIMESTAMP WHERE position_id=:id`, { id, departmentId, officeId, title, employeeClass });
-          else await c.execute(`INSERT INTO bes_positions (department_id,office_id,dept_id,position_title,employee_class) VALUES (:departmentId,:officeId,(SELECT lookup.dept_id FROM hr_department_lookup lookup JOIN bes_departments department ON UPPER(TRIM(department.department_code))=UPPER(TRIM(lookup.dept_short)) WHERE lookup.active_stat='ACTIVE' AND department.department_id=NVL(:departmentId,(SELECT office.department_id FROM bes_offices office WHERE office.office_id=:officeId)) AND ROWNUM=1),:title,:employeeClass)`, { departmentId, officeId, title, employeeClass });
+          if (id) await c.execute(`UPDATE bes_positions SET department_id=:departmentId, office_id=:officeId, dept_id=(SELECT department.dept_id FROM bes_departments department WHERE department.department_id=NVL(:departmentId,(SELECT office.department_id FROM bes_offices office WHERE office.office_id=:officeId)) AND ROWNUM=1), position_name=:title, employee_class=:employeeClass, updated_at=SYSTIMESTAMP WHERE position_id=:id`, { id, departmentId, officeId, title, employeeClass });
+          else await c.execute(`INSERT INTO bes_positions (department_id,office_id,dept_id,position_name,employee_class) VALUES (:departmentId,:officeId,(SELECT department.dept_id FROM bes_departments department WHERE department.department_id=NVL(:departmentId,(SELECT office.department_id FROM bes_offices office WHERE office.office_id=:officeId)) AND ROWNUM=1),:title,:employeeClass)`, { departmentId, officeId, title, employeeClass });
         } else throw Object.assign(new Error('Entity must be department, office, or position.'), { statusCode: 400 });
         await c.commit();
       });
@@ -2986,18 +2986,73 @@ async function handle(req, res) {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
         const [departments, offices, positions] = await Promise.all([
-          c.execute(`SELECT department.department_id, department.department_code, department.department_name, lookup.dept_id
+          c.execute(`SELECT department.department_id, department.department_code, department.dept_id, department.department_name
             FROM bes_departments department
-            LEFT JOIN hr_department_lookup lookup ON lookup.active_stat='ACTIVE' AND UPPER(TRIM(lookup.dept_short))=UPPER(TRIM(department.department_code))
             WHERE department.is_active='Y' AND department.is_organization_unit='Y'
             ORDER BY department.department_name`),
-          c.execute(`SELECT office_id, department_id, office_name, office_short FROM bes_offices WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY office_name`),
-          c.execute(`SELECT position_id, department_id, dept_id, office_id, position_title, position_type1, position_type2, position_level, position_quantity, is_plantilla, position_purpose FROM bes_positions WHERE is_active='Y' AND is_organization_unit='Y' ORDER BY position_title`),
+          c.execute(`SELECT o_id, dept_id, o_short, o_long
+            FROM bes_hr_office_lookup office
+            WHERE office.is_office='Y'
+              AND EXISTS (
+                SELECT 1 FROM bes_departments department
+                WHERE department.is_active='Y'
+                  AND department.is_organization_unit='Y'
+                  AND department.dept_id=office.dept_id
+              )
+            ORDER BY o_long`),
+          c.execute(`SELECT position_id, department_id, dept_id, o_id, office_id, position_name, employee_class, position_type1, position_type2, position_level, position_quantity, is_plantilla, position_purpose
+            FROM bes_positions
+            WHERE is_active='Y'
+              AND (is_organization_unit='Y' OR (employee_class IN ('GENERAL_MANAGER','ASSISTANT_GENERAL_MANAGER','DEPARTMENT_MANAGER') AND o_id IS NULL AND office_id IS NULL))
+            ORDER BY position_name`),
         ]);
+        const departmentByDeptId = new Map(departments.rows.map((department) => [department.DEPT_ID, department]));
+        const officeByOId = new Map(offices.rows.map((office) => [office.O_ID, office]));
+        const isDepartmentManager = (position) => {
+          if (position.EMPLOYEE_CLASS === 'ASSISTANT_GENERAL_MANAGER') return false;
+          const positionType = String(position.POSITION_TYPE1 ?? '').toUpperCase();
+          const positionName = String(position.POSITION_NAME ?? '').toUpperCase();
+          return ['GENERAL_MANAGER', 'DEPARTMENT_MANAGER'].includes(position.EMPLOYEE_CLASS)
+            || (positionType.includes('MANAGER') && !positionType.includes('ASSISTANT GENERAL MANAGER'))
+            || positionName.includes('DEPARTMENT MANAGER')
+            || positionName === 'GENERAL MANAGER';
+        };
+        const isSupervisor = (position) => position.EMPLOYEE_CLASS === 'SUPERVISOR'
+          || String(position.POSITION_TYPE1 ?? '').toUpperCase().includes('SUPERVISOR')
+          || String(position.POSITION_TYPE1 ?? '').toUpperCase().includes('OFFICER');
+        const positionTypeLabel = (position) => position.POSITION_TYPE1
+          ?? (position.EMPLOYEE_CLASS === 'GENERAL_MANAGER' ? 'General Manager'
+            : position.EMPLOYEE_CLASS === 'ASSISTANT_GENERAL_MANAGER' ? 'Assistant General Manager'
+              : position.EMPLOYEE_CLASS === 'DEPARTMENT_MANAGER' ? 'Manager'
+            : position.EMPLOYEE_CLASS === 'DEPARTMENT_SECRETARY' || position.EMPLOYEE_CLASS === 'OFFICE_SECRETARY' ? 'Secretary'
+              : position.EMPLOYEE_CLASS === 'SUPERVISOR' ? 'Supervisor'
+                : 'Personnel');
+        const departmentManagerByDeptId = new Map();
+        positions.rows.filter((position) => !position.O_ID && !position.OFFICE_ID && isDepartmentManager(position))
+          .sort((left, right) => (left.EMPLOYEE_CLASS === 'GENERAL_MANAGER' ? -1 : 0) - (right.EMPLOYEE_CLASS === 'GENERAL_MANAGER' ? -1 : 0))
+          .forEach((position) => {
+            if (!departmentManagerByDeptId.has(position.DEPT_ID)) departmentManagerByDeptId.set(position.DEPT_ID, position);
+          });
+        const supervisorByOId = new Map();
+        positions.rows.filter((position) => position.O_ID && officeByOId.has(position.O_ID) && isSupervisor(position))
+          .forEach((position) => {
+            if (!supervisorByOId.has(position.O_ID)) supervisorByOId.set(position.O_ID, position);
+          });
+        const departmentParentId = (deptId, fallbackDepartmentId) => `D${departmentByDeptId.get(deptId)?.DEPARTMENT_ID ?? fallbackDepartmentId}`;
+        const managerParentId = (deptId, fallbackDepartmentId) => {
+          const manager = departmentManagerByDeptId.get(deptId);
+          return manager ? `P${manager.POSITION_ID}` : departmentParentId(deptId, fallbackDepartmentId);
+        };
+        const officePositionParentId = (position) => {
+          if (!position.O_ID || !officeByOId.has(position.O_ID)) return managerParentId(position.DEPT_ID, position.DEPARTMENT_ID);
+          if (isSupervisor(position)) return `O${position.O_ID}`;
+          const supervisor = supervisorByOId.get(position.O_ID);
+          return supervisor ? `P${supervisor.POSITION_ID}` : `O${position.O_ID}`;
+        };
         const nodes = [
           ...departments.rows.map((row) => ({ id: `D${row.DEPARTMENT_ID}`, parentId: null, type: 'DEPARTMENT', code: row.DEPARTMENT_CODE, deptId: row.DEPT_ID, name: row.DEPARTMENT_NAME, departmentCode: row.DEPARTMENT_CODE, officeShort: null, positionType1: null, positionType2: null, level: 4, quantity: 1, isPlantilla: null, children: [], sourceRow: 0, sortOrder: 0 })),
-          ...offices.rows.map((row) => ({ id: `O${row.OFFICE_ID}`, parentId: `D${row.DEPARTMENT_ID}`, type: 'OFFICE', code: row.OFFICE_SHORT, name: row.OFFICE_NAME, departmentCode: departments.rows.find((department) => department.DEPARTMENT_ID === row.DEPARTMENT_ID)?.DEPARTMENT_CODE ?? '', officeShort: row.OFFICE_SHORT, positionType1: null, positionType2: null, level: 4, quantity: 1, isPlantilla: null, children: [], sourceRow: 0, sortOrder: 0 })),
-          ...positions.rows.map((row) => ({ id: `P${row.POSITION_ID}`, parentId: row.OFFICE_ID ? `O${row.OFFICE_ID}` : `D${row.DEPARTMENT_ID}`, type: 'POSITION', code: null, deptId: row.DEPT_ID, name: row.POSITION_TITLE, departmentCode: '', officeShort: row.OFFICE_ID ? offices.rows.find((office) => office.OFFICE_ID === row.OFFICE_ID)?.OFFICE_SHORT ?? null : null, positionType1: row.POSITION_TYPE1, positionType2: row.POSITION_TYPE2, level: Number(row.POSITION_LEVEL ?? 4), quantity: Number(row.POSITION_QUANTITY ?? 1), isPlantilla: row.IS_PLANTILLA === 'Y', purpose: row.POSITION_PURPOSE ?? '', children: [], sourceRow: 0, sortOrder: 0 })),
+          ...offices.rows.map((row) => ({ id: `O${row.O_ID}`, parentId: managerParentId(row.DEPT_ID, null), type: 'OFFICE', code: row.O_SHORT, deptId: row.DEPT_ID, oId: row.O_ID, name: row.O_LONG, departmentCode: departmentByDeptId.get(row.DEPT_ID)?.DEPARTMENT_CODE ?? '', officeShort: row.O_SHORT, positionType1: null, positionType2: null, level: 4, quantity: 1, isPlantilla: null, children: [], sourceRow: 0, sortOrder: 0 })),
+          ...positions.rows.map((row) => ({ id: `P${row.POSITION_ID}`, parentId: isDepartmentManager(row) ? departmentParentId(row.DEPT_ID, row.DEPARTMENT_ID) : officePositionParentId(row), type: 'POSITION', code: null, deptId: row.DEPT_ID, oId: row.O_ID, name: row.POSITION_NAME, departmentCode: departmentByDeptId.get(row.DEPT_ID)?.DEPARTMENT_CODE ?? '', officeShort: row.O_ID && officeByOId.has(row.O_ID) ? officeByOId.get(row.O_ID)?.O_SHORT ?? null : null, positionType1: positionTypeLabel(row), positionType2: row.POSITION_TYPE2, level: Number(row.POSITION_LEVEL ?? 4), quantity: Number(row.POSITION_QUANTITY ?? 1), isPlantilla: row.IS_PLANTILLA === 'Y', purpose: row.POSITION_PURPOSE ?? '', children: [], sourceRow: 0, sortOrder: isDepartmentManager(row) ? -10 : isSupervisor(row) ? -5 : 0 })),
         ];
         const byId = new Map(nodes.map((node) => [node.id, node]));
         const roots = [];
@@ -3005,7 +3060,7 @@ async function handle(req, res) {
         const typeOrder = { DEPARTMENT: 0, OFFICE: 1, POSITION: 2 };
         const clean = (node) => {
           node.children.sort((left, right) => (typeOrder[left.type] - typeOrder[right.type]) || (left.sortOrder - right.sortOrder) || (left.sourceRow - right.sourceRow) || left.name.localeCompare(right.name));
-          return { id: node.id, parentId: node.parentId, type: node.type, code: node.code, deptId: node.deptId ?? null, name: node.name,
+          return { id: node.id, parentId: node.parentId, type: node.type, code: node.code, deptId: node.deptId ?? null, oId: node.oId ?? null, name: node.name,
             departmentCode: node.departmentCode, officeShort: node.officeShort, positionType1: node.positionType1,
             positionType2: node.positionType2, level: node.level, quantity: node.quantity, isPlantilla: node.isPlantilla, purpose: node.purpose ?? '', children: node.children.map(clean) };
         };
@@ -3024,10 +3079,10 @@ async function handle(req, res) {
           const name = normalize(body.name); const code = normalize(body.code).toUpperCase();
           if (!name || !code) throw Object.assign(new Error('Department name and code are required.'), { statusCode: 400 });
           if (id) {
-            const updated = await c.execute(`UPDATE bes_departments SET department_code=:code, department_name=:name, is_organization_unit='Y', updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id, code, name });
+          const updated = await c.execute(`UPDATE bes_departments SET department_code=:code, dept_id=(SELECT dept_id FROM hr_department_lookup WHERE active_stat='ACTIVE' AND UPPER(TRIM(dept_short))=UPPER(TRIM(:code)) AND ROWNUM=1), department_name=:name, is_organization_unit='Y', updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id, code, name });
             if (!updated.rowsAffected) throw Object.assign(new Error('Department was not found.'), { statusCode: 404 });
           }
-          else await c.execute(`INSERT INTO bes_departments (department_code,department_name,is_organization_unit) VALUES (:code,:name,'Y')`, { code, name });
+          else await c.execute(`INSERT INTO bes_departments (department_code,dept_id,department_name,is_organization_unit) VALUES (:code,(SELECT dept_id FROM hr_department_lookup WHERE active_stat='ACTIVE' AND UPPER(TRIM(dept_short))=UPPER(TRIM(:code)) AND ROWNUM=1),:name,'Y')`, { code, name });
         } else if (entity === 'office') {
           const name = normalize(body.name); const code = nullableNormalize(body.code)?.toUpperCase() ?? null;
           const parentId = Number(String(body.parentId || body.departmentId || '').replace(/^\D+/, '') || 0);
@@ -3037,13 +3092,18 @@ async function handle(req, res) {
           else await c.execute(`INSERT INTO bes_offices (department_id,office_name,office_short,is_organization_unit) VALUES (:parentId,:name,:code,'Y')`, { parentId, code, name });
         } else if (entity === 'position') {
           const title = normalize(body.title); const employeeClass = normalize(body.employeeClass).toUpperCase(); const purpose = nullableNormalize(body.purpose);
+          const requestedDeptId = nullableNormalize(body.deptId);
+          const requestedOId = nullableNormalize(body.oId);
           const parentKey = String(body.parentId || body.departmentId || body.officeId || '');
           const parentId = Number(parentKey.replace(/^\D+/, '') || 0);
-          const parentType = parentKey.startsWith('O') ? 'OFFICE' : 'DEPARTMENT';
+          const parentOId = requestedOId ?? (parentKey.startsWith('O') ? parentKey.slice(1) : null);
+          const parentType = parentOId ? 'OFFICE' : 'DEPARTMENT';
           const parent = parentType === 'OFFICE'
-            ? await c.execute(`SELECT office_id FROM bes_offices WHERE office_id=:parentId AND is_active='Y'`, { parentId })
-            : await c.execute(`SELECT department_id FROM bes_departments WHERE department_id=:parentId AND is_active='Y'`, { parentId });
-          const roleMap = { DEPARTMENT_MANAGER: ['Manager','Manager'], DEPARTMENT_SECRETARY: ['Secretary','Rank And File'], OFFICE_SECRETARY: ['Secretary','Rank And File'], SUPERVISOR: ['Supervisor','Supervior'], RAF: ['Personnel','Rank And File'] };
+            ? await c.execute(`SELECT o_id, dept_id FROM bes_hr_office_lookup WHERE o_id=:parentOId AND is_office='Y'`, { parentOId })
+            : requestedDeptId
+              ? await c.execute(`SELECT department_id, dept_id FROM bes_departments WHERE dept_id=:requestedDeptId AND is_active='Y'`, { requestedDeptId })
+              : await c.execute(`SELECT department_id, dept_id FROM bes_departments WHERE department_id=:parentId AND is_active='Y'`, { parentId });
+          const roleMap = { GENERAL_MANAGER: ['General Manager','Manager'], ASSISTANT_GENERAL_MANAGER: ['Assistant General Manager','Manager'], DEPARTMENT_MANAGER: ['Manager','Manager'], DEPARTMENT_SECRETARY: ['Secretary','Rank And File'], OFFICE_SECRETARY: ['Secretary','Rank And File'], SUPERVISOR: ['Supervisor','Supervior'], RAF: ['Personnel','Rank And File'] };
           if (!title || !parent.rows[0] || !roleMap[employeeClass]) throw Object.assign(new Error('Position title, role, and parent are required.'), { statusCode: 400 });
           const [type1, type2] = roleMap[employeeClass];
           const parsedLevel = Number(body.level ?? 4);
@@ -3052,9 +3112,12 @@ async function handle(req, res) {
           const parsedQuantity = Number(body.quantity ?? 1);
           const quantity = hasQuantity && Number.isFinite(parsedQuantity) ? Math.max(1, Math.floor(parsedQuantity)) : 1;
           const isPlantilla = body.isPlantilla === false ? 'N' : 'Y';
-          const departmentId = parentType === 'DEPARTMENT' ? parentId : null; const officeId = parentType === 'OFFICE' ? parentId : null;
-          if (id) await c.execute(`UPDATE bes_positions SET department_id=:departmentId, office_id=:officeId, dept_id=(SELECT lookup.dept_id FROM hr_department_lookup lookup JOIN bes_departments department ON UPPER(TRIM(department.department_code))=UPPER(TRIM(lookup.dept_short)) WHERE lookup.active_stat='ACTIVE' AND department.department_id=NVL(:departmentId,(SELECT office.department_id FROM bes_offices office WHERE office.office_id=:officeId)) AND ROWNUM=1), position_title=:title, employee_class=:employeeClass, position_type1=:type1, position_type2=:type2, position_level=:positionLevel, position_quantity=:quantity, is_plantilla=:isPlantilla, position_purpose=:purpose, is_organization_unit='Y', updated_at=SYSTIMESTAMP WHERE position_id=:id`, { id, departmentId, officeId, title, employeeClass, type1, type2, positionLevel: level, quantity, isPlantilla, purpose });
-          else await c.execute(`INSERT INTO bes_positions (department_id,office_id,dept_id,position_title,employee_class,position_type1,position_type2,position_level,position_quantity,is_plantilla,position_purpose,is_organization_unit) VALUES (:departmentId,:officeId,(SELECT lookup.dept_id FROM hr_department_lookup lookup JOIN bes_departments department ON UPPER(TRIM(department.department_code))=UPPER(TRIM(lookup.dept_short)) WHERE lookup.active_stat='ACTIVE' AND department.department_id=NVL(:departmentId,(SELECT office.department_id FROM bes_offices office WHERE office.office_id=:officeId)) AND ROWNUM=1),:title,:employeeClass,:type1,:type2,:positionLevel,:quantity,:isPlantilla,:purpose,'Y')`, { departmentId, officeId, title, employeeClass, type1, type2, positionLevel: level, quantity, isPlantilla, purpose });
+          const resolvedDepartmentId = parent.rows[0]?.DEPARTMENT_ID ?? parentId;
+          const resolvedDeptId = parent.rows[0]?.DEPT_ID ?? requestedDeptId ?? null;
+          const departmentId = parentType === 'DEPARTMENT' ? resolvedDepartmentId : null;
+          const oId = parentType === 'OFFICE' ? parentOId : null;
+          if (id) await c.execute(`UPDATE bes_positions SET department_id=:departmentId, office_id=NULL, o_id=:oId, dept_id=NVL(:resolvedDeptId,(SELECT office.dept_id FROM bes_hr_office_lookup office WHERE office.o_id=:oId AND ROWNUM=1)), position_name=:title, employee_class=:employeeClass, position_type1=:type1, position_type2=:type2, position_level=:positionLevel, position_quantity=:quantity, is_plantilla=:isPlantilla, position_purpose=:purpose, is_organization_unit='Y', updated_at=SYSTIMESTAMP WHERE position_id=:id`, { id, departmentId, oId, resolvedDeptId, title, employeeClass, type1, type2, positionLevel: level, quantity, isPlantilla, purpose });
+          else await c.execute(`INSERT INTO bes_positions (department_id,office_id,o_id,dept_id,position_name,employee_class,position_type1,position_type2,position_level,position_quantity,is_plantilla,position_purpose,is_organization_unit) VALUES (:departmentId,NULL,:oId,NVL(:resolvedDeptId,(SELECT office.dept_id FROM bes_hr_office_lookup office WHERE office.o_id=:oId AND ROWNUM=1)),:title,:employeeClass,:type1,:type2,:positionLevel,:quantity,:isPlantilla,:purpose,'Y')`, { departmentId, oId, resolvedDeptId, title, employeeClass, type1, type2, positionLevel: level, quantity, isPlantilla, purpose });
         } else throw Object.assign(new Error('Entity must be department, office, or position.'), { statusCode: 400 });
         await c.commit(); return true;
       });
@@ -3068,7 +3131,7 @@ async function handle(req, res) {
       const id = Number(key.slice(1));
       const deleted = await withConnection(async (c) => {
         if (key.startsWith('D')) {
-          await c.execute(`UPDATE bes_positions SET is_active='N', updated_at=SYSTIMESTAMP WHERE department_id=:id OR office_id IN (SELECT office_id FROM bes_offices WHERE department_id=:id)`, { id });
+          await c.execute(`UPDATE bes_positions SET is_active='N', updated_at=SYSTIMESTAMP WHERE dept_id=(SELECT dept_id FROM bes_departments WHERE department_id=:id) OR o_id IN (SELECT o_id FROM bes_hr_office_lookup WHERE dept_id=(SELECT dept_id FROM bes_departments WHERE department_id=:id)) OR office_id IN (SELECT office_id FROM bes_offices WHERE department_id=:id)`, { id });
           await c.execute(`UPDATE bes_offices SET is_active='N', updated_at=SYSTIMESTAMP WHERE department_id=:id`, { id });
           const result = await c.execute(`UPDATE bes_departments SET is_active='N', updated_at=SYSTIMESTAMP WHERE department_id=:id AND is_active='Y'`, { id });
           await c.commit(); return { count: Number(result.rowsAffected || 0), type: 'DEPARTMENT' };
@@ -5095,23 +5158,24 @@ async function handle(req, res) {
     }
     if (req.method === 'GET' && req.url === '/api/auth/registration-options') {
       const departments = await withConnection(async (c) => {
-        const departmentRows = await c.execute(`SELECT department_id, department_code, department_name
+        const departmentRows = await c.execute(`SELECT department_id, department_code, dept_id, department_name
           FROM bes_departments WHERE is_active='Y' ORDER BY department_name`);
         const officeRows = await c.execute(`SELECT office_id, department_id, parent_office_id, office_name
           FROM bes_offices WHERE is_active='Y' ORDER BY office_name`);
-        const positionRows = await c.execute(`SELECT position_id, department_id, office_id, position_title, employee_class
-          FROM bes_positions WHERE is_active='Y' ORDER BY position_title`);
+        const positionRows = await c.execute(`SELECT position_id, department_id, dept_id, office_id, position_name, employee_class
+          FROM bes_positions WHERE is_active='Y' ORDER BY position_name`);
         const mapPosition = (position) => ({
           id: String(position.POSITION_ID),
-          title: position.POSITION_TITLE,
+          title: position.POSITION_NAME,
           employeeClass: position.EMPLOYEE_CLASS,
         });
         return departmentRows.rows.map((department) => ({
           id: String(department.DEPARTMENT_ID),
           code: department.DEPARTMENT_CODE,
+          deptId: department.DEPT_ID,
           name: department.DEPARTMENT_NAME,
           positions: positionRows.rows
-            .filter((position) => position.DEPARTMENT_ID === department.DEPARTMENT_ID && position.OFFICE_ID == null)
+            .filter((position) => position.DEPT_ID === department.DEPT_ID && position.OFFICE_ID == null)
             .map(mapPosition),
           offices: officeRows.rows
             .filter((office) => office.DEPARTMENT_ID === department.DEPARTMENT_ID)

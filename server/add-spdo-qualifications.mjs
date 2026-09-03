@@ -10,7 +10,7 @@ await withLocalConnection(async (connection) => {
   const found = await connection.execute(`
     SELECT position_id
     FROM bes_positions
-    WHERE UPPER(position_title) = 'SYSTEM PLANNING AND DESIGN OFFICER'
+    WHERE UPPER(position_name) = 'SYSTEM PLANNING AND DESIGN OFFICER'
       AND is_active = 'Y'
   `);
   const positionId = found.rows[0]?.POSITION_ID;

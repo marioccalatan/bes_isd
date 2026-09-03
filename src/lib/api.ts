@@ -70,6 +70,7 @@ export interface OrganizationNode {
   type: 'DEPARTMENT' | 'OFFICE' | 'POSITION';
   code?: string | null;
   deptId?: string | null;
+  oId?: string | null;
   name: string;
   departmentCode: string;
   officeShort?: string | null;

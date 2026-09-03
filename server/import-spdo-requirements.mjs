@@ -5,7 +5,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 if (!Array.isArray(input.duties) || !Array.isArray(input.qualifications)) throw new Error('Invalid SPDO requirement payload.');
 
 await withLocalConnection(async (connection) => {
-  const found = await connection.execute(`SELECT position_id FROM bes_positions WHERE UPPER(position_title)='SYSTEM PLANNING AND DESIGN OFFICER' AND is_active='Y'`);
+  const found = await connection.execute(`SELECT position_id FROM bes_positions WHERE UPPER(position_name)='SYSTEM PLANNING AND DESIGN OFFICER' AND is_active='Y'`);
   const positionId = found.rows[0]?.POSITION_ID;
   if (!positionId) throw new Error('System Planning and Design Officer was not found.');
   await connection.execute(`DELETE FROM bes_hr_duties WHERE position_id=:positionId`, { positionId });

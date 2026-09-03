@@ -61,9 +61,9 @@ const unique = (records, fields) => {
 };
 
 await withLocalConnection(async (connection) => {
-  const result = await connection.execute(`SELECT p.position_id,p.position_title,d.department_code,o.office_short
+  const result = await connection.execute(`SELECT p.position_id,p.position_name,d.department_code,o.office_short
     FROM bes_positions p
-    LEFT JOIN bes_departments d ON d.department_id=p.department_id OR d.department_id=(SELECT department_id FROM bes_offices WHERE office_id=p.office_id)
+    LEFT JOIN bes_departments d ON d.dept_id=p.dept_id OR d.department_id=(SELECT department_id FROM bes_offices WHERE office_id=p.office_id)
     LEFT JOIN bes_offices o ON o.office_id=p.office_id
     WHERE p.is_organization_unit='Y' AND p.is_active='Y'`);
   const positions = result.rows;
@@ -73,7 +73,7 @@ await withLocalConnection(async (connection) => {
     const raw = normalize(job.title);
     const wanted = aliases.has(raw) ? aliases.get(raw) : raw;
     if (!wanted) { unmatched.push({ source: job.source, title: job.title, reason: 'No canonical position exists' }); continue; }
-    let candidates = positions.filter((position) => normalize(position.POSITION_TITLE) === wanted);
+    let candidates = positions.filter((position) => normalize(position.POSITION_NAME) === wanted);
     const code = departmentCode(job);
     if (code && candidates.some((position) => position.DEPARTMENT_CODE === code)) candidates = candidates.filter((position) => position.DEPARTMENT_CODE === code);
     if (candidates.length !== 1) {
@@ -98,7 +98,7 @@ await withLocalConnection(async (connection) => {
     duties: matched.reduce((sum, item) => sum + item.duties.length, 0),
     qualifications: matched.reduce((sum, item) => sum + item.qualifications.length, 0),
     unmatched,
-    matches: matched.map((item) => ({ positionId: item.position.POSITION_ID, title: item.position.POSITION_TITLE, department: item.position.DEPARTMENT_CODE, sources: [...new Set(item.sources)], duties: item.duties.length, qualifications: item.qualifications.length, purpose: Boolean(item.purposes[0]) })),
+    matches: matched.map((item) => ({ positionId: item.position.POSITION_ID, title: item.position.POSITION_NAME, department: item.position.DEPARTMENT_CODE, sources: [...new Set(item.sources)], duties: item.duties.length, qualifications: item.qualifications.length, purpose: Boolean(item.purposes[0]) })),
   };
   if (!apply) { console.log(JSON.stringify(report, null, 2)); return; }
 
