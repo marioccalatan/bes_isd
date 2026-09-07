@@ -17,7 +17,8 @@ u.LoadCursorW.restype = wintypes.HANDLE
 k.GetModuleHandleW.restype = wintypes.HMODULE
 shell.ShellExecuteW.restype = ctypes.c_void_p
 shell.ShellExecuteW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int]
-WM_DESTROY, WM_PAINT, WM_LBUTTONUP, WM_APP = 2, 0x0F, 0x202, 0x8000
+WM_DESTROY, WM_PAINT, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_APP = 2, 0x0F, 0x202, 0x020A, 0x8000
+LOG_VIEW_LINES = 13
 
 def color(s):
     s=s.lstrip('#'); r,g,b=(int(s[i:i+2],16) for i in (0,2,4)); return r|(g<<8)|(b<<16)
@@ -50,6 +51,7 @@ class App:
         self.bg=g.CreateSolidBrush(BG); self.card=g.CreateSolidBrush(CARD)
         self.title=self.font(24,700); self.normal=self.font(16,400); self.bold=self.font(16,600); self.small=self.font(13,400); self.mono=self.font(13,400,'Consolas')
         self.log_lines=['No log output yet. Start or restart BES to see activity here.']
+        self.log_scroll=0
         self.cb=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM)(self.proc)
     def font(self,h,w,name='Segoe UI'): return g.CreateFontW(-h,0,0,0,w,0,0,0,1,0,0,5,0,name)
     def text(self,dc,s,r,c,font,flags=0x24):
@@ -66,7 +68,15 @@ class App:
         if msg==WM_DESTROY: u.PostQuitMessage(0); return 0
         if msg==WM_LBUTTONUP:
             x,y=lp&0xffff,(lp>>16)&0xffff
-            if 548<=x<=650 and 297<=y<=325:
+            if 438<=x<=540 and 297<=y<=325:
+                try:
+                    LOG.write_text('',encoding='utf-8')
+                    self.log_lines=['Logs cleared. Start or restart BES to see new activity here.']
+                    self.log_scroll=0
+                    self.status='Logs cleared'
+                except OSError: self.status='Unable to clear logs'
+                u.InvalidateRect(hwnd,None,True)
+            elif 548<=x<=650 and 297<=y<=325:
                 try:
                     subprocess.run(['clip.exe'],input='\r\n'.join(self.log_lines),text=True,creationflags=0x08000000,check=True)
                     self.status='Logs copied to clipboard'
@@ -77,6 +87,13 @@ class App:
                 self.busy=True; self.status='Restarting...'; u.InvalidateRect(hwnd,None,True); threading.Thread(target=self.work,args=(True,),daemon=True).start()
             elif 348<=x<=628 and 219<=y<=264 and not self.busy:
                 self.busy=True; self.status='Stopping...'; u.InvalidateRect(hwnd,None,True); threading.Thread(target=self.work,args=(False,),daemon=True).start()
+            return 0
+        if msg==WM_MOUSEWHEEL:
+            delta=ctypes.c_short((wp>>16)&0xffff).value
+            max_scroll=max(0,len(self.log_lines)-LOG_VIEW_LINES)
+            if delta>0: self.log_scroll=min(max_scroll,self.log_scroll+3)
+            elif delta<0: self.log_scroll=max(0,self.log_scroll-3)
+            u.InvalidateRect(hwnd,None,True)
             return 0
         if msg in (WM_APP+1,WM_APP+2): u.InvalidateRect(hwnd,None,True); return 0
         if msg==WM_PAINT:
@@ -96,12 +113,23 @@ class App:
         u.FillRect(dc,ctypes.byref(RECT(56,219,336,264)),start_brush); u.FillRect(dc,ctypes.byref(RECT(348,219,628,264)),stop_brush); g.DeleteObject(start_brush); g.DeleteObject(stop_brush)
         self.text(dc,'Start / Restart',RECT(56,219,336,264),color('#04130a') if not self.busy else MUTED,self.bold,0x25); self.text(dc,'Stop',RECT(348,219,628,264),WHITE if not self.busy else MUTED,self.bold,0x25)
         self.text(dc,'Logs',RECT(34,301,650,326),WHITE,self.bold)
+        clear_brush=g.CreateSolidBrush(color('#1e293b')); u.FillRect(dc,ctypes.byref(RECT(438,297,540,325)),clear_brush); g.DeleteObject(clear_brush)
+        self.text(dc,'Clear Logs',RECT(438,297,540,325),color('#cbd5e1'),self.small,0x25)
         copy_brush=g.CreateSolidBrush(color('#1e293b')); u.FillRect(dc,ctypes.byref(RECT(548,297,650,325)),copy_brush); g.DeleteObject(copy_brush)
         self.text(dc,'Copy Logs',RECT(548,297,650,325),color('#cbd5e1'),self.small,0x25)
         log_brush=g.CreateSolidBrush(color('#070c16')); u.FillRect(dc,ctypes.byref(RECT(34,329,650,545)),log_brush); g.DeleteObject(log_brush)
-        for index,line in enumerate(self.log_lines[-13:]):
+        max_scroll=max(0,len(self.log_lines)-LOG_VIEW_LINES); self.log_scroll=min(self.log_scroll,max_scroll)
+        end=len(self.log_lines)-self.log_scroll; start=max(0,end-LOG_VIEW_LINES); visible_lines=self.log_lines[start:end]
+        for index,line in enumerate(visible_lines):
             lowered=line.lower(); line_color=RED if ('error' in lowered or 'failed' in lowered or 'exception' in lowered) else color('#cbd5e1')
             self.text(dc,line[:94],RECT(48,339+index*15,636,356+index*15),line_color,self.mono,0x20)
+        if len(self.log_lines)>LOG_VIEW_LINES:
+            track=g.CreateSolidBrush(color('#1e293b')); thumb=g.CreateSolidBrush(color('#64748b'))
+            u.FillRect(dc,ctypes.byref(RECT(636,335,642,539)),track)
+            thumb_h=max(28,int(204*LOG_VIEW_LINES/len(self.log_lines)))
+            thumb_top=335 if max_scroll==0 else 335+int((204-thumb_h)*(max_scroll-self.log_scroll)/max_scroll)
+            u.FillRect(dc,ctypes.byref(RECT(636,thumb_top,642,thumb_top+thumb_h)),thumb)
+            g.DeleteObject(track); g.DeleteObject(thumb)
         self.text(dc,'Server controls apply to the selected environment.',RECT(0,559,684,584),MUTED,self.small,0x25)
     def ports(self): return (5000,) if self.prod else (5174,3001)
     def work(self,start):
@@ -134,7 +162,7 @@ class App:
             try:
                 lines=LOG.read_text(encoding='utf-8',errors='replace').splitlines()
                 visible=[line for line in lines if line.strip()]
-                if visible: self.log_lines=visible[-13:]
+                if visible: self.log_lines=visible[-1000:]
             except OSError: pass
             if not self.busy:
                 ports=self.ports(); active=[bool(pids((port,))) for port in ports]; self.running=all(active)

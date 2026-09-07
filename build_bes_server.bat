@@ -3,8 +3,9 @@ setlocal
 cd /d "%~dp0"
 
 set "PYTHON_EXE=python.exe"
-where python.exe >nul 2>nul
-if errorlevel 1 if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" set "PYTHON_EXE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" set "PYTHON_EXE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+"%PYTHON_EXE%" --version >nul 2>nul
+if errorlevel 1 set "PYTHON_EXE=python.exe"
 
 "%PYTHON_EXE%" -m PyInstaller --version >nul 2>nul
 if errorlevel 1 "%PYTHON_EXE%" -m pip install pyinstaller

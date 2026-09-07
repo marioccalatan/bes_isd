@@ -55,10 +55,15 @@ rem healthy existing API when Windows permissions prevent the launcher from
 rem stopping it; otherwise start it in this console group with Vite.
 netstat -ano | findstr /C:":3001 " | findstr /C:"LISTENING" >nul
 if errorlevel 1 start "" /b "%BES_NODE%" server\index.mjs
-if defined BES_BUNDLED_RUNTIME if exist "node_modules\vite\bin\vite.js" (
-    call "%BES_NODE%" server\dev-gateway.mjs
-) else (
-    call %PACKAGE_RUNNER% run dev -- --host 127.0.0.1 --port 5174 --strictPort
+
+if defined BES_BUNDLED_RUNTIME (
+    if exist "node_modules\vite\bin\vite.js" (
+        call "%BES_NODE%" server\dev-gateway.mjs
+        goto :after_frontend
+    )
 )
 
+call %PACKAGE_RUNNER% run dev -- --host 127.0.0.1 --port 5174 --strictPort
+
+:after_frontend
 pause
