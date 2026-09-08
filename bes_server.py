@@ -52,6 +52,8 @@ class App:
         self.title=self.font(24,700); self.normal=self.font(16,400); self.bold=self.font(16,600); self.small=self.font(13,400); self.mono=self.font(13,400,'Consolas')
         self.log_lines=['No log output yet. Start or restart BES to see activity here.']
         self.log_scroll=0
+        self.log_cleared_at=0
+        self.log_ignore_lines=0
         self.cb=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM)(self.proc)
     def font(self,h,w,name='Segoe UI'): return g.CreateFontW(-h,0,0,0,w,0,0,0,1,0,0,5,0,name)
     def text(self,dc,s,r,c,font,flags=0x24):
@@ -70,11 +72,20 @@ class App:
             x,y=lp&0xffff,(lp>>16)&0xffff
             if 438<=x<=540 and 297<=y<=325:
                 try:
+                    old_line_count=len(LOG.read_text(encoding='utf-8',errors='replace').splitlines())
+                except OSError: old_line_count=0
+                self.log_cleared_at=time.time()
+                self.log_lines=['Logs cleared. Start or restart BES to see new activity here.']
+                self.log_scroll=0
+                self.status='Logs cleared'
+                try:
                     LOG.write_text('',encoding='utf-8')
-                    self.log_lines=['Logs cleared. Start or restart BES to see new activity here.']
-                    self.log_scroll=0
-                    self.status='Logs cleared'
-                except OSError: self.status='Unable to clear logs'
+                    self.log_ignore_lines=0
+                except OSError:
+                    self.log_ignore_lines=old_line_count
+                    try:
+                        with LOG.open('a',encoding='utf-8') as log: log.write(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Logs cleared in launcher\n')
+                    except OSError: pass
                 u.InvalidateRect(hwnd,None,True)
             elif 548<=x<=650 and 297<=y<=325:
                 try:
@@ -132,11 +143,18 @@ class App:
             g.DeleteObject(track); g.DeleteObject(thumb)
         self.text(dc,'Server controls apply to the selected environment.',RECT(0,559,684,584),MUTED,self.small,0x25)
     def ports(self): return (5000,) if self.prod else (5174,3001)
+    def wait_ports_clear(self,ports,seconds=8):
+        deadline=time.time()+seconds
+        while time.time()<deadline:
+            if not pids(ports): return True
+            time.sleep(.5)
+        return not pids(ports)
     def work(self,start):
         mode='production' if self.prod else 'development'
-        stopped=True if self.prod and start else stop_ports(self.ports())
-        reuse_api=start and not self.prod and not pids((5174,)) and bool(pids((3001,)))
-        if not stopped and not reuse_api: self.status='Stop failed - run as Administrator'
+        ports=self.ports()
+        should_stop=not start or bool(pids(ports))
+        stopped=True if self.prod and start else ((stop_ports(ports) and self.wait_ports_clear(ports)) if should_stop else True)
+        if not stopped: self.status='Stop failed - run as Administrator'
         elif not start: self.status=mode.title()+' stopped'
         else:
             script=ROOT/('deploy_bes_isd.bat' if self.prod else 'start-bes.bat')
@@ -161,6 +179,7 @@ class App:
         while u.IsWindow(self.hwnd):
             try:
                 lines=LOG.read_text(encoding='utf-8',errors='replace').splitlines()
+                if self.log_ignore_lines: lines=lines[self.log_ignore_lines:]
                 visible=[line for line in lines if line.strip()]
                 if visible: self.log_lines=visible[-1000:]
             except OSError: pass
