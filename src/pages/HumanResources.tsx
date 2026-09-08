@@ -141,7 +141,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   const { token, user } = useAuth();
   const { workItems, departments, createTaskFromCalendarEvent } = useData();
   const { toast } = useToast();
-  const [tab, setTab] = useState('tasks');
+  const [tab, setTab] = useState(() => module.id === 'member-programs' ? 'csr' : 'tasks');
   const [search, setSearch] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [processingRecords, setProcessingRecords] = useState<PolicyTaskProcessing[]>([]);
