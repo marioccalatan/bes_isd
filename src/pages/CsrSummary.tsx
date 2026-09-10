@@ -33,6 +33,7 @@ export default function CsrSummary() {
   const [sortKey, setSortKey] = useState<keyof CsrRequest>('dateRequested');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [hoveredRequest, setHoveredRequest] = useState<CsrRequest | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -148,8 +149,9 @@ export default function CsrSummary() {
         <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, and approved funding by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
         <Breakdown title="Municipalities" values={municipalities} total={filtered.length} className="xl:col-span-2 xl:row-span-2" />
       </div>
-      <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} minWidthPx={1750} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
+        <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} onRowMouseEnter={setHoveredRequest} onRowMouseLeave={() => setHoveredRequest(null)} minWidthPx={1750} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
     </>}
+    {hoveredRequest && <CsrRequestHoverSummary request={hoveredRequest} />}
     </div>
   </div>;
 }
@@ -165,3 +167,28 @@ function Breakdown({ title, values, total, className }: { title: string; values:
 function StatusPieChart({ data, className }: { data: { name: string; value: number }[]; className?: string }) { return <Card className={className}><CardHeader><CardTitle>Evaluation Status</CardTitle></CardHeader><CardContent>{data.length ? <div className="h-72"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="45%" innerRadius={48} outerRadius={82} paddingAngle={2} label={({ name, value }) => `${name}: ${value}`}>{data.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 8 }} /></PieChart></ResponsiveContainer></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
 
 function MonthlyBarChart({ data, className }: { data: { month: string; requests: number }[]; className?: string }) { return <Card className={className}><CardHeader><CardTitle>Requests by Month</CardTitle></CardHeader><CardContent>{data.length ? <div className="h-72"><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 8 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="currentColor" opacity={0.12} /><XAxis dataKey="month" tick={{ fontSize: 11 }} /><YAxis allowDecimals={false} tick={{ fontSize: 11 }} /><Tooltip cursor={{ fill: 'currentColor', opacity: 0.06 }} contentStyle={{ borderRadius: 8 }} /><Bar dataKey="requests" name="Requests" fill="#10b981" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
+
+function CsrRequestHoverSummary({ request }: { request: CsrRequest }) {
+  const fields: Array<[string, string]> = [
+    ['Date Requested', request.dateRequested],
+    ['Program Type', request.programType],
+    ['Requestee', request.requestee],
+    ['Designation', request.designation],
+    ['Organization', request.organization],
+    ['Project Details', request.projectDetails],
+    ['Municipality', request.municipality],
+    ['Barangay', request.barangay],
+    ['District', request.district],
+    ['PJRS', request.pjrs],
+    ['Evaluation Status', request.status],
+    ['Evaluation Result', request.evaluationResult.length ? request.evaluationResult.join(', ') : 'Not Evaluated'],
+    ['Approval Status', request.approvalStatus || 'For Evaluation'],
+    ['With Letter Reply', request.withLetterReply ? 'Yes' : 'No'],
+    ['Date Approved/Disapproved', request.dateApproved],
+    ['Amount Funding', money.format(Number(request.amountFunding) || 0)],
+    ['Actual Project Cost', money.format(Number(request.actualProjectCost) || 0)],
+    ['Pending Reason', request.pendingReason],
+    ['Additional Remarks', request.additionalRemarks],
+  ];
+  return <div className="pointer-events-none fixed right-8 top-24 z-50 hidden w-[420px] max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-surface p-4 shadow-2xl md:block"><div className="mb-3 border-b border-slate-200 pb-2"><p className="text-sm font-semibold text-slate-900">CSR Request Details</p><p className="truncate text-xs text-slate-500">{request.requestee || request.programType}</p></div><dl className="max-h-[70vh] space-y-2 overflow-y-auto pr-1 text-sm">{fields.map(([field, value]) => <div key={field} className="grid grid-cols-[135px_1fr] gap-3"><dt className="text-xs font-semibold uppercase tracking-wide text-slate-400">{field}</dt><dd className="whitespace-pre-wrap break-words text-slate-700">{value || '—'}</dd></div>)}</dl></div>;
+}

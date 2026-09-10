@@ -16,13 +16,15 @@ export interface Column<T> {
 
 export function DataTable<T>({
   columns, rows, getRowId, onRowClick, sortKey, sortDir, onSort, emptyTitle = 'No records found', emptyDescription = 'Try adjusting your filters or search terms.',
-  cardTitle, selectable, selectedIds, onToggleSelect, onRowContextMenu, columnFilters, onColumnFilterChange, minWidthPx,
+  cardTitle, selectable, selectedIds, onToggleSelect, onRowContextMenu, onRowMouseEnter, onRowMouseLeave, columnFilters, onColumnFilterChange, minWidthPx,
 }: {
   columns: Column<T>[];
   rows: T[];
   getRowId: (row: T) => string;
   onRowClick?: (row: T) => void;
   onRowContextMenu?: (row: T, event: MouseEvent) => void;
+  onRowMouseEnter?: (row: T) => void;
+  onRowMouseLeave?: (row: T) => void;
   sortKey?: string | null;
   sortDir?: 'asc' | 'desc';
   onSort?: (key: string) => void;
@@ -78,7 +80,9 @@ export function DataTable<T>({
                   key={id}
                   onClick={() => onRowClick?.(row)}
                   onContextMenu={(event) => onRowContextMenu?.(row, event)}
-                  className={cn('transition-colors', onRowClick && 'cursor-pointer hover:bg-brand-50/40')}
+                  onMouseEnter={() => onRowMouseEnter?.(row)}
+                  onMouseLeave={() => onRowMouseLeave?.(row)}
+                  className={cn('transition-colors', (onRowClick || onRowMouseEnter) && 'cursor-pointer hover:bg-brand-50/40')}
                 >
                   {selectable && (
                     <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
