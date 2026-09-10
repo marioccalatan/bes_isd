@@ -82,12 +82,15 @@ export default function CsrSummary() {
     row.quantity += 1;
     if ((request.approvalStatus || '').toLowerCase() === 'approved') row.approved += 1;
     else row.forEvaluation += 1;
-    row.amount += Number(request.amountFunding) || 0;
+    if ((request.approvalStatus || '').toLowerCase() === 'approved') row.amount += Number(request.amountFunding) || 0;
     result[district] = row;
     return result;
   }, {})).sort((a, b) => b.amount - a.amount || b.quantity - a.quantity || a.district.localeCompare(b.district)), [filtered]);
-  const totalFunding = filtered.reduce((sum, request) => sum + (Number(request.amountFunding) || 0), 0);
-  const totalActualProjectCost = filtered.reduce((sum, request) => sum + (Number(request.actualProjectCost) || 0), 0);
+  const approvedRequests = filtered.filter((request) => (request.approvalStatus || '').toLowerCase() === 'approved');
+  const totalFunding = approvedRequests.reduce((sum, request) => sum + (Number(request.amountFunding) || 0), 0);
+  const totalActualProjectCost = approvedRequests.reduce((sum, request) => sum + (Number(request.actualProjectCost) || 0), 0);
+  const completedCount = status.Completed || 0;
+  const withinPolicyCount = policy['Within CSR Policy'] || 0;
   const statusChartData = Object.entries(status).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
   const monthChartData = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)).map(([month, requests]) => ({ month, requests }));
   const requestColumns: Column<CsrRequest>[] = [
@@ -110,8 +113,8 @@ export default function CsrSummary() {
       <header className="csr-print-header"><img src={benecoLogo} alt="BENECO logo" /><div><p>Benguet Electric Cooperative</p><h1>{summaryTitle}</h1><span>Reporting period: {startDate} to {endDate}</span></div><aside><strong>Generated</strong><span>{new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}</span></aside></header>
       <div className="csr-print-metrics">
         <PrintMetric label="Total Requests" value={String(filtered.length)} />
-        <PrintMetric label="Completed" value={String(status.Completed || 0)} />
-        <PrintMetric label="Within CSR Policy" value={String(policy['Within CSR Policy'] || 0)} />
+        <PrintMetric label="Completed" value={String(completedCount)} />
+        <PrintMetric label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
         <PrintMetric label="Total Funding" value={money.format(totalFunding)} />
         <PrintMetric label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
       </div>
@@ -127,10 +130,12 @@ export default function CsrSummary() {
     <div className="no-print"><PageHeader title={summaryTitle} description={`${requestName} activity, evaluation, funding, and geographic metrics.`} crumbs={[{ label: isCommunityRelations ? 'Community Relations' : 'Member-Consumer and Community Programs', to: isCommunityRelations ? '/workspace/preview/ISD/tools/Community%20Relations' : '/workspace/member-programs' }, { label: summaryTitle }]} actions={<div className="flex gap-2"><Button variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button><Button variant="outline" onClick={() => window.close()}><X className="h-4 w-4" /> Close</Button></div>} /></div>
     <Card className="mb-5 no-print"><CardHeader><CardTitle>Reporting Period</CardTitle></CardHeader><CardContent><div className="max-w-xl"><DateRangePicker label="CSR Request Date Range" startDate={startDate} endDate={endDate} onChange={(start, end) => { setStartDate(start); setEndDate(end); }} /></div><p className="mt-2 text-sm text-slate-500">Metrics include requests dated {startDate} through {endDate}.</p></CardContent></Card>
     {loading ? <Card><CardContent className="py-12 text-center text-slate-500">Loading CSR metrics…</CardContent></Card> : error ? <Card><CardContent className="py-12 text-center text-red-600">{error}</CardContent></Card> : <>
-      <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
         <MetricCard label="Total Requests" value={String(filtered.length)} />
-        <MetricCard label="Completed" value={String(status.Completed || 0)} />
-        <MetricCard label="Within CSR Policy" value={String(policy['Within CSR Policy'] || 0)} />
+        <MetricCard label="Completed" value={String(completedCount)} />
+        <MetricCard label="Pending" value={String(status.Pending || 0)} />
+        <MetricCard label="For evaluation" value={String(status['For evaluation'] || 0)} />
+        <MetricCard label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
         <MetricCard label="Total Funding" value={money.format(totalFunding)} />
         <MetricCard label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
       </div>
@@ -140,7 +145,7 @@ export default function CsrSummary() {
         <Breakdown title="Policy Evaluation" values={policy} total={filtered.length} className="xl:col-span-2" />
         <Breakdown title="Program Types" values={programs} total={filtered.length} className="xl:col-span-3" />
         <MonthlyBarChart data={monthChartData} className="xl:col-span-3" />
-        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, and approved/requested funding by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
+        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, and approved funding by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
         <Breakdown title="Municipalities" values={municipalities} total={filtered.length} className="xl:col-span-2 xl:row-span-2" />
       </div>
       <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} minWidthPx={1750} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
@@ -149,7 +154,7 @@ export default function CsrSummary() {
   </div>;
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) { return <Card><CardContent className="p-5"><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-2xl font-bold text-slate-900">{value}</p></CardContent></Card>; }
+function MetricCard({ label, value }: { label: string; value: string }) { return <Card><CardContent className="p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1.5 break-words text-xl font-bold text-slate-900">{value}</p></CardContent></Card>; }
 
 function PrintMetric({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 
