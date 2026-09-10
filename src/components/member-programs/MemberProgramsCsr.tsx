@@ -336,12 +336,19 @@ function CsrSettingsDialog({ open, onClose, programTypeOptions, districtOptions 
     if (!Number.isInteger(year) || year < 1900 || year > 2999) return toast({ kind: 'error', title: 'Enter a valid budget year' });
     if (!draft.district.trim() || !draft.programType.trim()) return toast({ kind: 'error', title: 'District and Program Type are required' });
     if (!Number.isFinite(budget) || budget < 0) return toast({ kind: 'error', title: 'Budget must be a valid non-negative amount' });
+    const previousYear = String(year);
+    const previousDistrict = draft.district.trim();
+    const wasEditing = Boolean(editingId);
     setSaving(true);
     try {
-      await saveCsrBudgetAllocation(token, { year, district: draft.district.trim(), programType: draft.programType.trim(), budget }, editingId ?? undefined);
+      await saveCsrBudgetAllocation(token, { year, district: previousDistrict, programType: draft.programType.trim(), budget }, editingId ?? undefined);
       await load();
-      setYearFilter(String(year));
-      resetDraft();
+      setYearFilter(previousYear);
+      if (wasEditing) {
+        resetDraft();
+      } else {
+        setDraft({ year: previousYear, district: previousDistrict, programType: '', budget: '' });
+      }
       toast({ kind: 'success', title: editingId ? 'Budget allocation updated' : 'Budget allocation added' });
     } catch (error) {
       toast({ kind: 'error', title: 'Budget allocation was not saved', description: error instanceof Error ? error.message : 'Please try again.' });
