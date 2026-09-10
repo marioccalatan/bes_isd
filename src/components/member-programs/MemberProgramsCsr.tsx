@@ -402,13 +402,15 @@ function CsrSettingsDialog({ open, onClose, programTypeOptions, districtOptions 
     setApplyBudgetDialog(null);
     setSaving(true);
     try {
+      let workingAllocations = [...allocations];
       for (const source of selected) {
         for (const district of districts) {
-          const existing = allocations.find((item) => item.year === source.year && item.district.trim().toLowerCase() === district.trim().toLowerCase() && item.programType.trim().toLowerCase() === source.programType.trim().toLowerCase());
+          const existing = workingAllocations.find((item) => item.year === source.year && item.district.trim().toLowerCase() === district.trim().toLowerCase() && item.programType.trim().toLowerCase() === source.programType.trim().toLowerCase());
           if (existing && existing.id === source.id && Number(existing.budget) === Number(source.budget)) continue;
           const result = await saveCsrBudgetAllocation(token, { year: source.year, district, programType: source.programType, budget: source.budget }, existing?.id);
           const updatedRow: CsrBudgetAllocation = { id: existing?.id ?? result.id ?? `${source.year}-${district}-${source.programType}`, year: source.year, district, programType: source.programType, budget: source.budget };
-          setAllocations((current) => existing ? current.map((item) => item.id === existing.id ? { ...item, ...updatedRow } : item) : [...current, updatedRow]);
+          workingAllocations = existing ? workingAllocations.map((item) => item.id === existing.id ? { ...item, ...updatedRow } : item) : [...workingAllocations, updatedRow];
+          setAllocations(workingAllocations);
         }
       }
       await load();
