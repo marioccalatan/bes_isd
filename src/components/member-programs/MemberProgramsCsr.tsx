@@ -334,6 +334,27 @@ function CsrSettingsDialog({ open, onClose, programTypeOptions, districtOptions 
       setSaving(false);
     }
   }
+  async function removeSelectedAllocations(ids = budgetContextMenu?.ids ?? selectedBudgetIds) {
+    if (!token) return;
+    const selected = allocations.filter((item) => ids.includes(item.id));
+    if (!selected.length) return toast({ kind: 'error', title: 'Select budget rows first' });
+    setBudgetContextMenu(null);
+    setSaving(true);
+    try {
+      for (const item of selected) {
+        await deleteCsrBudgetAllocation(token, item.id);
+        setAllocations((current) => current.filter((allocation) => allocation.id !== item.id));
+      }
+      setSelectedBudgetIds((current) => current.filter((id) => !ids.includes(id)));
+      if (editingId && ids.includes(editingId)) resetDraft();
+      await load();
+      toast({ kind: 'success', title: `${selected.length} budget allocation${selected.length === 1 ? '' : 's'} removed` });
+    } catch (error) {
+      toast({ kind: 'error', title: 'Budget allocations were not removed', description: error instanceof Error ? error.message : 'Please try again.' });
+    } finally {
+      setSaving(false);
+    }
+  }
   async function applySelectedToAllDistricts(ids = budgetContextMenu?.ids ?? selectedBudgetIds) {
     if (!token) return;
     const selected = allocations.filter((item) => ids.includes(item.id) && item.district.trim().toUpperCase() !== 'INSTITUTIONAL');
@@ -355,7 +376,9 @@ function CsrSettingsDialog({ open, onClose, programTypeOptions, districtOptions 
         for (const district of districts) {
           const existing = allocations.find((item) => item.year === source.year && item.district.trim().toLowerCase() === district.trim().toLowerCase() && item.programType.trim().toLowerCase() === source.programType.trim().toLowerCase());
           if (existing && existing.id === source.id && Number(existing.budget) === Number(source.budget)) continue;
-          await saveCsrBudgetAllocation(token, { year: source.year, district, programType: source.programType, budget: source.budget }, existing?.id);
+          const result = await saveCsrBudgetAllocation(token, { year: source.year, district, programType: source.programType, budget: source.budget }, existing?.id);
+          const updatedRow: CsrBudgetAllocation = { id: existing?.id ?? result.id ?? `${source.year}-${district}-${source.programType}`, year: source.year, district, programType: source.programType, budget: source.budget };
+          setAllocations((current) => existing ? current.map((item) => item.id === existing.id ? { ...item, ...updatedRow } : item) : [...current, updatedRow]);
         }
       }
       await load();
@@ -403,7 +426,7 @@ function CsrSettingsDialog({ open, onClose, programTypeOptions, districtOptions 
             </div>)}
           </div><div className="grid grid-cols-[44px_70px_130px_minmax(180px,1fr)_minmax(180px,1fr)_130px_92px] items-center border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-900"><span className="col-span-5 text-right">Running Total Budget</span><span className="text-right">{money.format(totalBudget)}</span><span /></div></> : <div className="px-4 py-10 text-center text-sm text-slate-500">No budget allocations for {yearFilter}.</div>}
         </div>
-        {budgetContextMenu && <div className="fixed z-[80] min-w-64 rounded-lg border border-slate-200 bg-surface p-1 shadow-xl" style={{ left: budgetContextMenu.x, top: budgetContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100" onClick={() => void applySelectedToAllDistricts(budgetContextMenu.ids)}>Apply to all District Budgets</button></div>}
+        {budgetContextMenu && <div className="fixed z-[80] min-w-64 rounded-lg border border-slate-200 bg-surface p-1 shadow-xl" style={{ left: budgetContextMenu.x, top: budgetContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100" onClick={() => void applySelectedToAllDistricts(budgetContextMenu.ids)}>Apply to all District Budgets</button><button type="button" className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50" onClick={() => void removeSelectedAllocations(budgetContextMenu.ids)}>Bulk Delete</button></div>}
       </div>}
     </div>
   </Dialog>;
