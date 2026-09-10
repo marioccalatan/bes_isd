@@ -610,6 +610,28 @@ export async function fetchBarangayLocations(token: string) {
   return result.locations;
 }
 
+export async function fetchMemberProgramTypes(token: string) {
+  const result = await apiRequest<{ programTypes: string[] }>('/api/member-programs/program-types', { headers: { authorization: `Bearer ${token}` } });
+  return result.programTypes;
+}
+
+export async function createMemberProgramType(token: string, programType: string) {
+  return apiRequest<{ programType: string }>('/api/member-programs/program-types', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ programType }),
+  });
+}
+
+export async function fetchMemberProgramActivities(token: string) {
+  const result = await apiRequest<{ activities: string[] }>('/api/member-programs/activities', { headers: { authorization: `Bearer ${token}` } });
+  return result.activities;
+}
+
+export async function createMemberProgramActivity(token: string, activity: string) {
+  return apiRequest<{ activity: string }>('/api/member-programs/activities', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ activity }),
+  });
+}
+
 export async function fetchCsrSectors(token: string) {
   const result = await apiRequest<{ sectors: string[] }>('/api/member-programs/csr-sectors', { headers: { authorization: `Bearer ${token}` } });
   return result.sectors;
@@ -639,7 +661,20 @@ export async function deleteCsrRequest(token: string, id: string) {
 export interface CsrAttachment { id: string; fileName: string; mimeType: string; fileSize: number; createdAt?: string }
 
 export type MemberProgramStatus = 'Planned' | 'Ongoing' | 'Completed' | 'On Hold' | 'Cancelled';
-export interface MemberProgram { id: string; parentId: string | null; name: string; description: string; startDate: string; endDate: string; status: MemberProgramStatus }
+export interface MemberProgram {
+  id: string;
+  parentId: string | null;
+  name: string;
+  activity: string;
+  description: string;
+  address: string;
+  municipality: string;
+  barangay: string;
+  district: string;
+  startDate: string;
+  endDate: string;
+  status: MemberProgramStatus;
+}
 export type MemberProgramInput = Omit<MemberProgram, 'id'>;
 
 export async function fetchMemberPrograms(token: string) {

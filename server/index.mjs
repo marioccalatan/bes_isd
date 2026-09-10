@@ -19,6 +19,7 @@ const json = (res, status, body, headers = {}) => {
   res.end(JSON.stringify(body));
 };
 const distRoot = path.resolve('dist');
+const DEFAULT_MEMBER_PROGRAM_TYPES = ['Environmental Sustainability Program', 'Livelihood Program', 'Skills Training Program', 'Pailaw sa Paaralan', 'Reforestation Program', 'NGO Partnership for Social Cause', 'Other Projects', 'Linkages', 'Partnership', 'Networking'];
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -3469,11 +3470,59 @@ async function handle(req, res) {
       if (!result) return json(res, 401, { error: 'Session expired.' });
       return json(res, 200, { locations: result.rows.map((row) => ({ municipality: row.MUNICIPALITY, barangay: row.BARANGAY, district: row.DISTRICT })) });
     }
+    if (req.method === 'GET' && req.url === '/api/member-programs/program-types') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        return c.execute(`
+          SELECT program_type_name FROM bes_member_program_types
+          UNION SELECT program_name FROM bes_member_programs WHERE program_name IS NOT NULL
+          UNION SELECT program_type FROM bes_csr_requests WHERE program_type IS NOT NULL
+        `);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      const programTypes = [...new Set([...DEFAULT_MEMBER_PROGRAM_TYPES, ...result.rows.map((row) => row.PROGRAM_TYPE_NAME).filter(Boolean)])].sort((a, b) => a.localeCompare(b));
+      return json(res, 200, { programTypes });
+    }
+    if (req.method === 'POST' && req.url === '/api/member-programs/program-types') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req, 10_000); const programType = normalize(body.programType);
+      if (!programType) return json(res, 400, { error: 'Program type is required.' });
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`MERGE INTO bes_member_program_types target USING (SELECT :programType program_type_name FROM dual) source ON (UPPER(TRIM(target.program_type_name))=UPPER(TRIM(source.program_type_name))) WHEN NOT MATCHED THEN INSERT (program_type_name,created_by_user_id) VALUES (source.program_type_name,:userId)`, { programType, userId: user.USER_ID });
+        await c.commit();
+      });
+      return json(res, 201, { programType });
+    }
+    if (req.method === 'GET' && req.url === '/api/member-programs/activities') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        return c.execute(`
+          SELECT activity_name FROM bes_member_program_activities
+          UNION SELECT activity FROM bes_member_programs WHERE activity IS NOT NULL
+        `);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { activities: [...new Set(result.rows.map((row) => row.ACTIVITY_NAME).filter(Boolean))].sort((a, b) => a.localeCompare(b)) });
+    }
+    if (req.method === 'POST' && req.url === '/api/member-programs/activities') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req, 10_000); const activity = normalize(body.activity);
+      if (!activity) return json(res, 400, { error: 'Activity is required.' });
+      await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+        await c.execute(`MERGE INTO bes_member_program_activities target USING (SELECT :activity activity_name FROM dual) source ON (UPPER(TRIM(target.activity_name))=UPPER(TRIM(source.activity_name))) WHEN NOT MATCHED THEN INSERT (activity_name,created_by_user_id) VALUES (source.activity_name,:userId)`, { activity, userId: user.USER_ID });
+        await c.commit();
+      });
+      return json(res, 201, { activity });
+    }
     if (req.method === 'GET' && req.url === '/api/member-programs/programs') {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
-      const result = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; return c.execute(`SELECT child.program_uid,parent.program_uid parent_uid,child.program_name,child.program_description,child.start_date,child.end_date,child.program_status FROM bes_member_programs child LEFT JOIN bes_member_programs parent ON parent.program_id=child.parent_program_id ORDER BY child.start_date,child.program_id`); });
+      const result = await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return null; return c.execute(`SELECT child.program_uid,parent.program_uid parent_uid,child.program_name,child.activity,child.program_description,child.address,child.municipality,child.barangay,child.district,child.start_date,child.end_date,child.program_status FROM bes_member_programs child LEFT JOIN bes_member_programs parent ON parent.program_id=child.parent_program_id ORDER BY child.start_date,child.program_id`); });
       if (!result) return json(res, 401, { error: 'Session expired.' });
-      return json(res, 200, { programs: result.rows.map((row) => ({ id: row.PROGRAM_UID, parentId: row.PARENT_UID || null, name: row.PROGRAM_NAME, description: row.PROGRAM_DESCRIPTION || '', startDate: localDateOnly(row.START_DATE), endDate: localDateOnly(row.END_DATE), status: row.PROGRAM_STATUS })) });
+      return json(res, 200, { programs: result.rows.map((row) => ({ id: row.PROGRAM_UID, parentId: row.PARENT_UID || null, name: row.PROGRAM_NAME, activity: row.ACTIVITY || '', description: row.PROGRAM_DESCRIPTION || '', address: row.ADDRESS || '', municipality: row.MUNICIPALITY || '', barangay: row.BARANGAY || '', district: row.DISTRICT || '', startDate: localDateOnly(row.START_DATE), endDate: localDateOnly(row.END_DATE), status: row.PROGRAM_STATUS })) });
     }
     if (req.method === 'GET' && req.url === '/api/member-programs/operations') {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
@@ -3501,7 +3550,7 @@ async function handle(req, res) {
       if (endDate < startDate) return json(res, 400, { error: 'End date must be on or after the start date.' });
       if (!['Planned','Ongoing','Completed','On Hold','Cancelled'].includes(status)) return json(res, 400, { error: 'Invalid program status.' });
       const programUid = `MPRG-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); const inserted = await c.execute(`INSERT INTO bes_member_programs (program_uid,parent_program_id,program_name,program_description,start_date,end_date,program_status,created_by_user_id,updated_by_user_id) VALUES (:programUid,(SELECT program_id FROM bes_member_programs WHERE program_uid=:parentUid),:programName,:programDescription,TO_DATE(:startDate,'YYYY-MM-DD'),TO_DATE(:endDate,'YYYY-MM-DD'),:programStatus,:userId,:userId)`, { programUid, parentUid: nullableNormalize(body.parentId), programName: name, programDescription: nullableNormalize(body.description), startDate, endDate, programStatus: status, userId: user.USER_ID }); if (!inserted.rowsAffected) throw Object.assign(new Error('Program was not saved.'), { statusCode: 400 }); await c.commit(); });
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); const inserted = await c.execute(`INSERT INTO bes_member_programs (program_uid,parent_program_id,program_name,activity,program_description,address,municipality,barangay,district,start_date,end_date,program_status,created_by_user_id,updated_by_user_id) VALUES (:programUid,null,:programName,:activity,:programDescription,:address,:municipality,:barangay,:district,TO_DATE(:startDate,'YYYY-MM-DD'),TO_DATE(:endDate,'YYYY-MM-DD'),:programStatus,:userId,:userId)`, { programUid, programName: name, activity: nullableNormalize(body.activity), programDescription: nullableNormalize(body.description), address: nullableNormalize(body.address), municipality: nullableNormalize(body.municipality), barangay: nullableNormalize(body.barangay), district: nullableNormalize(body.district), startDate, endDate, programStatus: status, userId: user.USER_ID }); if (!inserted.rowsAffected) throw Object.assign(new Error('Program was not saved.'), { statusCode: 400 }); await c.commit(); });
       return json(res, 201, { id: programUid });
     }
     const memberProgramMatch = url.pathname.match(/^\/api\/member-programs\/programs\/([^/]+)$/);
@@ -3509,7 +3558,7 @@ async function handle(req, res) {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const programUid = decodeURIComponent(memberProgramMatch[1]); const body = await readBody(req, 50_000); const name = normalize(body.name); const startDate = normalize(body.startDate); const endDate = normalize(body.endDate); const status = normalize(body.status);
       if (!name || !startDate || !endDate || endDate < startDate) return json(res, 400, { error: 'A valid name and tentative schedule are required.' });
       if (!['Planned','Ongoing','Completed','On Hold','Cancelled'].includes(status)) return json(res, 400, { error: 'Invalid program status.' });
-      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`UPDATE bes_member_programs SET program_name=:programName,program_description=:programDescription,start_date=TO_DATE(:startDate,'YYYY-MM-DD'),end_date=TO_DATE(:endDate,'YYYY-MM-DD'),program_status=:programStatus,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP WHERE program_uid=:programUid`, { programUid, programName: name, programDescription: nullableNormalize(body.description), startDate, endDate, programStatus: status, userId: user.USER_ID }); await c.commit(); });
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`UPDATE bes_member_programs SET parent_program_id=null,program_name=:programName,activity=:activity,program_description=:programDescription,address=:address,municipality=:municipality,barangay=:barangay,district=:district,start_date=TO_DATE(:startDate,'YYYY-MM-DD'),end_date=TO_DATE(:endDate,'YYYY-MM-DD'),program_status=:programStatus,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP WHERE program_uid=:programUid`, { programUid, programName: name, activity: nullableNormalize(body.activity), programDescription: nullableNormalize(body.description), address: nullableNormalize(body.address), municipality: nullableNormalize(body.municipality), barangay: nullableNormalize(body.barangay), district: nullableNormalize(body.district), startDate, endDate, programStatus: status, userId: user.USER_ID }); await c.commit(); });
       return json(res, 200, { ok: true });
     }
     if (req.method === 'DELETE' && memberProgramMatch) {
