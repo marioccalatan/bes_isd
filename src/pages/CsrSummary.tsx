@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Printer, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Printer, X } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { DateRangePicker } from '@/components/shared/DateRangePicker';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { useAuth } from '@/context/AuthContext';
-import { fetchCsrRequests, type CsrRequest } from '@/lib/api';
+import { fetchCsrBudgetAllocations, fetchCsrRequests, type CsrBudgetAllocation, type CsrRequest } from '@/lib/api';
 import benecoLogo from '@/assets/brand/beneco-logo.png';
 import { useSearchParams } from 'react-router-dom';
 
@@ -25,6 +25,7 @@ export default function CsrSummary() {
   const summaryTitle = isCommunityRelations ? 'Community Relations Summary' : 'Corporate Social Responsibility Summary';
   const requestName = isCommunityRelations ? 'Community Relations' : 'CSR';
   const [requests, setRequests] = useState<CsrRequest[]>([]);
+  const [budgetAllocations, setBudgetAllocations] = useState<CsrBudgetAllocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [startDate, setStartDate] = useState(`${currentYear}-01-01`);
@@ -39,7 +40,10 @@ export default function CsrSummary() {
   useEffect(() => {
     if (!token) return;
     setLoading(true);
-    fetchCsrRequests(token).then(setRequests).catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load CSR requests.')).finally(() => setLoading(false));
+    Promise.all([fetchCsrRequests(token), fetchCsrBudgetAllocations(token)])
+      .then(([csrRequests, allocations]) => { setRequests(csrRequests); setBudgetAllocations(allocations); })
+      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load CSR summary data.'))
+      .finally(() => setLoading(false));
   }, [token]);
 
   const filtered = useMemo(() => requests.filter((request) => request.dateRequested >= startDate && request.dateRequested <= endDate && (!programTypeFilter || (isCommunityRelations ? COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(request.programType) : request.programType === programTypeFilter))), [requests, startDate, endDate, isCommunityRelations, programTypeFilter]);
@@ -78,25 +82,61 @@ export default function CsrSummary() {
   const programs = countBy((request) => request.programType);
   const municipalities = countBy((request) => request.municipality);
   const months = countBy((request) => request.dateRequested.slice(0, 7));
-  const districtMetrics = useMemo(() => Object.values(filtered.reduce<Record<string, { district: string; quantity: number; approved: number; forEvaluation: number; amount: number }>>((result, request) => {
+  const budgetYears = useMemo(() => {
+    const startYear = Number(startDate.slice(0, 4)) || currentYear;
+    const endYear = Number(endDate.slice(0, 4)) || startYear;
+    const first = Math.min(startYear, endYear);
+    const last = Math.max(startYear, endYear);
+    return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  }, [endDate, startDate]);
+  const budgetByDistrict = useMemo(() => budgetAllocations.reduce<Record<string, number>>((result, allocation) => {
+    if (!budgetYears.includes(allocation.year) || allocation.district.trim().toUpperCase() === 'INSTITUTIONAL') return result;
+    const district = allocation.district || 'Unspecified';
+    result[district] = (result[district] || 0) + (Number(allocation.budget) || 0);
+    return result;
+  }, {}), [budgetAllocations, budgetYears]);
+  const budgetByProgramType = useMemo(() => budgetAllocations.reduce<Record<string, number>>((result, allocation) => {
+    if (!budgetYears.includes(allocation.year) || allocation.district.trim().toUpperCase() === 'INSTITUTIONAL') return result;
+    const programType = allocation.programType || 'Unspecified';
+    result[programType] = (result[programType] || 0) + (Number(allocation.budget) || 0);
+    return result;
+  }, {}), [budgetAllocations, budgetYears]);
+  const programTypeRows = useMemo(() => Object.entries(programs).map(([programType, count]) => ({ programType, count, budget: budgetByProgramType[programType] || 0 })).sort((a, b) => b.count - a.count || a.programType.localeCompare(b.programType)), [budgetByProgramType, programs]);
+  const districtMetrics = useMemo(() => Object.values(filtered.reduce<Record<string, { district: string; quantity: number; approved: number; forEvaluation: number; amount: number; budget: number }>>((result, request) => {
     const district = request.district || 'Unspecified';
-    const row = result[district] ?? { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0 };
+    const row = result[district] ?? { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0, budget: budgetByDistrict[district] || 0 };
     row.quantity += 1;
+    row.budget = budgetByDistrict[district] || 0;
     if ((request.approvalStatus || '').toLowerCase() === 'approved') row.approved += 1;
     else row.forEvaluation += 1;
     if ((request.approvalStatus || '').toLowerCase() === 'approved') row.amount += Number(request.amountFunding) || 0;
     result[district] = row;
     return result;
-  }, {})).sort((a, b) => b.amount - a.amount || b.quantity - a.quantity || a.district.localeCompare(b.district)), [filtered]);
+  }, {})).sort((a, b) => b.amount - a.amount || b.quantity - a.quantity || a.district.localeCompare(b.district)), [budgetByDistrict, filtered]);
   const approvedRequests = filtered.filter((request) => (request.approvalStatus || '').toLowerCase() === 'approved');
   const totalFunding = approvedRequests.reduce((sum, request) => sum + (Number(request.amountFunding) || 0), 0);
   const totalActualProjectCost = approvedRequests.reduce((sum, request) => sum + (Number(request.actualProjectCost) || 0), 0);
-  const completedCount = status.Completed || 0;
-  const withinPolicyCount = policy['Within CSR Policy'] || 0;
+  const institutionalCount = filtered.filter((request) => request.institutional).length;
+  const nonInstitutionalRequests = filtered.filter((request) => !request.institutional);
+  const nonInstitutionalStatus = nonInstitutionalRequests.reduce<Record<string, number>>((result, request) => { const key = request.status || 'Unspecified'; result[key] = (result[key] || 0) + 1; return result; }, {});
+  const nonInstitutionalPolicy = nonInstitutionalRequests.reduce<Record<string, number>>((result, request) => { const values = request.evaluationResult.length ? request.evaluationResult : ['Not Evaluated']; values.forEach((value) => { result[value] = (result[value] || 0) + 1; }); return result; }, {});
+  const institutionalByProgramType = Object.values(filtered.filter((request) => request.institutional).reduce<Record<string, { programType: string; amount: number }>>((result, request) => {
+    const programType = request.programType || 'Unspecified';
+    const row = result[programType] ?? { programType, amount: 0 };
+    row.amount += Number(request.amountFunding) || 0;
+    result[programType] = row;
+    return result;
+  }, {})).sort((a, b) => b.amount - a.amount || a.programType.localeCompare(b.programType));
+  const completedCount = nonInstitutionalStatus.Completed || 0;
+  const pendingCount = nonInstitutionalStatus.Pending || 0;
+  const forEvaluationCount = nonInstitutionalStatus['For evaluation'] || 0;
+  const withinPolicyCount = nonInstitutionalPolicy['Within CSR Policy'] || 0;
   const statusChartData = Object.entries(status).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
   const monthChartData = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)).map(([month, requests]) => ({ month, requests }));
   const requestColumns: Column<CsrRequest>[] = [
     { key: 'dateRequested', header: 'Date', sortable: true, filterable: true, render: (request) => request.dateRequested },
+    { key: 'institutional', header: 'Institutional', className: 'text-center', sortable: true, filterable: true, filterOptions: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }], render: (request) => request.institutional ? <Check className="mx-auto h-5 w-5 text-emerald-500" aria-label="Institutional" /> : '—' },
+    { key: 'withLetterReply', header: 'Letter Reply', className: 'text-center', sortable: true, filterable: true, filterOptions: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }], render: (request) => request.withLetterReply ? <Check className="mx-auto h-5 w-5 text-emerald-500" aria-label="With letter reply" /> : '—' },
     { key: 'programType', header: 'Program Type', sortable: true, filterable: true, render: (request) => <span className="font-medium">{request.programType}</span> },
     { key: 'requestee', header: 'Requestee', sortable: true, filterable: true, render: (request) => request.requestee },
     { key: 'municipality', header: 'Municipality', sortable: true, filterable: true, render: (request) => request.municipality || '—' },
@@ -116,16 +156,20 @@ export default function CsrSummary() {
       <div className="csr-print-metrics">
         <PrintMetric label="Total Requests" value={String(filtered.length)} />
         <PrintMetric label="Completed" value={String(completedCount)} />
+        <PrintMetric label="Pending" value={String(pendingCount)} />
+        <PrintMetric label="For evaluation" value={String(forEvaluationCount)} />
         <PrintMetric label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
+        <PrintMetric label="Institutional" value={String(institutionalCount)} />
         <PrintMetric label="Total Funding" value={money.format(totalFunding)} />
         <PrintMetric label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
       </div>
       <div className="csr-print-breakdowns">
         <PrintBreakdown title="Evaluation Status" values={status} />
-        <PrintBreakdown title="Program Types" values={programs} />
-        <div className="csr-print-panel"><h2>District Metrics</h2><table><thead><tr><th>District</th><th>Total</th><th>Approved</th><th>For Evaluation</th><th>Funding</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district}><td>{row.district}</td><td>{row.quantity}</td><td>{row.approved}</td><td>{row.forEvaluation}</td><td>{money.format(row.amount)}</td></tr>)}</tbody></table></div>
+        <div className="csr-print-panel"><h2>Program Types</h2><table><thead><tr><th>Program Type</th><th>Count</th><th>Budget</th></tr></thead><tbody>{programTypeRows.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{row.count}</td><td>{money.format(row.budget)}</td></tr>)}</tbody></table></div>
+        <div className="csr-print-panel"><h2>Institutional</h2><table><tbody>{institutionalByProgramType.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{money.format(row.amount)}</td></tr>)}</tbody></table></div>
+        <div className="csr-print-panel"><h2>District Metrics</h2><table><thead><tr><th>District</th><th>Total</th><th>Approved</th><th>For Evaluation</th><th>Funding</th><th>Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district}><td>{row.district}</td><td>{row.quantity}</td><td>{row.approved}</td><td>{row.forEvaluation}</td><td>{money.format(row.amount)}</td><td>{money.format(row.budget)}</td></tr>)}</tbody></table></div>
       </div>
-      <section className="csr-print-requests"><h2>CSR Request Summary</h2><table><thead><tr><th>No.</th><th>Date</th><th>Program Type</th><th>Requestee</th><th>Municipality</th><th>Barangay</th><th>District</th><th>Status</th><th>Evaluation</th><th>Funding</th><th>Actual Cost</th></tr></thead><tbody>{tableRows.map((request, index) => <tr key={request.id}><td>{index + 1}</td><td>{request.dateRequested}</td><td>{request.programType}</td><td>{request.requestee}</td><td>{request.municipality || '—'}</td><td>{request.barangay || '—'}</td><td>{request.district || '—'}</td><td>{request.status}</td><td>{request.evaluationResult.length ? request.evaluationResult.join(', ') : 'Not Evaluated'}</td><td>{money.format(Number(request.amountFunding) || 0)}</td><td>{money.format(Number(request.actualProjectCost) || 0)}</td></tr>)}</tbody></table></section>
+      <section className="csr-print-requests"><h2>CSR Request Summary</h2><table><thead><tr><th>No.</th><th>Date</th><th>Institutional</th><th>Letter Reply</th><th>Program Type</th><th>Requestee</th><th>Municipality</th><th>Barangay</th><th>District</th><th>Status</th><th>Evaluation</th><th>Funding</th><th>Actual Cost</th></tr></thead><tbody>{tableRows.map((request, index) => <tr key={request.id}><td>{index + 1}</td><td>{request.dateRequested}</td><td>{request.institutional ? 'Yes' : 'No'}</td><td>{request.withLetterReply ? 'Yes' : 'No'}</td><td>{request.programType}</td><td>{request.requestee}</td><td>{request.municipality || '—'}</td><td>{request.barangay || '—'}</td><td>{request.district || '—'}</td><td>{request.status}</td><td>{request.evaluationResult.length ? request.evaluationResult.join(', ') : 'Not Evaluated'}</td><td>{money.format(Number(request.amountFunding) || 0)}</td><td>{money.format(Number(request.actualProjectCost) || 0)}</td></tr>)}</tbody></table></section>
       <footer className="csr-print-footer">BENECO Enterprise System · {summaryTitle}</footer>
     </section>}
     <div className="no-print">
@@ -135,9 +179,10 @@ export default function CsrSummary() {
       <div className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
         <MetricCard label="Total Requests" value={String(filtered.length)} />
         <MetricCard label="Completed" value={String(completedCount)} />
-        <MetricCard label="Pending" value={String(status.Pending || 0)} />
-        <MetricCard label="For evaluation" value={String(status['For evaluation'] || 0)} />
+        <MetricCard label="Pending" value={String(pendingCount)} />
+        <MetricCard label="For evaluation" value={String(forEvaluationCount)} />
         <MetricCard label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
+        <MetricCard label="Institutional" value={String(institutionalCount)} />
         <MetricCard label="Total Funding" value={money.format(totalFunding)} />
         <MetricCard label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
       </div>
@@ -145,12 +190,13 @@ export default function CsrSummary() {
         <StatusPieChart data={statusChartData} className="xl:col-span-2" />
         <Breakdown title="Approval Status" values={approval} total={filtered.length} className="xl:col-span-2" />
         <Breakdown title="Policy Evaluation" values={policy} total={filtered.length} className="xl:col-span-2" />
-        <Breakdown title="Program Types" values={programs} total={filtered.length} className="xl:col-span-3" />
+        <ProgramTypeBudgetCard rows={programTypeRows} total={filtered.length} className="xl:col-span-3" />
         <MonthlyBarChart data={monthChartData} orientation={monthChartOrientation} onToggleOrientation={() => setMonthChartOrientation((current) => current === 'horizontal' ? 'vertical' : 'horizontal')} className="xl:col-span-3" />
-        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, and approved funding by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
+        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, approved funding, and selected-year budget by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th><th className="py-2 text-right">Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td><td className="py-3 text-right font-semibold">{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td><td className="py-3 text-right">{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
         <Breakdown title="Municipalities" values={municipalities} total={filtered.length} className="xl:col-span-2 xl:row-span-2" />
+        <InstitutionalAmountCard rows={institutionalByProgramType} className="xl:col-span-2" />
       </div>
-        <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} onRowMouseEnter={setHoveredRequest} onRowMouseLeave={() => setHoveredRequest(null)} minWidthPx={1750} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
+        <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} onRowMouseEnter={setHoveredRequest} onRowMouseLeave={() => setHoveredRequest(null)} minWidthPx={1950} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
     </>}
     {hoveredRequest && <CsrRequestHoverSummary request={hoveredRequest} />}
     </div>
@@ -164,6 +210,14 @@ function PrintMetric({ label, value }: { label: string; value: string }) { retur
 function PrintBreakdown({ title, values }: { title: string; values: Record<string, number> }) { return <div className="csr-print-panel"><h2>{title}</h2><table><tbody>{Object.entries(values).sort((a, b) => b[1] - a[1]).map(([label, count]) => <tr key={label}><td>{label}</td><td>{count}</td></tr>)}</tbody></table></div>; }
 
 function Breakdown({ title, values, total, className }: { title: string; values: Record<string, number>; total: number; className?: string }) { const rows = Object.entries(values).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])); return <Card className={className}><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map(([label, count]) => <div key={label}><div className="mb-1 flex justify-between gap-3 text-sm"><span>{label}</span><strong>{count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${total ? Math.max(3, (count / total) * 100) : 0}%` }} /></div></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
+
+function ProgramTypeBudgetCard({ rows, total, className }: { rows: Array<{ programType: string; count: number; budget: number }>; total: number; className?: string }) {
+  return <Card className={className}><CardHeader><CardTitle>Program Types</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map((row) => <div key={row.programType}><div className="mb-1 grid grid-cols-[1fr_auto_2rem] items-center gap-3 text-sm"><span>{row.programType}</span><strong className="text-right text-blue-600">{money.format(row.budget)}</strong><strong className="text-right">{row.count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${total ? Math.max(3, (row.count / total) * 100) : 0}%` }} /></div></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>;
+}
+
+function InstitutionalAmountCard({ rows, className }: { rows: Array<{ programType: string; amount: number }>; className?: string }) {
+  return <Card className={className}><CardHeader><CardTitle>Institutional</CardTitle><p className="text-sm text-slate-500">Program type funding for institutional requests.</p></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map((row) => <div key={row.programType} className="flex items-start justify-between gap-4 border-b border-slate-100 pb-2 last:border-0 last:pb-0"><span className="text-sm text-slate-700">{row.programType}</span><strong className="whitespace-nowrap text-sm text-slate-900">{money.format(row.amount)}</strong></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No institutional requests for this period.</p>}</CardContent></Card>;
+}
 
 function StatusPieChart({ data, className }: { data: { name: string; value: number }[]; className?: string }) { return <Card className={className}><CardHeader><CardTitle>Evaluation Status</CardTitle></CardHeader><CardContent>{data.length ? <div className="h-72"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="45%" innerRadius={48} outerRadius={82} paddingAngle={2} label={({ name, value }) => `${name}: ${value}`}>{data.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 8 }} /></PieChart></ResponsiveContainer></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
 

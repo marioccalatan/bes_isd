@@ -579,6 +579,7 @@ export interface CsrRequest {
   projectRequirement: string;
   pendingReason: string;
   withLetterReply: boolean;
+  institutional: boolean;
   additionalRemarks: string;
   status: 'For evaluation' | 'Pending' | 'Completed';
   approvalStatus: 'Approved' | 'Disapproved' | 'For Evaluation';
@@ -656,6 +657,32 @@ export async function saveCsrRequest(token: string, request: Omit<CsrRequest, 'i
 
 export async function deleteCsrRequest(token: string, id: string) {
   return apiRequest<{ ok: true }>(`/api/member-programs/csr/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+}
+
+export interface CsrBudgetAllocation {
+  id: string;
+  year: number;
+  district: string;
+  programType: string;
+  budget: number;
+  updatedAt?: string;
+}
+
+export type CsrBudgetAllocationInput = Omit<CsrBudgetAllocation, 'id' | 'updatedAt'>;
+
+export async function fetchCsrBudgetAllocations(token: string) {
+  const result = await apiRequest<{ allocations: CsrBudgetAllocation[] }>('/api/member-programs/csr-budget-allocations', { headers: { authorization: `Bearer ${token}` } });
+  return result.allocations;
+}
+
+export async function saveCsrBudgetAllocation(token: string, input: CsrBudgetAllocationInput, id?: string) {
+  return apiRequest<{ id?: string; ok?: true }>(id ? `/api/member-programs/csr-budget-allocations/${encodeURIComponent(id)}` : '/api/member-programs/csr-budget-allocations', {
+    method: id ? 'PATCH' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+}
+
+export async function deleteCsrBudgetAllocation(token: string, id: string) {
+  return apiRequest<{ ok: true }>(`/api/member-programs/csr-budget-allocations/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
 }
 
 export interface CsrAttachment { id: string; fileName: string; mimeType: string; fileSize: number; createdAt?: string }

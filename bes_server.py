@@ -6,6 +6,8 @@ from pathlib import Path
 
 ROOT = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
 LOG = ROOT / "bes_server.log"
+PROD_LOG = ROOT / "bes_server_production.log"
+PROD_STARTER = ROOT / "bes_server_production_start.cmd"
 u, g, k, shell = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.kernel32, ctypes.windll.shell32
 u.CreateWindowExW.restype = wintypes.HWND
 u.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
@@ -15,6 +17,9 @@ u.DefWindowProcW.restype = ctypes.c_ssize_t
 u.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 u.LoadCursorW.restype = wintypes.HANDLE
 k.GetModuleHandleW.restype = wintypes.HMODULE
+k.CreateMutexW.restype = wintypes.HANDLE
+k.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+k.GetLastError.restype = wintypes.DWORD
 shell.ShellExecuteW.restype = ctypes.c_void_p
 shell.ShellExecuteW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int]
 WM_DESTROY, WM_PAINT, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_APP = 2, 0x0F, 0x202, 0x020A, 0x8000
@@ -45,12 +50,29 @@ def stop_ports(ports):
     if found: time.sleep(1.5)
     return ok and not pids(ports)
 
-def append_log(message):
+def append_log(message, path=LOG):
     try:
-        with LOG.open('a',encoding='utf-8') as log: log.write(message)
+        with path.open('a',encoding='utf-8') as log: log.write(message)
         return True
     except OSError:
         return False
+
+def write_production_starter(script):
+    started = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    PROD_STARTER.write_text(
+        '@echo off\n'
+        'setlocal EnableExtensions\n'
+        f'cd /d "{ROOT}"\n'
+        f'>> "{PROD_LOG}" echo.\n'
+        f'>> "{PROD_LOG}" echo [{started}] Elevated production deploy started.\n'
+        f'call "{script}" >> "{PROD_LOG}" 2>&1\n'
+        'set "BES_EXIT=%ERRORLEVEL%"\n'
+        f'>> "{PROD_LOG}" echo.\n'
+        f'>> "{PROD_LOG}" echo [%DATE% %TIME%] Production deploy exited with code %BES_EXIT%.\n'
+        'exit /b %BES_EXIT%\n',
+        encoding='utf-8',
+    )
+    return PROD_STARTER
 
 class App:
     def __init__(self):
@@ -61,6 +83,7 @@ class App:
         self.log_scroll=0
         self.log_cleared_at=0
         self.log_ignore_lines=0
+        self.pending_status_until=0
         self.cb=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM)(self.proc)
     def font(self,h,w,name='Segoe UI'): return g.CreateFontW(-h,0,0,0,w,0,0,0,1,0,0,5,0,name)
     def text(self,dc,s,r,c,font,flags=0x24):
@@ -78,20 +101,21 @@ class App:
         if msg==WM_LBUTTONUP:
             x,y=lp&0xffff,(lp>>16)&0xffff
             if 438<=x<=540 and 297<=y<=325:
+                log_path=self.log_path()
                 try:
-                    old_line_count=len(LOG.read_text(encoding='utf-8',errors='replace').splitlines())
+                    old_line_count=len(log_path.read_text(encoding='utf-8',errors='replace').splitlines())
                 except OSError: old_line_count=0
                 self.log_cleared_at=time.time()
                 self.log_lines=['Logs cleared. Start or restart BES to see new activity here.']
                 self.log_scroll=0
                 self.status='Logs cleared'
                 try:
-                    LOG.write_text('',encoding='utf-8')
+                    log_path.write_text('',encoding='utf-8')
                     self.log_ignore_lines=0
                 except OSError:
                     self.log_ignore_lines=old_line_count
                     try:
-                        with LOG.open('a',encoding='utf-8') as log: log.write(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Logs cleared in launcher\n')
+                        with log_path.open('a',encoding='utf-8') as log: log.write(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Logs cleared in launcher\n')
                     except OSError: pass
                 u.InvalidateRect(hwnd,None,True)
             elif 548<=x<=650 and 297<=y<=325:
@@ -100,7 +124,8 @@ class App:
                     self.status='Logs copied to clipboard'
                 except (OSError,subprocess.CalledProcessError): self.status='Unable to copy logs'
                 u.InvalidateRect(hwnd,None,True)
-            elif 576<=x<=628 and 110<=y<=138 and not self.busy: self.prod=not self.prod; u.InvalidateRect(hwnd,None,True)
+            elif 576<=x<=628 and 110<=y<=138 and not self.busy:
+                self.prod=not self.prod; self.log_ignore_lines=0; self.log_scroll=0; self.log_lines=['No log output yet. Start or restart BES to see activity here.']; u.InvalidateRect(hwnd,None,True)
             elif 56<=x<=336 and 219<=y<=264 and not self.busy:
                 self.busy=True; self.status='Restarting...'; u.InvalidateRect(hwnd,None,True); threading.Thread(target=self.work,args=(True,),daemon=True).start()
             elif 348<=x<=628 and 219<=y<=264 and not self.busy:
@@ -150,6 +175,7 @@ class App:
             g.DeleteObject(track); g.DeleteObject(thumb)
         self.text(dc,'Server controls apply to the selected environment.',RECT(0,559,684,584),MUTED,self.small,0x25)
     def ports(self): return (5000,) if self.prod else (5174,3001)
+    def log_path(self): return PROD_LOG if self.prod else LOG
     def wait_ports_clear(self,ports,seconds=8):
         deadline=time.time()+seconds
         while time.time()<deadline:
@@ -159,8 +185,8 @@ class App:
     def work(self,start):
         mode='production' if self.prod else 'development'
         ports=self.ports()
-        should_stop=not start or bool(pids(ports))
-        stopped=True if self.prod and start else ((stop_ports(ports) and self.wait_ports_clear(ports)) if should_stop else True)
+        should_stop=not start or (bool(pids(ports)) and not self.prod)
+        stopped=(stop_ports(ports) and self.wait_ports_clear(ports)) if should_stop else True
         if not stopped: self.status='Stop failed - run as Administrator'
         elif not start: self.status=mode.title()+' stopped'
         else:
@@ -168,17 +194,20 @@ class App:
             if not script.exists(): self.status='Missing '+script.name
             else:
                 try:
-                    log_ready=append_log(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Starting {mode}\n')
+                    log_path=self.log_path()
+                    log_ready=append_log(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Starting {mode}\n', log_path)
                     if self.prod:
-                        append_log('Administrator permission is required. Approve the Windows prompt to continue.\n')
+                        append_log('Administrator permission is required. Approve the Windows prompt to continue.\n', log_path)
                         if not log_ready: self.log_lines.append('Log file is temporarily unavailable; continuing production start.')
                     if self.prod:
-                        params=f'/d /c call "{script}" >> "{LOG}" 2>&1'
-                        result=shell.ShellExecuteW(self.hwnd,'runas','cmd.exe',params,str(ROOT),0) or 0
+                        starter=write_production_starter(script)
+                        params=f'/d /c ""{starter}""'
+                        result=shell.ShellExecuteW(self.hwnd,'runas','cmd.exe',params,str(ROOT),1) or 0
                         if result<=32: raise OSError('Administrator permission was declined or could not be requested.')
-                        self.status='Approve administrator prompt...'
+                        self.status='Production deploy started...'
+                        self.pending_status_until=time.time()+1200
                     else:
-                        log=LOG.open('a',encoding='utf-8',errors='replace')
+                        log=log_path.open('a',encoding='utf-8',errors='replace')
                         subprocess.Popen(['cmd.exe','/d','/c',str(script)],cwd=ROOT,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,creationflags=0x08000000|0x00000200)
                         self.status=mode.title()+' is starting...'
                 except OSError as e: self.status='Start failed: '+str(e)
@@ -186,14 +215,26 @@ class App:
     def poll(self):
         while u.IsWindow(self.hwnd):
             try:
-                lines=LOG.read_text(encoding='utf-8',errors='replace').splitlines()
+                lines=self.log_path().read_text(encoding='utf-8',errors='replace').splitlines()
                 if self.log_ignore_lines: lines=lines[self.log_ignore_lines:]
                 visible=[line for line in lines if line.strip()]
                 if visible: self.log_lines=visible[-1000:]
             except OSError: pass
             if not self.busy:
                 ports=self.ports(); active=[bool(pids((port,))) for port in ports]; self.running=all(active)
-                self.status='Running' if self.running else ('Partial startup' if any(active) else 'Stopped'); u.PostMessageW(self.hwnd,WM_APP+2,0,0)
+                if self.running:
+                    self.pending_status_until=0
+                    self.status='Running'
+                elif any(active):
+                    self.status='Partial startup'
+                elif time.time()>=self.pending_status_until:
+                    self.status='Stopped'
+                u.PostMessageW(self.hwnd,WM_APP+2,0,0)
             time.sleep(2.5)
 
-if __name__=='__main__': App().run()
+if __name__=='__main__':
+    mutex=k.CreateMutexW(None,True,'Global\\BES_SERVER_LAUNCHER_SINGLE_INSTANCE')
+    if k.GetLastError()==183:
+        u.MessageBoxW(None,'BES Server launcher is already open.','BES Server',0x40)
+        sys.exit(0)
+    App().run()

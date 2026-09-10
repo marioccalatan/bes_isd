@@ -162,6 +162,7 @@ const csrRequestJson = (row) => ({
   projectRequirement: row.PROJECT_REQUIREMENT || '',
   pendingReason: row.PENDING_REASON || '',
   withLetterReply: row.WITH_LETTER_REPLY === 'Y',
+  institutional: row.INSTITUTIONAL === 'Y',
   additionalRemarks: row.ADDITIONAL_REMARKS || '',
   status: row.REQUEST_STATUS || 'For evaluation',
   approvalStatus: row.APPROVAL_STATUS || 'For Evaluation',
@@ -3566,6 +3567,59 @@ async function handle(req, res) {
       await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`DELETE FROM bes_member_programs WHERE program_uid=:programUid`, { programUid }); await c.commit(); });
       return json(res, 200, { ok: true });
     }
+    if (req.method === 'GET' && req.url === '/api/member-programs/csr-budget-allocations') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token); if (!user) return null;
+        return c.execute(`SELECT allocation_uid,budget_year,district,program_type,budget,updated_at FROM bes_csr_budget_allocations ORDER BY budget_year DESC,district,program_type`);
+      });
+      if (!result) return json(res, 401, { error: 'Session expired.' });
+      return json(res, 200, { allocations: result.rows.map((row) => ({ id: row.ALLOCATION_UID, year: Number(row.BUDGET_YEAR), district: row.DISTRICT, programType: row.PROGRAM_TYPE, budget: Number(row.BUDGET) || 0, updatedAt: localIso(row.UPDATED_AT) })) });
+    }
+    if (req.method === 'POST' && req.url === '/api/member-programs/csr-budget-allocations') {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const body = await readBody(req, 20_000); const budgetYear = Number(body.year); const district = normalize(body.district); const programTypeValue = normalize(body.programType); const budget = Number(body.budget);
+      if (!Number.isInteger(budgetYear) || budgetYear < 1900 || budgetYear > 2999) return json(res, 400, { error: 'Enter a valid budget year.' });
+      if (!district || !programTypeValue) return json(res, 400, { error: 'District and Program Type are required.' });
+      if (!Number.isFinite(budget) || budget < 0) return json(res, 400, { error: 'Budget must be a valid non-negative amount.' });
+      const allocationUid = `CSRBUD-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        await withConnection(async (c) => {
+          const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+          await c.execute(`INSERT INTO bes_csr_budget_allocations (allocation_uid,budget_year,district,program_type,budget,created_by_user_id,updated_by_user_id) VALUES (:allocationUid,:budgetYear,:district,:programType,:budget,:userId,:userId)`, { allocationUid, budgetYear, district, programType: programTypeValue, budget: { val: budget, type: oracledb.NUMBER }, userId: user.USER_ID });
+          await c.commit();
+        });
+      } catch (error) {
+        if (error.errorNum === 1) return json(res, 409, { error: 'A budget allocation already exists for this year, district, and program type.' });
+        throw error;
+      }
+      return json(res, 201, { id: allocationUid });
+    }
+    const csrBudgetMatch = url.pathname.match(/^\/api\/member-programs\/csr-budget-allocations\/([^/]+)$/);
+    if (req.method === 'PATCH' && csrBudgetMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
+      const allocationUid = decodeURIComponent(csrBudgetMatch[1]); const body = await readBody(req, 20_000); const budgetYear = Number(body.year); const district = normalize(body.district); const programTypeValue = normalize(body.programType); const budget = Number(body.budget);
+      if (!Number.isInteger(budgetYear) || budgetYear < 1900 || budgetYear > 2999) return json(res, 400, { error: 'Enter a valid budget year.' });
+      if (!district || !programTypeValue) return json(res, 400, { error: 'District and Program Type are required.' });
+      if (!Number.isFinite(budget) || budget < 0) return json(res, 400, { error: 'Budget must be a valid non-negative amount.' });
+      try {
+        await withConnection(async (c) => {
+          const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
+          const updated = await c.execute(`UPDATE bes_csr_budget_allocations SET budget_year=:budgetYear,district=:district,program_type=:programType,budget=:budget,updated_by_user_id=:userId,updated_at=SYSTIMESTAMP WHERE allocation_uid=:allocationUid`, { allocationUid, budgetYear, district, programType: programTypeValue, budget: { val: budget, type: oracledb.NUMBER }, userId: user.USER_ID });
+          if (!updated.rowsAffected) throw Object.assign(new Error('Budget allocation was not found.'), { statusCode: 404 });
+          await c.commit();
+        });
+      } catch (error) {
+        if (error.errorNum === 1) return json(res, 409, { error: 'A budget allocation already exists for this year, district, and program type.' });
+        throw error;
+      }
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'DELETE' && csrBudgetMatch) {
+      const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const allocationUid = decodeURIComponent(csrBudgetMatch[1]);
+      await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 }); await c.execute(`DELETE FROM bes_csr_budget_allocations WHERE allocation_uid=:allocationUid`, { allocationUid }); await c.commit(); });
+      return json(res, 200, { ok: true });
+    }
     if (req.method === 'GET' && req.url === '/api/member-programs/csr-sectors') {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
       const result = await withConnection(async (c) => {
@@ -3611,8 +3665,8 @@ async function handle(req, res) {
       const csrUid = `CSR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
-        await c.execute(`INSERT INTO bes_csr_requests (csr_uid,date_requested,program_type,requestee,designation,organization,registration_details,sector,location,barangay,municipality,district,project_details,project_requirement,pending_reason,with_letter_reply,additional_remarks,request_status,approval_status,evaluation_result,evaluated_by,date_approved,amount_funding,pjrs,actual_project_cost,created_by_user_id,updated_by_user_id)
-          VALUES (:csrRequestUid,TO_DATE(:csrDateRequested,'YYYY-MM-DD'),:csrProgramType,:csrRequestee,:csrDesignation,:csrOrganization,:csrRegistrationDetails,:csrSector,:csrLocation,:csrBarangay,:csrMunicipality,:csrDistrict,:csrProjectDetails,:csrProjectRequirement,:csrPendingReason,:csrWithLetterReply,:csrAdditionalRemarks,:csrRequestStatus,:csrApprovalStatus,:csrEvaluationResult,:csrEvaluatedBy,TO_DATE(:csrDateApproved,'YYYY-MM-DD'),:csrAmountFunding,:csrPjrs,:csrActualProjectCost,:csrActorUserId,:csrActorUserId)`, {
+        await c.execute(`INSERT INTO bes_csr_requests (csr_uid,date_requested,program_type,requestee,designation,organization,registration_details,sector,location,barangay,municipality,district,project_details,project_requirement,pending_reason,with_letter_reply,institutional,additional_remarks,request_status,approval_status,evaluation_result,evaluated_by,date_approved,amount_funding,pjrs,actual_project_cost,created_by_user_id,updated_by_user_id)
+          VALUES (:csrRequestUid,TO_DATE(:csrDateRequested,'YYYY-MM-DD'),:csrProgramType,:csrRequestee,:csrDesignation,:csrOrganization,:csrRegistrationDetails,:csrSector,:csrLocation,:csrBarangay,:csrMunicipality,:csrDistrict,:csrProjectDetails,:csrProjectRequirement,:csrPendingReason,:csrWithLetterReply,:csrInstitutional,:csrAdditionalRemarks,:csrRequestStatus,:csrApprovalStatus,:csrEvaluationResult,:csrEvaluatedBy,TO_DATE(:csrDateApproved,'YYYY-MM-DD'),:csrAmountFunding,:csrPjrs,:csrActualProjectCost,:csrActorUserId,:csrActorUserId)`, {
           csrRequestUid: csrUid,
           csrDateRequested: normalize(body.dateRequested),
           csrProgramType: normalize(body.programType),
@@ -3629,6 +3683,7 @@ async function handle(req, res) {
           csrProjectRequirement: nullableNormalize(body.projectRequirement),
           csrPendingReason: normalize(body.status) === 'Pending' ? nullableNormalize(body.pendingReason) : null,
           csrWithLetterReply: body.withLetterReply ? 'Y' : 'N',
+          csrInstitutional: body.institutional ? 'Y' : 'N',
           csrAdditionalRemarks: nullableNormalize(body.additionalRemarks),
           csrRequestStatus: normalize(body.status),
           csrApprovalStatus: approvalStatus,
@@ -3734,8 +3789,8 @@ async function handle(req, res) {
       const approvalDate = evaluationResults.length ? nullableNormalize(body.dateApproved) : null;
       await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
-        await c.execute(`UPDATE bes_csr_requests SET date_requested=TO_DATE(:csrDateRequested,'YYYY-MM-DD'),program_type=:csrProgramType,requestee=:csrRequestee,designation=:csrDesignation,organization=:csrOrganization,registration_details=:csrRegistrationDetails,sector=:csrSector,location=:csrLocation,barangay=:csrBarangay,municipality=:csrMunicipality,district=:csrDistrict,project_details=:csrProjectDetails,project_requirement=:csrProjectRequirement,pending_reason=:csrPendingReason,with_letter_reply=:csrWithLetterReply,additional_remarks=:csrAdditionalRemarks,request_status=:csrRequestStatus,approval_status=:csrApprovalStatus,evaluation_result=:csrEvaluationResult,evaluated_by=:csrEvaluatedBy,date_approved=TO_DATE(:csrDateApproved,'YYYY-MM-DD'),amount_funding=:csrAmountFunding,pjrs=:csrPjrs,actual_project_cost=:csrActualProjectCost,updated_by_user_id=:csrActorUserId,updated_at=SYSTIMESTAMP WHERE csr_uid=:csrRequestUid`, {
-          csrRequestUid: csrUid, csrDateRequested: normalize(body.dateRequested), csrProgramType: normalize(body.programType), csrRequestee: normalize(body.requestee), csrDesignation: nullableNormalize(body.designation), csrOrganization: nullableNormalize(body.organization), csrRegistrationDetails: nullableNormalize(body.registrationDetails), csrSector: nullableNormalize(body.sector), csrLocation: nullableNormalize(body.location), csrBarangay: nullableNormalize(body.barangay), csrMunicipality: nullableNormalize(body.municipality), csrDistrict: nullableNormalize(body.district), csrProjectDetails: nullableNormalize(body.projectDetails), csrProjectRequirement: nullableNormalize(body.projectRequirement), csrPendingReason: normalize(body.status) === 'Pending' ? nullableNormalize(body.pendingReason) : null, csrWithLetterReply: body.withLetterReply ? 'Y' : 'N', csrAdditionalRemarks: nullableNormalize(body.additionalRemarks), csrRequestStatus: normalize(body.status), csrApprovalStatus: approvalStatus, csrEvaluationResult: evaluationResults.length ? evaluationResults.join('|') : null, csrEvaluatedBy: nullableNormalize(body.evaluatedBy), csrDateApproved: approvalDate, csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null, csrPjrs: nullableNormalize(body.pjrs), csrActualProjectCost: normalize(body.actualProjectCost) ? Number(body.actualProjectCost) : null, csrActorUserId: user.USER_ID,
+        await c.execute(`UPDATE bes_csr_requests SET date_requested=TO_DATE(:csrDateRequested,'YYYY-MM-DD'),program_type=:csrProgramType,requestee=:csrRequestee,designation=:csrDesignation,organization=:csrOrganization,registration_details=:csrRegistrationDetails,sector=:csrSector,location=:csrLocation,barangay=:csrBarangay,municipality=:csrMunicipality,district=:csrDistrict,project_details=:csrProjectDetails,project_requirement=:csrProjectRequirement,pending_reason=:csrPendingReason,with_letter_reply=:csrWithLetterReply,institutional=:csrInstitutional,additional_remarks=:csrAdditionalRemarks,request_status=:csrRequestStatus,approval_status=:csrApprovalStatus,evaluation_result=:csrEvaluationResult,evaluated_by=:csrEvaluatedBy,date_approved=TO_DATE(:csrDateApproved,'YYYY-MM-DD'),amount_funding=:csrAmountFunding,pjrs=:csrPjrs,actual_project_cost=:csrActualProjectCost,updated_by_user_id=:csrActorUserId,updated_at=SYSTIMESTAMP WHERE csr_uid=:csrRequestUid`, {
+          csrRequestUid: csrUid, csrDateRequested: normalize(body.dateRequested), csrProgramType: normalize(body.programType), csrRequestee: normalize(body.requestee), csrDesignation: nullableNormalize(body.designation), csrOrganization: nullableNormalize(body.organization), csrRegistrationDetails: nullableNormalize(body.registrationDetails), csrSector: nullableNormalize(body.sector), csrLocation: nullableNormalize(body.location), csrBarangay: nullableNormalize(body.barangay), csrMunicipality: nullableNormalize(body.municipality), csrDistrict: nullableNormalize(body.district), csrProjectDetails: nullableNormalize(body.projectDetails), csrProjectRequirement: nullableNormalize(body.projectRequirement), csrPendingReason: normalize(body.status) === 'Pending' ? nullableNormalize(body.pendingReason) : null, csrWithLetterReply: body.withLetterReply ? 'Y' : 'N', csrInstitutional: body.institutional ? 'Y' : 'N', csrAdditionalRemarks: nullableNormalize(body.additionalRemarks), csrRequestStatus: normalize(body.status), csrApprovalStatus: approvalStatus, csrEvaluationResult: evaluationResults.length ? evaluationResults.join('|') : null, csrEvaluatedBy: nullableNormalize(body.evaluatedBy), csrDateApproved: approvalDate, csrAmountFunding: normalize(body.amountFunding) ? Number(body.amountFunding) : null, csrPjrs: nullableNormalize(body.pjrs), csrActualProjectCost: normalize(body.actualProjectCost) ? Number(body.actualProjectCost) : null, csrActorUserId: user.USER_ID,
         }); await c.commit();
       });
       return json(res, 200, { ok: true });
