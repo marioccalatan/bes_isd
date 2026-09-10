@@ -45,6 +45,13 @@ def stop_ports(ports):
     if found: time.sleep(1.5)
     return ok and not pids(ports)
 
+def append_log(message):
+    try:
+        with LOG.open('a',encoding='utf-8') as log: log.write(message)
+        return True
+    except OSError:
+        return False
+
 class App:
     def __init__(self):
         self.prod=self.busy=self.running=False; self.status='Checking server...'
@@ -161,16 +168,17 @@ class App:
             if not script.exists(): self.status='Missing '+script.name
             else:
                 try:
-                    with LOG.open('a',encoding='utf-8') as log:
-                        log.write(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Starting {mode}\n')
-                        if self.prod: log.write('Administrator permission is required. Approve the Windows prompt to continue.\n')
+                    log_ready=append_log(f'\n[{datetime.now():%Y-%m-%d %H:%M:%S}] Starting {mode}\n')
                     if self.prod:
-                        params=f'/d /c ""{script}" >> "{LOG}" 2>&1 < nul"'
+                        append_log('Administrator permission is required. Approve the Windows prompt to continue.\n')
+                        if not log_ready: self.log_lines.append('Log file is temporarily unavailable; continuing production start.')
+                    if self.prod:
+                        params=f'/d /c call "{script}" >> "{LOG}" 2>&1'
                         result=shell.ShellExecuteW(self.hwnd,'runas','cmd.exe',params,str(ROOT),0) or 0
                         if result<=32: raise OSError('Administrator permission was declined or could not be requested.')
                         self.status='Approve administrator prompt...'
                     else:
-                        log=LOG.open('a',encoding='utf-8')
+                        log=LOG.open('a',encoding='utf-8',errors='replace')
                         subprocess.Popen(['cmd.exe','/d','/c',str(script)],cwd=ROOT,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,creationflags=0x08000000|0x00000200)
                         self.status=mode.title()+' is starting...'
                 except OSError as e: self.status='Start failed: '+str(e)
