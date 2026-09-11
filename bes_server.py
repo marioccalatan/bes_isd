@@ -213,7 +213,7 @@ class App:
                     if self.prod:
                         starter=write_production_starter(script)
                         params=f'/d /c ""{starter}""'
-                        result=shell.ShellExecuteW(self.hwnd,'runas','cmd.exe',params,str(ROOT),1) or 0
+                        result=shell.ShellExecuteW(self.hwnd,'runas','cmd.exe',params,str(ROOT),0) or 0
                         if result<=32: raise OSError('Administrator permission was declined or could not be requested.')
                         self.status='Production deploy started...'
                         self.pending_status_until=time.time()+1200
