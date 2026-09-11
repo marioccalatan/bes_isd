@@ -7,13 +7,15 @@ if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies
 "%PYTHON_EXE%" --version >nul 2>nul
 if errorlevel 1 set "PYTHON_EXE=python.exe"
 
+if exist "%~dp0.tmp\icon-build-deps\PyInstaller\__main__.py" set "PYTHONPATH=%~dp0.tmp\icon-build-deps;%PYTHONPATH%"
+
 "%PYTHON_EXE%" -m PyInstaller --version >nul 2>nul
 if errorlevel 1 "%PYTHON_EXE%" -m pip install pyinstaller
 if errorlevel 1 exit /b 1
 
 for %%P in ("%PYTHON_EXE%") do set "PYTHON_ROOT=%%~dpP"
 
-"%PYTHON_EXE%" -m PyInstaller --noconfirm --clean --onefile --windowed --name bes_server bes_server.py
+"%PYTHON_EXE%" -m PyInstaller --noconfirm --clean --onefile --windowed --icon "public\bes-isd.ico" --add-data "public\bes-isd.ico;." --name bes_server bes_server.py
 if errorlevel 1 exit /b 1
 
 copy /y "dist\bes_server.exe" "bes_server.exe" >nul
@@ -22,3 +24,9 @@ if errorlevel 1 (
     exit /b 1
 )
 echo Built %CD%\bes_server.exe
+copy /y "dist\bes_server.exe" "bes_isd.exe" >nul
+if errorlevel 1 (
+    echo ERROR: Close bes_isd.exe before replacing it.
+    exit /b 1
+)
+echo Built %CD%\bes_isd.exe

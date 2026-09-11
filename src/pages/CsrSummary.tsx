@@ -16,6 +16,7 @@ const currentYear = new Date().getFullYear();
 const CHART_COLORS = ['#10b981', '#38bdf8', '#f59e0b', '#a78bfa', '#f43f5e', '#14b8a6'];
 const PAGE_SIZE = 20;
 const COMMUNITY_RELATIONS_PROGRAM_TYPES = ['Partnership', 'Linkages', 'Networking'];
+const INSTITUTIONAL_DISTRICT = 'INSTITUTIONAL';
 
 export default function CsrSummary() {
   const { token } = useAuth();
@@ -80,7 +81,14 @@ export default function CsrSummary() {
   const approval = countBy((request) => request.approvalStatus || 'For Evaluation');
   const policy = filtered.reduce<Record<string, number>>((result, request) => { const values = request.evaluationResult.length ? request.evaluationResult : ['Not Evaluated']; values.forEach((value) => { result[value] = (result[value] || 0) + 1; }); return result; }, {});
   const programs = countBy((request) => request.programType);
-  const municipalities = countBy((request) => request.municipality);
+  const municipalityRows = useMemo(() => Object.values(filtered.reduce<Record<string, { label: string; total: number; approved: number }>>((result, request) => {
+    const label = request.municipality || 'Unspecified';
+    const row = result[label] ?? { label, total: 0, approved: 0 };
+    row.total += 1;
+    if ((request.approvalStatus || '').toLowerCase() === 'approved') row.approved += 1;
+    result[label] = row;
+    return result;
+  }, {})).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label)), [filtered]);
   const months = countBy((request) => request.dateRequested.slice(0, 7));
   const budgetYears = useMemo(() => {
     const startYear = Number(startDate.slice(0, 4)) || currentYear;
@@ -90,20 +98,32 @@ export default function CsrSummary() {
     return Array.from({ length: last - first + 1 }, (_, index) => first + index);
   }, [endDate, startDate]);
   const budgetByDistrict = useMemo(() => budgetAllocations.reduce<Record<string, number>>((result, allocation) => {
-    if (!budgetYears.includes(allocation.year) || allocation.district.trim().toUpperCase() === 'INSTITUTIONAL') return result;
-    const district = allocation.district || 'Unspecified';
+    if (!budgetYears.includes(allocation.year)) return result;
+    const district = allocation.district.trim() || 'Unspecified';
     result[district] = (result[district] || 0) + (Number(allocation.budget) || 0);
     return result;
   }, {}), [budgetAllocations, budgetYears]);
   const budgetByProgramType = useMemo(() => budgetAllocations.reduce<Record<string, number>>((result, allocation) => {
-    if (!budgetYears.includes(allocation.year) || allocation.district.trim().toUpperCase() === 'INSTITUTIONAL') return result;
+    if (!budgetYears.includes(allocation.year) || allocation.district.trim().toUpperCase() === INSTITUTIONAL_DISTRICT) return result;
     const programType = allocation.programType || 'Unspecified';
     result[programType] = (result[programType] || 0) + (Number(allocation.budget) || 0);
     return result;
   }, {}), [budgetAllocations, budgetYears]);
-  const programTypeRows = useMemo(() => Object.entries(programs).map(([programType, count]) => ({ programType, count, budget: budgetByProgramType[programType] || 0 })).sort((a, b) => b.count - a.count || a.programType.localeCompare(b.programType)), [budgetByProgramType, programs]);
+  const actualProjectCostByProgramType = useMemo(() => filtered.reduce<Record<string, number>>((result, request) => {
+    const programType = request.programType || 'Unspecified';
+    result[programType] = (result[programType] || 0) + (Number(request.actualProjectCost) || 0);
+    return result;
+  }, {}), [filtered]);
+  const institutionalBudget = useMemo(() => budgetAllocations.reduce((sum, allocation) => budgetYears.includes(allocation.year) && allocation.district.trim().toUpperCase() === INSTITUTIONAL_DISTRICT ? sum + (Number(allocation.budget) || 0) : sum, 0), [budgetAllocations, budgetYears]);
+  const institutionalActualProjectCost = useMemo(() => filtered.filter((request) => request.institutional).reduce((sum, request) => sum + (Number(request.actualProjectCost) || 0), 0), [filtered]);
+  const programTypeRows = useMemo(() => {
+    const rows = Object.entries(programs).map(([programType, count]) => ({ programType, count, budget: budgetByProgramType[programType] || 0, projectCost: actualProjectCostByProgramType[programType] || 0 }));
+    const institutionalCount = filtered.filter((request) => request.institutional).length;
+    if (institutionalBudget > 0 || institutionalCount > 0) rows.push({ programType: 'Institutional', count: institutionalCount, budget: institutionalBudget, projectCost: institutionalActualProjectCost });
+    return rows.sort((a, b) => b.count - a.count || a.programType.localeCompare(b.programType));
+  }, [actualProjectCostByProgramType, budgetByProgramType, filtered, institutionalActualProjectCost, institutionalBudget, programs]);
   const districtMetrics = useMemo(() => Object.values(filtered.reduce<Record<string, { district: string; quantity: number; approved: number; forEvaluation: number; amount: number; budget: number }>>((result, request) => {
-    const district = request.district || 'Unspecified';
+    const district = request.institutional ? INSTITUTIONAL_DISTRICT : request.district || 'Unspecified';
     const row = result[district] ?? { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0, budget: budgetByDistrict[district] || 0 };
     row.quantity += 1;
     row.budget = budgetByDistrict[district] || 0;
@@ -112,7 +132,10 @@ export default function CsrSummary() {
     if ((request.approvalStatus || '').toLowerCase() === 'approved') row.amount += Number(request.amountFunding) || 0;
     result[district] = row;
     return result;
-  }, {})).sort((a, b) => b.amount - a.amount || b.quantity - a.quantity || a.district.localeCompare(b.district)), [budgetByDistrict, filtered]);
+  }, Object.entries(budgetByDistrict).reduce<Record<string, { district: string; quantity: number; approved: number; forEvaluation: number; amount: number; budget: number }>>((result, [district, budget]) => {
+    result[district] = { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0, budget };
+    return result;
+  }, {}))).sort((a, b) => b.amount - a.amount || b.quantity - a.quantity || a.district.localeCompare(b.district)), [budgetByDistrict, filtered]);
   const approvedRequests = filtered.filter((request) => (request.approvalStatus || '').toLowerCase() === 'approved');
   const totalFunding = approvedRequests.reduce((sum, request) => sum + (Number(request.amountFunding) || 0), 0);
   const totalActualProjectCost = approvedRequests.reduce((sum, request) => sum + (Number(request.actualProjectCost) || 0), 0);
@@ -165,7 +188,7 @@ export default function CsrSummary() {
       </div>
       <div className="csr-print-breakdowns">
         <PrintBreakdown title="Evaluation Status" values={status} />
-        <div className="csr-print-panel"><h2>Program Types</h2><table><thead><tr><th>Program Type</th><th>Count</th><th>Budget</th></tr></thead><tbody>{programTypeRows.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{row.count}</td><td>{money.format(row.budget)}</td></tr>)}</tbody></table></div>
+        <div className="csr-print-panel"><h2>Program Types</h2><table><thead><tr><th>Program Type</th><th>Count</th><th>Budget</th></tr></thead><tbody>{programTypeRows.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{row.count}</td><td>{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr><td>Total Budget</td><td></td><td>{money.format(programTypeRows.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div>
         <div className="csr-print-panel"><h2>Institutional</h2><table><tbody>{institutionalByProgramType.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{money.format(row.amount)}</td></tr>)}</tbody></table></div>
         <div className="csr-print-panel"><h2>District Metrics</h2><table><thead><tr><th>District</th><th>Total</th><th>Approved</th><th>For Evaluation</th><th>Funding</th><th>Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district}><td>{row.district}</td><td>{row.quantity}</td><td>{row.approved}</td><td>{row.forEvaluation}</td><td>{money.format(row.amount)}</td><td>{money.format(row.budget)}</td></tr>)}</tbody></table></div>
       </div>
@@ -192,8 +215,8 @@ export default function CsrSummary() {
         <Breakdown title="Policy Evaluation" values={policy} total={filtered.length} className="xl:col-span-2" />
         <ProgramTypeBudgetCard rows={programTypeRows} total={filtered.length} className="xl:col-span-3" />
         <MonthlyBarChart data={monthChartData} orientation={monthChartOrientation} onToggleOrientation={() => setMonthChartOrientation((current) => current === 'horizontal' ? 'vertical' : 'horizontal')} className="xl:col-span-3" />
-        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, approved funding, and selected-year budget by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th><th className="py-2 text-right">Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td><td className="py-3 text-right font-semibold">{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td><td className="py-3 text-right">{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
-        <Breakdown title="Municipalities" values={municipalities} total={filtered.length} className="xl:col-span-2 xl:row-span-2" />
+        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, approved funding, and selected-year budget by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th><th className="py-2 text-right">Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td><td className="py-3 text-right font-semibold text-blue-600">{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td><td className="py-3 text-right text-blue-600">{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
+        <MunicipalityApprovalBreakdown rows={municipalityRows} className="xl:col-span-2 xl:row-span-2" />
         <InstitutionalAmountCard rows={institutionalByProgramType} className="xl:col-span-2" />
       </div>
         <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} onRowMouseEnter={setHoveredRequest} onRowMouseLeave={() => setHoveredRequest(null)} minWidthPx={1950} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
@@ -211,8 +234,16 @@ function PrintBreakdown({ title, values }: { title: string; values: Record<strin
 
 function Breakdown({ title, values, total, className }: { title: string; values: Record<string, number>; total: number; className?: string }) { const rows = Object.entries(values).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])); return <Card className={className}><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map(([label, count]) => <div key={label}><div className="mb-1 flex justify-between gap-3 text-sm"><span>{label}</span><strong>{count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${total ? Math.max(3, (count / total) * 100) : 0}%` }} /></div></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
 
-function ProgramTypeBudgetCard({ rows, total, className }: { rows: Array<{ programType: string; count: number; budget: number }>; total: number; className?: string }) {
-  return <Card className={className}><CardHeader><CardTitle>Program Types</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map((row) => <div key={row.programType}><div className="mb-1 grid grid-cols-[1fr_auto_2rem] items-center gap-3 text-sm"><span>{row.programType}</span><strong className="text-right text-blue-600">{money.format(row.budget)}</strong><strong className="text-right">{row.count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${total ? Math.max(3, (row.count / total) * 100) : 0}%` }} /></div></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>;
+function MunicipalityApprovalBreakdown({ rows, className }: { rows: Array<{ label: string; total: number; approved: number }>; className?: string }) {
+  const maxTotal = rows.reduce((max, row) => Math.max(max, row.total), 0);
+  return <Card className={className}><CardHeader><CardTitle>Municipalities</CardTitle><p className="text-sm text-slate-500">Bar length shows request volume; colors show approved and remaining.</p></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map((row) => { const pending = Math.max(0, row.total - row.approved); const totalWidth = maxTotal ? Math.max(3, (row.total / maxTotal) * 100) : 0; const approvedWidth = row.total ? (row.approved / row.total) * 100 : 0; const pendingWidth = row.total ? (pending / row.total) * 100 : 0; return <div key={row.label}><div className="mb-1 flex justify-between gap-3 text-sm"><span>{row.label}</span><strong>{row.approved} / {row.total}</strong></div><div className="h-1.5 rounded-full bg-slate-100"><div className="flex h-full overflow-hidden rounded-full" style={{ width: `${totalWidth}%` }}><div className="h-full bg-emerald-500" style={{ width: `${approvedWidth}%` }} /><div className="h-full bg-sky-400" style={{ width: `${pendingWidth}%` }} /></div></div></div>; })}<div className="flex flex-wrap gap-3 pt-1 text-xs text-slate-500"><span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />Approved</span><span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-sky-400" />Remaining</span></div></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>;
+}
+
+function ProgramTypeBudgetCard({ rows, total, className }: { rows: Array<{ programType: string; count: number; budget: number; projectCost: number }>; total: number; className?: string }) {
+  const totalBudget = rows.reduce((sum, row) => sum + row.budget, 0);
+  const totalProjectCost = rows.reduce((sum, row) => sum + row.projectCost, 0);
+  const totalUtilization = totalBudget ? (totalProjectCost / totalBudget) * 100 : 0;
+  return <Card className={className}><CardHeader><CardTitle>Program Types</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map((row) => { const utilization = row.budget ? (row.projectCost / row.budget) * 100 : 0; return <div key={row.programType}><div className="mb-1 grid grid-cols-[1fr_auto_2rem] items-start gap-3 text-sm"><span>{row.programType}</span><span className="text-right"><strong className="block text-slate-900">{money.format(row.projectCost)}</strong><span className="mt-0.5 block text-xs font-semibold text-blue-600">Budget {money.format(row.budget)}</span><span className="mt-0.5 block text-xs font-semibold text-emerald-600">{utilization.toFixed(2)}% utilized</span></span><strong className="text-right">{row.count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${total ? Math.max(3, (row.count / total) * 100) : 0}%` }} /></div></div>; })}<div className="flex items-start justify-between gap-4 border-t border-slate-200 pt-3 text-sm font-bold text-slate-900"><span>Total Project Cost</span><span className="text-right"><strong className="block">{money.format(totalProjectCost)}</strong><span className="mt-0.5 block text-xs text-blue-600">Budget {money.format(totalBudget)}</span><span className="mt-0.5 block text-xs text-emerald-600">{totalUtilization.toFixed(2)}% utilized</span></span></div></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>;
 }
 
 function InstitutionalAmountCard({ rows, className }: { rows: Array<{ programType: string; amount: number }>; className?: string }) {

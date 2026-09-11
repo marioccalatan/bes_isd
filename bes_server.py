@@ -16,6 +16,11 @@ u.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR
 u.DefWindowProcW.restype = ctypes.c_ssize_t
 u.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 u.LoadCursorW.restype = wintypes.HANDLE
+u.LoadImageW.restype = wintypes.HANDLE
+u.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+                         ctypes.c_int, ctypes.c_int, wintypes.UINT]
+u.SendMessageW.restype = ctypes.c_ssize_t
+u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 k.GetModuleHandleW.restype = wintypes.HMODULE
 k.CreateMutexW.restype = wintypes.HANDLE
 k.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
@@ -89,9 +94,15 @@ class App:
     def text(self,dc,s,r,c,font,flags=0x24):
         g.SetBkMode(dc,1); g.SetTextColor(dc,c); old=g.SelectObject(dc,font); u.DrawTextW(dc,s,-1,ctypes.byref(r),flags); g.SelectObject(dc,old)
     def run(self):
-        inst=k.GetModuleHandleW(None); wc=WC(0,ctypes.cast(self.cb,ctypes.c_void_p),0,0,inst,0,u.LoadCursorW(None,32512),self.bg,None,'BesServerNative')
+        icon_path = (Path(sys._MEIPASS) / 'bes-isd.ico' if getattr(sys, 'frozen', False)
+                     else ROOT / 'public' / 'bes-isd.ico')
+        self.icons = [u.LoadImageW(None, str(icon_path), 1, u.GetSystemMetrics(x),
+                                  u.GetSystemMetrics(y), 0x10) for x, y in ((11, 12), (49, 50))]
+        inst=k.GetModuleHandleW(None); wc=WC(0,ctypes.cast(self.cb,ctypes.c_void_p),0,0,inst,self.icons[0],u.LoadCursorW(None,32512),self.bg,None,'BesServerNative')
         atom=u.RegisterClassW(ctypes.byref(wc)); w,h=700,620
         self.hwnd=u.CreateWindowExW(0,'BesServerNative','BES Server',0x00CB0000,(u.GetSystemMetrics(0)-w)//2,(u.GetSystemMetrics(1)-h)//2,w,h,None,None,inst,None)
+        for kind, icon in zip((1, 0), self.icons):
+            if icon: u.SendMessageW(self.hwnd, 0x0080, kind, icon)
         if not atom or not self.hwnd:
             with LOG.open('a',encoding='utf-8') as debug: debug.write(f'Native window error: atom={atom}, hwnd={self.hwnd}, winerror={k.GetLastError()}\n')
         u.ShowWindow(self.hwnd,5); u.UpdateWindow(self.hwnd); threading.Thread(target=self.poll,daemon=True).start(); msg=wintypes.MSG()
