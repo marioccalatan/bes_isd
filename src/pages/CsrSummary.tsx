@@ -211,13 +211,16 @@ export default function CsrSummary() {
         <PrintMetric label="Total Funding" value={money.format(totalFunding)} />
         <PrintMetric label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
       </div>
-      <div className="csr-print-breakdowns">
-        <PrintBreakdown title="Evaluation Status" values={status} />
-        <div className="csr-print-panel"><h2>Program Types</h2><table><thead><tr><th>Program Type</th><th>Count</th><th>Budget</th></tr></thead><tbody>{programTypeRows.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{row.count}</td><td>{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr><td>Total Budget</td><td></td><td>{money.format(programTypeRows.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div>
-        <div className="csr-print-panel"><h2>Institutional</h2><table><tbody>{institutionalByProgramType.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{money.format(row.amount)}</td></tr>)}</tbody></table></div>
-        <div className="csr-print-panel"><h2>District Metrics</h2><table><thead><tr><th>District</th><th>Total</th><th>Approved</th><th>For Evaluation</th><th>Funding</th><th>Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district}><td>{row.district}</td><td>{row.quantity}</td><td>{row.approved}</td><td>{row.forEvaluation}</td><td>{money.format(row.amount)}</td><td>{money.format(row.budget)}</td></tr>)}</tbody></table></div>
+      <div className="csr-print-dashboard">
+        <PrintBreakdown title="Evaluation Status" values={status} note={statusChartData.find((entry) => entry.name === 'Completed')?.note} />
+        <PrintBreakdown title="Policy Evaluation" values={policy} />
+        <PrintBreakdown title="Approval Status" values={approval} />
+        <PrintProgramTypePanel rows={programTypeRows} />
+        <PrintMonthPanel rows={monthChartData} />
+        <PrintMunicipalityPanel rows={municipalityRows} />
+        <div className="csr-print-panel csr-print-wide"><h2>District Metrics</h2><table><thead><tr><th>District</th><th>Total</th><th>Approved</th><th>For Evaluation</th><th>Amount</th><th>Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district}><td>{row.district}</td><td>{row.quantity}</td><td>{row.approved}</td><td>{row.forEvaluation}</td><td>{money.format(row.amount)}</td><td>{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr><td>Total</td><td>{filtered.length}</td><td>{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td>{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td>{money.format(totalFunding)}</td><td>{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div>
+        <div className="csr-print-panel"><h2>Institutional</h2>{institutionalByProgramType.length ? <table><tbody>{institutionalByProgramType.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{money.format(row.amount)}</td></tr>)}</tbody></table> : <p className="csr-print-empty">No institutional requests for this period.</p>}</div>
       </div>
-      <section className="csr-print-requests"><h2>CSR Request Summary</h2><table><thead><tr><th>No.</th><th>Date</th><th>Institutional</th><th>Letter Reply</th><th>Program Type</th><th>Requestee</th><th>Municipality</th><th>Barangay</th><th>District</th><th>Status</th><th>Evaluation</th><th>Funding</th><th>Actual Cost</th></tr></thead><tbody>{tableRows.map((request, index) => <tr key={request.id}><td>{index + 1}</td><td>{request.dateRequested}</td><td>{request.institutional ? 'Yes' : 'No'}</td><td>{request.withLetterReply ? 'Yes' : 'No'}</td><td>{request.programType}</td><td>{request.requestee}</td><td>{request.municipality || '—'}</td><td>{request.barangay || '—'}</td><td>{request.district || '—'}</td><td>{request.status}</td><td>{request.evaluationResult.length ? request.evaluationResult.join(', ') : 'Not Evaluated'}</td><td>{money.format(Number(request.amountFunding) || 0)}</td><td>{money.format(Number(request.actualProjectCost) || 0)}</td></tr>)}</tbody></table></section>
       <footer className="csr-print-footer">BENECO Enterprise System · {summaryTitle}</footer>
     </section>}
     <div className="no-print">
@@ -256,7 +259,32 @@ function MetricCard({ label, value, note }: { label: string; value: string; note
 
 function PrintMetric({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 
-function PrintBreakdown({ title, values }: { title: string; values: Record<string, number> }) { return <div className="csr-print-panel"><h2>{title}</h2><table><tbody>{Object.entries(values).sort((a, b) => b[1] - a[1]).map(([label, count]) => <tr key={label}><td>{label}</td><td>{count}</td></tr>)}</tbody></table></div>; }
+function PrintBreakdown({ title, values, note }: { title: string; values: Record<string, number>; note?: string }) {
+  const rows = Object.entries(values).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const total = rows.reduce((sum, [, count]) => sum + count, 0);
+  return <div className="csr-print-panel"><h2>{title}</h2>{note && <p className="csr-print-note">{note}</p>}<div className="csr-print-bars">{rows.map(([label, count], index) => <PrintBar key={label} label={label} value={String(count)} amount={count} total={total} color={CHART_COLORS[index % CHART_COLORS.length]} />)}</div></div>;
+}
+
+function PrintBar({ label, value, amount, total, color }: { label: string; value: string; amount: number; total: number; color: string }) {
+  return <div className="csr-print-bar"><div><span><i style={{ backgroundColor: color }} />{label}</span><strong>{value}</strong></div><b><em style={{ width: `${total ? Math.max(3, (amount / total) * 100) : 0}%`, backgroundColor: color }} /></b></div>;
+}
+
+function PrintProgramTypePanel({ rows }: { rows: Array<{ programType: string; count: number; budget: number; projectCost: number }> }) {
+  const totalCount = rows.reduce((sum, row) => sum + row.count, 0);
+  const totalBudget = rows.reduce((sum, row) => sum + row.budget, 0);
+  const totalProjectCost = rows.reduce((sum, row) => sum + row.projectCost, 0);
+  return <div className="csr-print-panel csr-print-wide"><h2>Program Types</h2><div className="csr-print-bars">{rows.map((row) => { const utilization = row.budget ? (row.projectCost / row.budget) * 100 : 0; return <div key={row.programType} className="csr-print-program-row"><div><span>{row.programType}</span><strong>{money.format(row.projectCost)}</strong></div><div><small>Budget {money.format(row.budget)} · {utilization.toFixed(2)}% utilized</small><b>{row.count}</b></div><div className="csr-print-track"><em style={{ width: `${totalCount ? Math.max(3, (row.count / totalCount) * 100) : 0}%` }} /></div></div>; })}<div className="csr-print-total-row"><span>Total Project Cost</span><strong>{money.format(totalProjectCost)}</strong><small>Budget {money.format(totalBudget)} · {totalBudget ? ((totalProjectCost / totalBudget) * 100).toFixed(2) : '0.00'}% utilized</small></div></div></div>;
+}
+
+function PrintMonthPanel({ rows }: { rows: { month: string; requests: number }[] }) {
+  const max = rows.reduce((largest, row) => Math.max(largest, row.requests), 0);
+  return <div className="csr-print-panel"><h2>Requests by Month</h2><div className="csr-print-bars">{rows.map((row) => <PrintBar key={row.month} label={row.month} value={String(row.requests)} amount={row.requests} total={max} color="#10b981" />)}</div></div>;
+}
+
+function PrintMunicipalityPanel({ rows }: { rows: Array<{ label: string; total: number; approved: number }> }) {
+  const max = rows.reduce((largest, row) => Math.max(largest, row.total), 0);
+  return <div className="csr-print-panel"><h2>Municipalities</h2><div className="csr-print-bars">{rows.map((row) => { const totalWidth = max ? Math.max(3, (row.total / max) * 100) : 0; const approvedWidth = row.total ? (row.approved / row.total) * 100 : 0; const remainingWidth = row.total ? ((row.total - row.approved) / row.total) * 100 : 0; return <div key={row.label} className="csr-print-bar"><div><span>{row.label}</span><strong>{row.approved} / {row.total}</strong></div><b><em className="csr-print-stacked" style={{ width: `${totalWidth}%` }}><i style={{ width: `${approvedWidth}%` }} /><u style={{ width: `${remainingWidth}%` }} /></em></b></div>; })}</div></div>;
+}
 
 function Breakdown({ title, values, total, className }: { title: string; values: Record<string, number>; total: number; className?: string }) { const rows = Object.entries(values).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])); const chartData = rows.map(([name, value]) => ({ name, value })); return <Card className={className}><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-4"><div className="h-44"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={34} outerRadius={58} paddingAngle={2} label={(props) => { const payload = props.payload as { name: string; value: number }; return `${payload.name}: ${payload.value}`; }}>{chartData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 8 }} /></PieChart></ResponsiveContainer></div>{rows.map(([label, count], index) => { const color = CHART_COLORS[index % CHART_COLORS.length]; return <div key={label}><div className="mb-1 flex justify-between gap-3 text-sm font-medium"><span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />{label}</span><strong>{count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full" style={{ width: `${total ? Math.max(3, (count / total) * 100) : 0}%`, backgroundColor: color }} /></div></div>; })}</div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
 
