@@ -1430,6 +1430,7 @@ export async function initializeDatabase() {
       pending_reason VARCHAR2(2000),
       with_letter_reply CHAR(1) DEFAULT 'N' NOT NULL,
       institutional CHAR(1) DEFAULT 'N' NOT NULL,
+      closed_approved CHAR(1) DEFAULT 'N' NOT NULL,
       additional_remarks VARCHAR2(4000),
       request_status VARCHAR2(30) DEFAULT 'For evaluation' NOT NULL,
       approval_status VARCHAR2(30) DEFAULT 'For Evaluation' NOT NULL,
@@ -1454,6 +1455,7 @@ export async function initializeDatabase() {
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (pending_reason VARCHAR2(2000))`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (with_letter_reply CHAR(1) DEFAULT 'N' NOT NULL)`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (institutional CHAR(1) DEFAULT 'N' NOT NULL)`);
+    await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (closed_approved CHAR(1) DEFAULT 'N' NOT NULL)`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (additional_remarks VARCHAR2(4000))`);
     await dropConstraint(connection, 'BES_CSR_REQUESTS', 'CHK_CSR_EVALUATION');
     await connection.execute(`ALTER TABLE bes_csr_requests MODIFY (evaluation_result VARCHAR2(200))`);

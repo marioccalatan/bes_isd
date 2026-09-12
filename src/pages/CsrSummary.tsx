@@ -23,6 +23,14 @@ function isWithinRange(date: string, startDate: string, endDate: string) {
   return Boolean(date) && date >= startDate && date <= endDate;
 }
 
+function summaryApprovalStatus(request: CsrRequest) {
+  if (!request.evaluationResult.length) return 'For Evaluation';
+  if (request.approvalStatus === 'Approved' || request.approvalStatus === 'Disapproved') return request.approvalStatus;
+  if (request.evaluationResult.includes('Not Within CSR Policy')) return 'Disapproved';
+  if (request.evaluationResult.includes('Within CSR Policy')) return 'Approved';
+  return request.approvalStatus || 'For Evaluation';
+}
+
 export default function CsrSummary() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
@@ -91,14 +99,14 @@ export default function CsrSummary() {
   }
   const countBy = (selector: (request: CsrRequest) => string) => filtered.reduce<Record<string, number>>((result, request) => { const key = selector(request) || 'Unspecified'; result[key] = (result[key] || 0) + 1; return result; }, {});
   const status = countBy((request) => request.status);
-  const approval = countBy((request) => request.approvalStatus || 'For Evaluation');
+  const approval = countBy(summaryApprovalStatus);
   const policy = filtered.reduce<Record<string, number>>((result, request) => { const values = request.evaluationResult.length ? request.evaluationResult : ['Not Evaluated']; values.forEach((value) => { result[value] = (result[value] || 0) + 1; }); return result; }, {});
   const programs = countBy((request) => request.programType);
   const municipalityRows = useMemo(() => Object.values(filtered.reduce<Record<string, { label: string; total: number; approved: number }>>((result, request) => {
     const label = request.municipality || 'Unspecified';
     const row = result[label] ?? { label, total: 0, approved: 0 };
     row.total += 1;
-    if ((request.approvalStatus || '').toLowerCase() === 'approved') row.approved += 1;
+    if (summaryApprovalStatus(request) === 'Approved') row.approved += 1;
     result[label] = row;
     return result;
   }, {})).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label)), [filtered]);
@@ -140,16 +148,16 @@ export default function CsrSummary() {
     const row = result[district] ?? { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0, budget: budgetByDistrict[district] || 0 };
     row.quantity += 1;
     row.budget = budgetByDistrict[district] || 0;
-    if ((request.approvalStatus || '').toLowerCase() === 'approved') row.approved += 1;
+    if (summaryApprovalStatus(request) === 'Approved') row.approved += 1;
     else row.forEvaluation += 1;
-    if ((request.approvalStatus || '').toLowerCase() === 'approved') row.amount += Number(request.amountFunding) || 0;
+    if (summaryApprovalStatus(request) === 'Approved') row.amount += Number(request.amountFunding) || 0;
     result[district] = row;
     return result;
   }, Object.entries(budgetByDistrict).reduce<Record<string, { district: string; quantity: number; approved: number; forEvaluation: number; amount: number; budget: number }>>((result, [district, budget]) => {
     result[district] = { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0, budget };
     return result;
   }, {}))).sort((a, b) => b.amount - a.amount || b.quantity - a.quantity || a.district.localeCompare(b.district)), [budgetByDistrict, filtered]);
-  const approvedRequests = filtered.filter((request) => (request.approvalStatus || '').toLowerCase() === 'approved');
+  const approvedRequests = filtered.filter((request) => summaryApprovalStatus(request) === 'Approved');
   const totalFunding = approvedRequests.reduce((sum, request) => sum + (Number(request.amountFunding) || 0), 0);
   const totalActualProjectCost = approvedRequests.reduce((sum, request) => sum + (Number(request.actualProjectCost) || 0), 0);
   const institutionalCount = filtered.filter((request) => request.institutional).length;
@@ -167,7 +175,9 @@ export default function CsrSummary() {
   const pendingCount = nonInstitutionalStatus.Pending || 0;
   const forEvaluationCount = nonInstitutionalStatus['For evaluation'] || 0;
   const withinPolicyCount = nonInstitutionalPolicy['Within CSR Policy'] || 0;
-  const statusChartData = Object.entries(status).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
+  const implementedCount = nonInstitutionalRequests.filter((request) => request.closedApproved).length;
+  const statusChartImplementedCount = filtered.filter((request) => request.closedApproved).length;
+  const statusChartData = Object.entries(status).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value, note: name === 'Completed' && statusChartImplementedCount ? `Implemented: ${statusChartImplementedCount}/${value}` : undefined }));
   const monthChartData = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)).map(([month, requests]) => ({ month, requests }));
   const requestColumns: Column<CsrRequest>[] = [
     { key: 'dateRequested', header: 'Date', sortable: true, filterable: true, render: (request) => request.dateRequested },
@@ -181,7 +191,7 @@ export default function CsrSummary() {
     { key: 'pjrs', header: 'PJRS', sortable: true, filterable: true, render: (request) => request.pjrs || '—' },
     { key: 'status', header: 'Evaluation Status', sortable: true, filterable: true, render: (request) => request.status },
     { key: 'evaluationResult', header: 'Evaluation', sortable: true, filterable: true, render: (request) => request.evaluationResult.length ? request.evaluationResult.join(', ') : 'Not Evaluated' },
-    { key: 'approvalStatus', header: 'Approval Status', sortable: true, filterable: true, render: (request) => request.approvalStatus || 'For Evaluation' },
+    { key: 'approvalStatus', header: 'Approval Status', sortable: true, filterable: true, render: (request) => summaryApprovalStatus(request) },
     { key: 'dateReleased', header: 'Date Released', sortable: true, filterable: true, render: (request) => request.dateReleased || '—' },
     { key: 'amountFunding', header: 'Amount Funding', className: 'text-right', sortable: true, filterable: true, render: (request) => money.format(Number(request.amountFunding) || 0) },
     { key: 'actualProjectCost', header: 'Actual Project Cost', className: 'text-right', sortable: true, filterable: true, render: (request) => money.format(Number(request.actualProjectCost) || 0) },
@@ -196,6 +206,7 @@ export default function CsrSummary() {
         <PrintMetric label="Pending" value={String(pendingCount)} />
         <PrintMetric label="For evaluation" value={String(forEvaluationCount)} />
         <PrintMetric label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
+        <PrintMetric label="Implemented" value={`${implementedCount} / ${withinPolicyCount}`} />
         <PrintMetric label="Institutional" value={String(institutionalCount)} />
         <PrintMetric label="Total Funding" value={money.format(totalFunding)} />
         <PrintMetric label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
@@ -219,14 +230,15 @@ export default function CsrSummary() {
         <MetricCard label="Pending" value={String(pendingCount)} />
         <MetricCard label="For evaluation" value={String(forEvaluationCount)} />
         <MetricCard label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
+        <MetricCard label="Implemented" value={`${implementedCount} / ${withinPolicyCount}`} />
         <MetricCard label="Institutional" value={String(institutionalCount)} />
         <MetricCard label="Total Funding" value={money.format(totalFunding)} />
         <MetricCard label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
       </div>
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-6">
         <StatusPieChart data={statusChartData} className="xl:col-span-2" />
-        <Breakdown title="Approval Status" values={approval} total={filtered.length} className="xl:col-span-2" />
         <Breakdown title="Policy Evaluation" values={policy} total={filtered.length} className="xl:col-span-2" />
+        <Breakdown title="Approval Status" values={approval} total={filtered.length} className="xl:col-span-2" />
         <ProgramTypeBudgetCard rows={programTypeRows} total={filtered.length} className="xl:col-span-3" />
         <MonthlyBarChart data={monthChartData} orientation={monthChartOrientation} onToggleOrientation={() => setMonthChartOrientation((current) => current === 'horizontal' ? 'vertical' : 'horizontal')} className="xl:col-span-3" />
         <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, approved funding, and selected-year budget by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th><th className="py-2 text-right">Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td><td className="py-3 text-right font-semibold text-blue-600">{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td><td className="py-3 text-right text-blue-600">{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
@@ -264,7 +276,7 @@ function InstitutionalAmountCard({ rows, className }: { rows: Array<{ programTyp
   return <Card className={className}><CardHeader><CardTitle>Institutional</CardTitle><p className="text-sm text-slate-500">Program type funding for institutional requests.</p></CardHeader><CardContent>{rows.length ? <div className="space-y-3">{rows.map((row) => <div key={row.programType} className="flex items-start justify-between gap-4 border-b border-slate-100 pb-2 last:border-0 last:pb-0"><span className="text-sm text-slate-700">{row.programType}</span><strong className="whitespace-nowrap text-sm text-slate-900">{money.format(row.amount)}</strong></div>)}</div> : <p className="py-8 text-center text-sm text-slate-500">No institutional requests for this period.</p>}</CardContent></Card>;
 }
 
-function StatusPieChart({ data, className }: { data: { name: string; value: number }[]; className?: string }) { return <Card className={className}><CardHeader><CardTitle>Evaluation Status</CardTitle></CardHeader><CardContent>{data.length ? <div className="h-72"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="45%" innerRadius={48} outerRadius={82} paddingAngle={2} label={({ name, value }) => `${name}: ${value}`}>{data.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 8 }} /></PieChart></ResponsiveContainer></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
+function StatusPieChart({ data, className }: { data: { name: string; value: number; note?: string }[]; className?: string }) { const completedNote = data.find((entry) => entry.name === 'Completed')?.note; return <Card className={className}><CardHeader><CardTitle>Evaluation Status</CardTitle>{completedNote && <p className="text-sm font-medium text-emerald-600">{completedNote}</p>}</CardHeader><CardContent>{data.length ? <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={78} paddingAngle={2} label={(props) => { const payload = props.payload as { name: string; value: number }; return `${payload.name}: ${payload.value}`; }}>{data.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}</Pie><Tooltip formatter={(value, _name, item) => [item.payload.note ? `${value} (${item.payload.note})` : value, item.payload.name]} contentStyle={{ borderRadius: 8 }} /></PieChart></ResponsiveContainer></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
 
 function MonthlyBarChart({ data, orientation, onToggleOrientation, className }: { data: { month: string; requests: number }[]; orientation: 'horizontal' | 'vertical'; onToggleOrientation: () => void; className?: string }) { const horizontal = orientation === 'horizontal'; const height = horizontal ? Math.max(288, data.length * 34 + 36) : 288; return <Card className={className}><CardHeader className="flex flex-row items-center justify-between gap-3"><CardTitle>Requests by Month</CardTitle><Button variant="outline" size="sm" onClick={onToggleOrientation}>{horizontal ? 'Vertical' : 'Horizontal'}</Button></CardHeader><CardContent>{data.length ? <div style={{ height }}><ResponsiveContainer width="100%" height="100%">{horizontal ? <BarChart data={data} layout="vertical" margin={{ top: 8, right: 24, left: 18, bottom: 8 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="currentColor" opacity={0.12} /><XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} /><YAxis type="category" dataKey="month" width={68} tick={{ fontSize: 11 }} /><Tooltip cursor={{ fill: 'currentColor', opacity: 0.06 }} contentStyle={{ borderRadius: 8 }} /><Bar dataKey="requests" name="Requests" fill="#10b981" radius={[0, 5, 5, 0]} /></BarChart> : <BarChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 8 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="currentColor" opacity={0.12} /><XAxis dataKey="month" tick={{ fontSize: 11 }} /><YAxis allowDecimals={false} tick={{ fontSize: 11 }} /><Tooltip cursor={{ fill: 'currentColor', opacity: 0.06 }} contentStyle={{ borderRadius: 8 }} /><Bar dataKey="requests" name="Requests" fill="#10b981" radius={[5, 5, 0, 0]} /></BarChart>}</ResponsiveContainer></div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
 
@@ -282,7 +294,7 @@ function CsrRequestHoverSummary({ request }: { request: CsrRequest }) {
     ['PJRS', request.pjrs],
     ['Evaluation Status', request.status],
     ['Evaluation Result', request.evaluationResult.length ? request.evaluationResult.join(', ') : 'Not Evaluated'],
-    ['Approval Status', request.approvalStatus || 'For Evaluation'],
+    ['Approval Status', summaryApprovalStatus(request)],
     ['With Letter Reply', request.withLetterReply ? 'Yes' : 'No'],
     ['Date Approved/Disapproved', request.dateApproved],
     ['Date Released', request.dateReleased],

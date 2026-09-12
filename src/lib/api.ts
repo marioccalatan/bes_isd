@@ -580,6 +580,7 @@ export interface CsrRequest {
   pendingReason: string;
   withLetterReply: boolean;
   institutional: boolean;
+  closedApproved: boolean;
   additionalRemarks: string;
   status: 'For evaluation' | 'Pending' | 'Completed';
   approvalStatus: 'Approved' | 'Disapproved' | 'For Evaluation';
@@ -622,6 +623,7 @@ function normalizeCsrRequest(request: CsrRequest): CsrRequest {
     actualProjectCost: request.actualProjectCost || '',
     withLetterReply: Boolean(request.withLetterReply),
     institutional: Boolean(request.institutional),
+    closedApproved: Boolean(request.closedApproved),
   };
 }
 
