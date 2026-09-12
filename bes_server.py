@@ -8,6 +8,7 @@ ROOT = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resol
 LOG = ROOT / "bes_server.log"
 PROD_LOG = ROOT / "bes_server_production.log"
 PROD_STARTER = ROOT / "bes_server_production_start.cmd"
+PROD_LAUNCHER = ROOT / "bes_server_production_launch.vbs"
 u, g, k, shell = ctypes.windll.user32, ctypes.windll.gdi32, ctypes.windll.kernel32, ctypes.windll.shell32
 u.CreateWindowExW.restype = wintypes.HWND
 u.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
@@ -78,6 +79,17 @@ def write_production_starter(script):
         encoding='utf-8',
     )
     return PROD_STARTER
+
+def write_hidden_production_launcher(starter):
+    def vbs(value): return str(value).replace('"', '""')
+    command = f'%COMSPEC% /d /c "{starter}"'
+    PROD_LAUNCHER.write_text(
+        'Set shell = CreateObject("WScript.Shell")\n'
+        f'shell.CurrentDirectory = "{vbs(ROOT)}"\n'
+        f'shell.Run "{vbs(command)}", 0, False\n',
+        encoding='utf-8',
+    )
+    return PROD_LAUNCHER
 
 class App:
     def __init__(self):
@@ -212,8 +224,8 @@ class App:
                         if not log_ready: self.log_lines.append('Log file is temporarily unavailable; continuing production start.')
                     if self.prod:
                         starter=write_production_starter(script)
-                        params=f'/d /c ""{starter}""'
-                        result=shell.ShellExecuteW(self.hwnd,'runas','cmd.exe',params,str(ROOT),0) or 0
+                        launcher=write_hidden_production_launcher(starter)
+                        result=shell.ShellExecuteW(self.hwnd,'runas','wscript.exe',f'"{launcher}"',str(ROOT),0) or 0
                         if result<=32: raise OSError('Administrator permission was declined or could not be requested.')
                         self.status='Production deploy started...'
                         self.pending_status_until=time.time()+1200

@@ -16,7 +16,7 @@ export interface Column<T> {
 
 export function DataTable<T>({
   columns, rows, getRowId, onRowClick, sortKey, sortDir, onSort, emptyTitle = 'No records found', emptyDescription = 'Try adjusting your filters or search terms.',
-  cardTitle, selectable, selectedIds, onToggleSelect, onRowContextMenu, onRowMouseEnter, onRowMouseLeave, columnFilters, onColumnFilterChange, minWidthPx,
+  cardTitle, selectable, selectedIds, onToggleSelect, onRowContextMenu, onRowMouseEnter, onRowMouseLeave, columnFilters, onColumnFilterChange, minWidthPx, rowClassName,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -37,6 +37,7 @@ export function DataTable<T>({
   columnFilters?: Record<string, string>;
   onColumnFilterChange?: (key: string, value: string) => void;
   minWidthPx?: number;
+  rowClassName?: (row: T) => string | undefined;
 }) {
   const showFilterRow = columns.some((column) => column.filterable) && !!onColumnFilterChange;
   if (rows.length === 0 && !showFilterRow) {
@@ -82,7 +83,7 @@ export function DataTable<T>({
                   onContextMenu={(event) => onRowContextMenu?.(row, event)}
                   onMouseEnter={() => onRowMouseEnter?.(row)}
                   onMouseLeave={() => onRowMouseLeave?.(row)}
-                  className={cn('transition-colors', (onRowClick || onRowMouseEnter) && 'cursor-pointer hover:bg-brand-50/40')}
+                  className={cn('transition-colors', rowClassName?.(row), (onRowClick || onRowMouseEnter) && 'cursor-pointer hover:bg-brand-50/40')}
                 >
                   {selectable && (
                     <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
@@ -111,7 +112,7 @@ export function DataTable<T>({
               key={id}
               onClick={() => onRowClick?.(row)}
               onContextMenu={(event) => onRowContextMenu?.(row, event)}
-              className={cn('rounded-lg border border-slate-200 bg-surface p-3 shadow-sm', onRowClick && 'cursor-pointer active:bg-brand-50/40')}
+              className={cn('rounded-lg border border-slate-200 bg-surface p-3 shadow-sm', rowClassName?.(row), onRowClick && 'cursor-pointer active:bg-brand-50/40')}
             >
               {cardTitle && <div className="mb-2 font-semibold text-slate-900">{cardTitle(row)}</div>}
               <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">

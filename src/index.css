@@ -28,6 +28,17 @@
   --color-green-800: #0b5439;
   --color-green-900: #0a4330;
 
+  --color-blue-50: #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-300: #93c5fd;
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+  --color-blue-800: #1e40af;
+  --color-blue-900: #1e3a8a;
+
   --color-gold-50: #fdf8ec;
   --color-gold-100: #faedc7;
   --color-gold-200: #f4d888;
@@ -110,6 +121,18 @@
   --color-green-700: #7ee9bf;
   --color-green-800: #a8f2d6;
   --color-green-900: #d6fbe9;
+
+  /* Blue row accents */
+  --color-blue-50: #0d1d33;
+  --color-blue-100: #122b4a;
+  --color-blue-200: #1e426d;
+  --color-blue-300: #2b6096;
+  --color-blue-400: #3f83c5;
+  --color-blue-500: #60a5fa;
+  --color-blue-600: #93c5fd;
+  --color-blue-700: #bfdbfe;
+  --color-blue-800: #dbeafe;
+  --color-blue-900: #eff6ff;
 
   /* Gold / warning */
   --color-gold-50: #241c0c;
