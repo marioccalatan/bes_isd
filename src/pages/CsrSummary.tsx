@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataTable, type Column } from '@/components/ui/data-table';
+import { Checkbox } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { fetchCsrBudgetAllocations, fetchCsrRequests, type CsrBudgetAllocation, type CsrRequest } from '@/lib/api';
 import benecoLogo from '@/assets/brand/beneco-logo.png';
@@ -17,6 +18,10 @@ const CHART_COLORS = ['#10b981', '#38bdf8', '#f59e0b', '#a78bfa', '#f43f5e', '#1
 const PAGE_SIZE = 20;
 const COMMUNITY_RELATIONS_PROGRAM_TYPES = ['Partnership', 'Linkages', 'Networking'];
 const INSTITUTIONAL_DISTRICT = 'INSTITUTIONAL';
+
+function isWithinRange(date: string, startDate: string, endDate: string) {
+  return Boolean(date) && date >= startDate && date <= endDate;
+}
 
 export default function CsrSummary() {
   const { token } = useAuth();
@@ -37,6 +42,7 @@ export default function CsrSummary() {
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [hoveredRequest, setHoveredRequest] = useState<CsrRequest | null>(null);
   const [monthChartOrientation, setMonthChartOrientation] = useState<'horizontal' | 'vertical'>('horizontal');
+  const [includeDateReleased, setIncludeDateReleased] = useState(false);
 
   useEffect(() => {
     if (!token) return;
@@ -47,7 +53,14 @@ export default function CsrSummary() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  const filtered = useMemo(() => requests.filter((request) => request.dateRequested >= startDate && request.dateRequested <= endDate && (!programTypeFilter || (isCommunityRelations ? COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(request.programType) : request.programType === programTypeFilter))), [requests, startDate, endDate, isCommunityRelations, programTypeFilter]);
+  const matchesProgramType = (request: CsrRequest) => !programTypeFilter || (isCommunityRelations ? COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(request.programType) : request.programType === programTypeFilter);
+  const isIncludedByReleaseDate = (request: CsrRequest) => !isWithinRange(request.dateRequested, startDate, endDate) && isWithinRange(request.dateReleased, startDate, endDate);
+  const filtered = useMemo(() => requests.filter((request) => {
+    if (!matchesProgramType(request)) return false;
+    if (isWithinRange(request.dateRequested, startDate, endDate)) return true;
+    return includeDateReleased && isIncludedByReleaseDate(request);
+  }), [requests, startDate, endDate, includeDateReleased, isCommunityRelations, programTypeFilter]);
+  const releaseDateIncludedCount = useMemo(() => includeDateReleased ? filtered.filter(isIncludedByReleaseDate).length : 0, [filtered, includeDateReleased, startDate, endDate]);
   const tableRows = useMemo(() => {
     const visible = filtered.filter((request) => Object.entries(columnFilters).every(([column, query]) => {
       if (!query) return true;
@@ -67,7 +80,7 @@ export default function CsrSummary() {
   const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE_SIZE));
   const pagedRows = tableRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  useEffect(() => { setPage(1); }, [startDate, endDate, columnFilters]);
+  useEffect(() => { setPage(1); }, [startDate, endDate, includeDateReleased, columnFilters]);
   useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
 
   function sortBy(key: string) {
@@ -89,7 +102,7 @@ export default function CsrSummary() {
     result[label] = row;
     return result;
   }, {})).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label)), [filtered]);
-  const months = countBy((request) => request.dateRequested.slice(0, 7));
+  const months = countBy((request) => (isIncludedByReleaseDate(request) ? request.dateReleased : request.dateRequested).slice(0, 7));
   const budgetYears = useMemo(() => {
     const startYear = Number(startDate.slice(0, 4)) || currentYear;
     const endYear = Number(endDate.slice(0, 4)) || startYear;
@@ -169,6 +182,7 @@ export default function CsrSummary() {
     { key: 'status', header: 'Evaluation Status', sortable: true, filterable: true, render: (request) => request.status },
     { key: 'evaluationResult', header: 'Evaluation', sortable: true, filterable: true, render: (request) => request.evaluationResult.length ? request.evaluationResult.join(', ') : 'Not Evaluated' },
     { key: 'approvalStatus', header: 'Approval Status', sortable: true, filterable: true, render: (request) => request.approvalStatus || 'For Evaluation' },
+    { key: 'dateReleased', header: 'Date Released', sortable: true, filterable: true, render: (request) => request.dateReleased || '—' },
     { key: 'amountFunding', header: 'Amount Funding', className: 'text-right', sortable: true, filterable: true, render: (request) => money.format(Number(request.amountFunding) || 0) },
     { key: 'actualProjectCost', header: 'Actual Project Cost', className: 'text-right', sortable: true, filterable: true, render: (request) => money.format(Number(request.actualProjectCost) || 0) },
   ];
@@ -197,10 +211,10 @@ export default function CsrSummary() {
     </section>}
     <div className="no-print">
     <div className="no-print"><PageHeader title={summaryTitle} description={`${requestName} activity, evaluation, funding, and geographic metrics.`} crumbs={[{ label: isCommunityRelations ? 'Community Relations' : 'Member-Consumer and Community Programs', to: isCommunityRelations ? '/workspace/preview/ISD/tools/Community%20Relations' : '/workspace/member-programs' }, { label: summaryTitle }]} actions={<div className="flex gap-2"><Button variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button><Button variant="outline" onClick={() => window.close()}><X className="h-4 w-4" /> Close</Button></div>} /></div>
-    <Card className="mb-5 no-print"><CardHeader><CardTitle>Reporting Period</CardTitle></CardHeader><CardContent><div className="max-w-xl"><DateRangePicker label="CSR Request Date Range" startDate={startDate} endDate={endDate} onChange={(start, end) => { setStartDate(start); setEndDate(end); }} /></div><p className="mt-2 text-sm text-slate-500">Metrics include requests dated {startDate} through {endDate}.</p></CardContent></Card>
+    <Card className="mb-5 no-print"><CardHeader><CardTitle>Reporting Period</CardTitle></CardHeader><CardContent><div className="flex flex-wrap items-end gap-4"><div className="min-w-[280px] flex-1 max-w-xl"><DateRangePicker label="CSR Request Date Range" startDate={startDate} endDate={endDate} onChange={(start, end) => { setStartDate(start); setEndDate(end); }} /></div><label className="mb-2 flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-slate-700"><Checkbox checked={includeDateReleased} onChange={(event) => setIncludeDateReleased(event.target.checked)} />Include based on Date Released</label></div><p className="mt-2 text-sm text-slate-500">Metrics include requests dated {startDate} through {endDate}{includeDateReleased ? ', plus requests released within the range.' : '.'}</p></CardContent></Card>
     {loading ? <Card><CardContent className="py-12 text-center text-slate-500">Loading CSR metrics…</CardContent></Card> : error ? <Card><CardContent className="py-12 text-center text-red-600">{error}</CardContent></Card> : <>
       <div className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
-        <MetricCard label="Total Requests" value={String(filtered.length)} />
+        <MetricCard label="Total Requests" value={String(filtered.length)} note={releaseDateIncludedCount ? `(${releaseDateIncludedCount} ${releaseDateIncludedCount === 1 ? 'request' : 'requests'} included based on date release of budget)` : undefined} />
         <MetricCard label="Completed" value={String(completedCount)} />
         <MetricCard label="Pending" value={String(pendingCount)} />
         <MetricCard label="For evaluation" value={String(forEvaluationCount)} />
@@ -226,7 +240,7 @@ export default function CsrSummary() {
   </div>;
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) { return <Card><CardContent className="p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1.5 break-words text-xl font-bold text-slate-900">{value}</p></CardContent></Card>; }
+function MetricCard({ label, value, note }: { label: string; value: string; note?: string }) { return <Card><CardContent className="p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1.5 break-words text-xl font-bold text-slate-900">{value}</p>{note && <p className="mt-1 text-xs font-medium leading-snug text-blue-600">{note}</p>}</CardContent></Card>; }
 
 function PrintMetric({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 
@@ -271,6 +285,7 @@ function CsrRequestHoverSummary({ request }: { request: CsrRequest }) {
     ['Approval Status', request.approvalStatus || 'For Evaluation'],
     ['With Letter Reply', request.withLetterReply ? 'Yes' : 'No'],
     ['Date Approved/Disapproved', request.dateApproved],
+    ['Date Released', request.dateReleased],
     ['Amount Funding', money.format(Number(request.amountFunding) || 0)],
     ['Actual Project Cost', money.format(Number(request.actualProjectCost) || 0)],
     ['Pending Reason', request.pendingReason],

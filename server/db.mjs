@@ -1446,6 +1446,7 @@ export async function initializeDatabase() {
     await runDdl(connection, `CREATE INDEX ix_csr_requests_date ON bes_csr_requests (date_requested, request_status)`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (evaluated_by VARCHAR2(200))`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (date_approved DATE)`);
+    await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (date_released DATE)`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (pjrs VARCHAR2(200))`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (actual_project_cost NUMBER(15,2))`);
     await addColumn(connection, `ALTER TABLE bes_csr_requests ADD (approval_status VARCHAR2(30) DEFAULT 'For Evaluation' NOT NULL)`);

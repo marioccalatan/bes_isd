@@ -586,6 +586,7 @@ export interface CsrRequest {
   evaluationResult: Array<'Within CSR Policy' | 'Not Within CSR Policy'>;
   evaluatedBy: string;
   dateApproved: string;
+  dateReleased: string;
   amountFunding: string;
   pjrs: string;
   actualProjectCost: string;
