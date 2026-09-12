@@ -593,6 +593,38 @@ export interface CsrRequest {
   updatedAt?: string;
 }
 
+function normalizeCsrRequest(request: CsrRequest): CsrRequest {
+  return {
+    ...request,
+    dateRequested: request.dateRequested || '',
+    programType: request.programType || '',
+    requestee: request.requestee || '',
+    designation: request.designation || '',
+    organization: request.organization || '',
+    registrationDetails: request.registrationDetails || '',
+    sector: request.sector || '',
+    location: request.location || '',
+    barangay: request.barangay || '',
+    municipality: request.municipality || '',
+    district: request.district || '',
+    projectDetails: request.projectDetails || '',
+    projectRequirement: request.projectRequirement || '',
+    pendingReason: request.pendingReason || '',
+    additionalRemarks: request.additionalRemarks || '',
+    status: request.status || 'For evaluation',
+    approvalStatus: request.approvalStatus || 'For Evaluation',
+    evaluationResult: Array.isArray(request.evaluationResult) ? request.evaluationResult : [],
+    evaluatedBy: request.evaluatedBy || '',
+    dateApproved: request.dateApproved || '',
+    dateReleased: request.dateReleased || '',
+    amountFunding: request.amountFunding || '',
+    pjrs: request.pjrs || '',
+    actualProjectCost: request.actualProjectCost || '',
+    withLetterReply: Boolean(request.withLetterReply),
+    institutional: Boolean(request.institutional),
+  };
+}
+
 export interface BarangayLocation {
   municipality: string;
   barangay: string;
@@ -647,7 +679,7 @@ export async function createCsrSector(token: string, sector: string) {
 
 export async function fetchCsrRequests(token: string) {
   const result = await apiRequest<{ requests: CsrRequest[] }>('/api/member-programs/csr', { headers: { authorization: `Bearer ${token}` } });
-  return result.requests;
+  return result.requests.map(normalizeCsrRequest);
 }
 
 export async function saveCsrRequest(token: string, request: Omit<CsrRequest, 'id' | 'updatedAt'>, id?: string) {
