@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ClipboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { BarChart3, BookOpen, Check, ChevronLeft, ChevronRight, File, Plus, Printer, Settings, Trash2, Upload, X } from 'lucide-react';
+import { BarChart3, BookOpen, Check, ChevronLeft, ChevronRight, Download, File, Plus, Printer, Settings, Trash2, Upload, X } from 'lucide-react';
 import benecoLogo from '@/assets/brand/beneco-logo.png';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -403,6 +403,40 @@ function CsrSettingsDialog({ open, onClose, programTypeOptions, districtOptions 
     const defaultProgramType = uniqueProgramTypes.find((value) => !usedProgramTypes.has(value.trim().toLowerCase())) || '';
     setDraft({ year: currentBudgetYear, district: defaultDistrict, programType: defaultProgramType, budget: '' });
   }
+  function budgetReportDocument() {
+    const total = yearScopedAllocations.reduce((sum, item) => sum + item.budget, 0);
+    const amount = (value: number) => value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const districts = new Map<string, CsrBudgetAllocation[]>();
+    for (const item of yearScopedAllocations) {
+      const district = item.district.trim().toUpperCase();
+      const items = districts.get(district) ?? [];
+      items.push(item);
+      districts.set(district, items);
+    }
+    const body = [...districts.entries()].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true })).map(([district, items]) => {
+      const districtTotal = items.reduce((sum, item) => sum + item.budget, 0);
+      const rows = [...items].sort((a, b) => a.programType.localeCompare(b.programType)).map((item, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(item.programType)}</td><td class="amount">${amount(item.budget)}</td></tr>`).join('');
+      return `<tbody><tr class="district"><th colspan="3">${escapeHtml(district)} (Budget: ${amount(districtTotal)})</th></tr>${rows}</tbody>`;
+    }).join('');
+return `<!doctype html><html><head><meta charset="utf-8"><title>CSR Budget Allocations ${escapeHtml(yearFilter)}</title><style>@page{size:A4 portrait;margin:12mm}body{font:11px Arial,sans-serif;color:#17211b;background:white}h1{font-size:20px;margin:0 0 8px}p{margin:0 0 16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #b8c9be;padding:6px;text-align:left}th{background:#e6f2e9}thead{display:table-header-group}tr{break-inside:avoid}.amount{text-align:right;white-space:nowrap;mso-number-format:"\\#\\,\\#\\#0.00"}.district{break-after:avoid}.district th{background:#d5e8db}.total{font-weight:bold;background:#e6f2e9}</style></head><body><h1>BENECO CSR Budget Allocation List</h1><p>Year: ${escapeHtml(yearFilter)} | ${yearScopedAllocations.length} allocations | Currency: PHP</p><table><thead><tr><th>Item</th><th>Program Type</th><th>Budget (PHP)</th></tr></thead>${body}<tbody><tr class="total"><td colspan="2">Total Budget</td><td class="amount">${amount(total)}</td></tr></tbody></table></body></html>`;
+  }
+  function exportBudgetExcel() {
+    const url = URL.createObjectURL(new Blob([budgetReportDocument()], { type: 'application/vnd.ms-excel;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `csr-budget-allocations-${yearFilter}.xls`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function printBudgetAllocations() {
+    const popup = window.open('', '_blank', 'width=1000,height=900');
+    if (!popup) return toast({ kind: 'error', title: 'Allow pop-ups to print budget allocations' });
+    popup.opener = null;
+    popup.document.write(budgetReportDocument());
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  }
   function editAllocation(item: CsrBudgetAllocation) {
     setEditingId(item.id);
     setDraft({ id: item.id, year: String(item.year), district: item.district, programType: item.programType, budget: String(item.budget.toFixed(2)) });
@@ -551,7 +585,11 @@ function CsrSettingsDialog({ open, onClose, programTypeOptions, districtOptions 
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-semibold text-slate-800">Budget Allocation List</p>
-          <label className="flex items-center gap-2 text-sm font-medium text-slate-600">Year<Select className="h-9 w-28" value={yearFilter} onChange={(event) => { setYearFilter(event.target.value); setSelectedBudgetIds([]); }} aria-label="Filter budget allocations by year">{yearOptions.map((year) => <option key={year} value={String(year)}>{year}</option>)}</Select></label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-600">Year<Select className="h-9 w-28" value={yearFilter} onChange={(event) => { setYearFilter(event.target.value); setSelectedBudgetIds([]); }} aria-label="Filter budget allocations by year">{yearOptions.map((year) => <option key={year} value={String(year)}>{year}</option>)}</Select></label>
+            <Button variant="outline" size="sm" disabled={loading || saving || !yearScopedAllocations.length} onClick={exportBudgetExcel}><Download className="h-4 w-4" />Export to Excel</Button>
+            <Button variant="outline" size="sm" disabled={loading || saving || !yearScopedAllocations.length} onClick={printBudgetAllocations}><Printer className="h-4 w-4" />Print</Button>
+          </div>
         </div>
         <div className="overflow-hidden rounded-xl border border-slate-200">
           <div className="grid grid-cols-[44px_70px_130px_minmax(180px,1fr)_minmax(180px,1fr)_130px_92px] border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
