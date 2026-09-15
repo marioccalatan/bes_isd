@@ -583,7 +583,7 @@ export interface CsrRequest {
   closedApproved: boolean;
   additionalRemarks: string;
   status: 'For evaluation' | 'Pending' | 'Completed';
-  approvalStatus: 'Approved' | 'Disapproved' | 'For Evaluation';
+  approvalStatus: 'Approved' | 'Disapproved' | 'For Approval' | 'For Evaluation';
   evaluationResult: Array<'Within CSR Policy' | 'Not Within CSR Policy'>;
   evaluatedBy: string;
   dateApproved: string;

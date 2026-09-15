@@ -3662,7 +3662,7 @@ async function handle(req, res) {
       const evaluationResults = csrEvaluationResults(body);
       if (evaluationResults.some((value) => !CSR_EVALUATION_RESULTS.includes(value))) return json(res, 400, { error: 'Invalid evaluation result.' });
       const approvalStatus = evaluationResults.length ? normalize(body.approvalStatus) : 'For Evaluation';
-      if (evaluationResults.length && !['Approved','Disapproved'].includes(approvalStatus)) return json(res, 400, { error: 'Select Approved or Disapproved after evaluating the request.' });
+      if (evaluationResults.length && !['Approved','Disapproved','For Approval'].includes(approvalStatus)) return json(res, 400, { error: 'Select For Approval, Approved or Disapproved after evaluating the request.' });
       const approvalDate = evaluationResults.length ? nullableNormalize(body.dateApproved) : null;
       const closedApproved = approvalStatus === 'Approved' && body.closedApproved ? 'Y' : 'N';
       const csrUid = `CSR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3790,7 +3790,7 @@ async function handle(req, res) {
       const evaluationResults = csrEvaluationResults(body);
       if (evaluationResults.some((value) => !CSR_EVALUATION_RESULTS.includes(value))) return json(res, 400, { error: 'Invalid evaluation result.' });
       const approvalStatus = evaluationResults.length ? normalize(body.approvalStatus) : 'For Evaluation';
-      if (evaluationResults.length && !['Approved','Disapproved'].includes(approvalStatus)) return json(res, 400, { error: 'Select Approved or Disapproved after evaluating the request.' });
+      if (evaluationResults.length && !['Approved','Disapproved','For Approval'].includes(approvalStatus)) return json(res, 400, { error: 'Select For Approval, Approved or Disapproved after evaluating the request.' });
       const approvalDate = evaluationResults.length ? nullableNormalize(body.dateApproved) : null;
       const closedApproved = approvalStatus === 'Approved' && body.closedApproved ? 'Y' : 'N';
       await withConnection(async (c) => {

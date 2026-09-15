@@ -25,7 +25,7 @@ function isWithinRange(date: string, startDate: string, endDate: string) {
 
 function summaryApprovalStatus(request: CsrRequest) {
   if (!request.evaluationResult.length) return 'For Evaluation';
-  if (request.approvalStatus === 'Approved' || request.approvalStatus === 'Disapproved') return request.approvalStatus;
+  if (request.approvalStatus === 'Approved' || request.approvalStatus === 'Disapproved' || request.approvalStatus === 'For Approval') return request.approvalStatus;
   if (request.evaluationResult.includes('Not Within CSR Policy')) return 'Disapproved';
   if (request.evaluationResult.includes('Within CSR Policy')) return 'Approved';
   return request.approvalStatus || 'For Evaluation';
@@ -99,7 +99,7 @@ export default function CsrSummary() {
   }
   const countBy = (selector: (request: CsrRequest) => string) => filtered.reduce<Record<string, number>>((result, request) => { const key = selector(request) || 'Unspecified'; result[key] = (result[key] || 0) + 1; return result; }, {});
   const status = countBy((request) => request.status);
-  const approval = countBy(summaryApprovalStatus);
+  const approval = { 'For Approval': 0, ...countBy(summaryApprovalStatus) };
   const policy = filtered.reduce<Record<string, number>>((result, request) => { const values = request.evaluationResult.length ? request.evaluationResult : ['Not Evaluated']; values.forEach((value) => { result[value] = (result[value] || 0) + 1; }); return result; }, {});
   const programs = countBy((request) => request.programType);
   const municipalityRows = useMemo(() => Object.values(filtered.reduce<Record<string, { label: string; total: number; approved: number }>>((result, request) => {
@@ -266,7 +266,7 @@ function PrintBreakdown({ title, values, note }: { title: string; values: Record
 }
 
 function PrintBar({ label, value, amount, total, color }: { label: string; value: string; amount: number; total: number; color: string }) {
-  return <div className="csr-print-bar"><div><span><i style={{ backgroundColor: color }} />{label}</span><strong>{value}</strong></div><b><em style={{ width: `${total ? Math.max(3, (amount / total) * 100) : 0}%`, backgroundColor: color }} /></b></div>;
+  return <div className="csr-print-bar"><div><span><i style={{ backgroundColor: color }} />{label}</span><strong>{value}</strong></div><b><em style={{ width: `${total && amount > 0 ? Math.max(3, (amount / total) * 100) : 0}%`, backgroundColor: color }} /></b></div>;
 }
 
 function PrintProgramTypePanel({ rows }: { rows: Array<{ programType: string; count: number; budget: number; projectCost: number }> }) {
@@ -286,7 +286,7 @@ function PrintMunicipalityPanel({ rows }: { rows: Array<{ label: string; total: 
   return <div className="csr-print-panel"><h2>Municipalities</h2><div className="csr-print-bars">{rows.map((row) => { const totalWidth = max ? Math.max(3, (row.total / max) * 100) : 0; const approvedWidth = row.total ? (row.approved / row.total) * 100 : 0; const remainingWidth = row.total ? ((row.total - row.approved) / row.total) * 100 : 0; return <div key={row.label} className="csr-print-bar"><div><span>{row.label}</span><strong>{row.approved} / {row.total}</strong></div><b><em className="csr-print-stacked" style={{ width: `${totalWidth}%` }}><i style={{ width: `${approvedWidth}%` }} /><u style={{ width: `${remainingWidth}%` }} /></em></b></div>; })}</div></div>;
 }
 
-function Breakdown({ title, values, total, className }: { title: string; values: Record<string, number>; total: number; className?: string }) { const rows = Object.entries(values).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])); const chartData = rows.map(([name, value]) => ({ name, value })); return <Card className={className}><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-4"><div className="h-44"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={34} outerRadius={58} paddingAngle={2} label={(props) => { const payload = props.payload as { name: string; value: number }; return `${payload.name}: ${payload.value}`; }}>{chartData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 8 }} /></PieChart></ResponsiveContainer></div>{rows.map(([label, count], index) => { const color = CHART_COLORS[index % CHART_COLORS.length]; return <div key={label}><div className="mb-1 flex justify-between gap-3 text-sm font-medium"><span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />{label}</span><strong>{count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full" style={{ width: `${total ? Math.max(3, (count / total) * 100) : 0}%`, backgroundColor: color }} /></div></div>; })}</div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
+function Breakdown({ title, values, total, className }: { title: string; values: Record<string, number>; total: number; className?: string }) { const rows = Object.entries(values).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])); const chartData = rows.map(([name, value]) => ({ name, value })); return <Card className={className}><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{rows.length ? <div className="space-y-4"><div className="h-44"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={34} outerRadius={58} paddingAngle={2} label={(props) => { const payload = props.payload as { name: string; value: number }; return payload.value > 0 ? `${payload.name}: ${payload.value}` : ''; }}>{chartData.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 8 }} /></PieChart></ResponsiveContainer></div>{rows.map(([label, count], index) => { const color = CHART_COLORS[index % CHART_COLORS.length]; return <div key={label}><div className="mb-1 flex justify-between gap-3 text-sm font-medium"><span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />{label}</span><strong>{count}</strong></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full" style={{ width: `${total && count > 0 ? Math.max(3, (count / total) * 100) : 0}%`, backgroundColor: color }} /></div></div>; })}</div> : <p className="py-8 text-center text-sm text-slate-500">No data for this period.</p>}</CardContent></Card>; }
 
 function MunicipalityApprovalBreakdown({ rows, className }: { rows: Array<{ label: string; total: number; approved: number }>; className?: string }) {
   const maxTotal = rows.reduce((max, row) => Math.max(max, row.total), 0);
