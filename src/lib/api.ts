@@ -1153,6 +1153,19 @@ export interface TrainingParticipant {
   employmentStatus: string | null;
 }
 
+export interface TrainingEmployee {
+  employeeNo: string;
+  name: string;
+  active: boolean;
+  trainingIds: string[];
+}
+
+export async function fetchTrainingEmployees(token: string) {
+  return apiRequest<{ employees: TrainingEmployee[] }>('/api/hro/training-employees', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
 export async function fetchTrainingParticipants(token: string, trainingId: string) {
   return apiRequest<{ employeeNos: string[]; participants: TrainingParticipant[] }>(`/api/hro/training-seminars/${encodeURIComponent(trainingId)}/participants`, {
     headers: { authorization: `Bearer ${token}` },

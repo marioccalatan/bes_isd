@@ -18,6 +18,7 @@ const columns: Column<TrainingSummaryRow>[] = [
   { key: 'conducted', header: 'Times Conducted', sortable: true, render: (row) => row.conducted.toLocaleString() },
   { key: 'scheduled', header: 'Scheduled', sortable: true, render: (row) => row.scheduled.toLocaleString() },
   { key: 'records', header: 'Total Records', sortable: true, render: (row) => row.records.toLocaleString() },
+  { key: 'participantCount', header: 'Qty Participants', sortable: true, render: (row) => row.participantCount.toLocaleString() },
   { key: 'lastConducted', header: 'Latest Conducted Start Date', sortable: true, render: (row) => row.lastConducted ? formatDate(row.lastConducted) : '—' },
 ];
 
@@ -72,6 +73,7 @@ export default function LearningProgramsSummary() {
         <CardHeader><CardTitle>Training Frequency · {scope}</CardTitle><p className="mt-1 text-sm text-slate-500">{periods.selected.length.toLocaleString()} records in this selection. Names are grouped ignoring capitalization and extra spaces; batch numbers and other wording remain distinct. Each Implemented record counts as one conducted session. Repeated trainings have more than one conducted session.</p></CardHeader>
         <CardContent>
           <Toolbar search={table.search} onSearchChange={table.setSearch} placeholder="Search unique trainings…" onPrint={() => window.print()} />
+          <p className="mb-3 text-xs text-slate-500">Qty Participants totals saved participants across the selected training records. Employees attending multiple sessions are counted once per session.</p>
           <p className="mb-3 text-xs text-slate-500">{table.filteredCount.toLocaleString()} matching unique trainings · Search filters this table; metrics follow the selected year.</p>
           <DataTable columns={columns} rows={table.pageRows} getRowId={(row) => row.id} cardTitle={(row) => row.name} sortKey={table.sortKey} sortDir={table.sortDir} onSort={table.toggleSort} emptyTitle="No trainings found" emptyDescription="No training names match the current search." />
           <Pagination page={table.page} pageCount={table.pageCount} onChange={table.setPage} total={table.filteredCount} pageSize={20} />

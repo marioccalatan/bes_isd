@@ -3285,6 +3285,27 @@ async function handle(req, res) {
         type: row.TS_TYPE, conductedBy: row.TS_CONDUCTEDBY, status: row.TS_STATUS, workplan: row.TS_WORKPLAN, categories: row.TS_CATEGORY ? JSON.parse(row.TS_CATEGORY) : [],
       })) });
     }
+    if (req.url === '/api/hro/training-employees' && req.method === 'GET') {
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, bearerToken(req));
+        if (!user) throw Object.assign(new Error('Session required.'), { statusCode: 401 });
+        if (!await canManageTrainingPrograms(c, user)) throw Object.assign(new Error('Training program edit access required.'), { statusCode: 403 });
+        const people = await c.execute(`SELECT e.EMPNO, e.E_LAST, e.E_FIRST, e.E_MIDDLE, e.ACTIVE_STAT, p.TRAINING_ID
+          FROM HR_EMP_MASTERFILE e LEFT JOIN BES_TRAINING_PARTICIPANTS p ON p.EMPLOYEE_NO=e.EMPNO
+          WHERE UPPER(TRIM(e.ACTIVE_STAT)) IN ('ACTIVE','Y','1') OR p.TRAINING_ID IS NOT NULL
+          ORDER BY UPPER(e.E_LAST), UPPER(e.E_FIRST)`);
+        const employees = new Map();
+        for (const row of people.rows) {
+          const employee = employees.get(row.EMPNO) ?? { employeeNo: row.EMPNO,
+            name: `${row.E_LAST}, ${[row.E_FIRST, row.E_MIDDLE].filter(Boolean).join(' ')}`,
+            active: ['ACTIVE','Y','1'].includes(String(row.ACTIVE_STAT ?? '').trim().toUpperCase()), trainingIds: [] };
+          if (row.TRAINING_ID != null) employee.trainingIds.push(String(row.TRAINING_ID));
+          employees.set(row.EMPNO, employee);
+        }
+        return { employees: [...employees.values()] };
+      });
+      return json(res, 200, result);
+    }
     const trainingParticipantsMatch = req.url.match(/^\/api\/hro\/training-seminars\/(\d+)\/participants$/);
     if (trainingParticipantsMatch && ['GET', 'POST'].includes(req.method)) {
       const body = req.method === 'POST' ? await readBody(req) : null;

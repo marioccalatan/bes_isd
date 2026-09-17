@@ -6,6 +6,7 @@ export interface TrainingSummaryRow {
   records: number;
   conducted: number;
   scheduled: number;
+  participantCount: number;
   lastConducted: string | null;
 }
 
@@ -28,8 +29,9 @@ export function summarizeTrainings(programs: TrainingSeminar[]): TrainingSummary
   for (const program of programs) {
     const name = program.name.trim().replace(/\s+/g, ' ');
     const id = name.toLocaleLowerCase('en');
-    const group = groups.get(id) ?? { id, name, records: 0, conducted: 0, scheduled: 0, lastConducted: null };
+    const group = groups.get(id) ?? { id, name, records: 0, conducted: 0, scheduled: 0, participantCount: 0, lastConducted: null };
     group.records += 1;
+    group.participantCount += program.participantCount ?? 0;
     if (program.status === 'Implemented') {
       group.conducted += 1;
       if (program.dateFrom && (!group.lastConducted || program.dateFrom > group.lastConducted)) group.lastConducted = program.dateFrom;

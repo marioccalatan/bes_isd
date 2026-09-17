@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Checkbox, Input, Label, Select } from '@/components/ui/input';
 import { Toolbar } from './Toolbar';
+import { TrainingEmployeeList } from './TrainingEmployeeList';
 import { TrainingParticipantsDialog } from './TrainingParticipantsDialog';
 import { TrainingParticipantsViewDialog } from './TrainingParticipantsViewDialog';
 
@@ -47,6 +48,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [year, setYear] = useState('');
+  const [employeeView, setEmployeeView] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [editingId, setEditingId] = useState<string>();
   const [participantTraining, setParticipantTraining] = useState<TrainingSeminar | null>(null);
@@ -105,12 +107,12 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
   }, [token, attempt, onCountChange]);
 
   return <Card>
-    <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3"><div><CardTitle>Learning and Development Programs</CardTitle><p className="mt-1 text-sm text-slate-500">Training and seminar schedules, venues, hours, and organizers.</p></div><div className="flex items-center gap-2"><a href={`/workspace/learning-development?view=summary${year ? `&year=${encodeURIComponent(year)}` : ''}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-surface px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label="Summary (opens in a new tab)"><BarChart3 className="h-4 w-4" /> Summary</a>{canEdit && <Button onClick={() => openForm()}><Plus className="h-4 w-4" /> Add</Button>}</div></CardHeader>
+    <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3"><div><CardTitle>Learning and Development Programs</CardTitle><p className="mt-1 text-sm text-slate-500">Training and seminar schedules, venues, hours, and organizers.</p></div><div className="flex flex-wrap items-center gap-2">{canEdit && <Button variant={employeeView ? 'primary' : 'outline'} role="switch" aria-checked={employeeView} onClick={() => { setEmployeeView((value) => !value); table.setSearch(''); }}>Employee List</Button>}<a href={`/workspace/learning-development?view=summary${year ? `&year=${encodeURIComponent(year)}` : ''}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-surface px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label="Summary (opens in a new tab)"><BarChart3 className="h-4 w-4" /> Summary</a>{canEdit && <Button onClick={() => openForm()}><Plus className="h-4 w-4" /> Add</Button>}</div></CardHeader>
     <CardContent>
-      <Toolbar search={table.search} onSearchChange={table.setSearch} placeholder="Search training, venue, type, organizer…" onPrint={() => window.print()}>
+      <Toolbar search={table.search} onSearchChange={table.setSearch} placeholder={employeeView ? 'Search employee name or number…' : 'Search training, venue, type, organizer…'} onPrint={() => window.print()}>
         <div className="flex items-center gap-2"><label htmlFor="training-year" className="text-sm text-slate-500">Year</label><Select id="training-year" className="w-36" value={year} onChange={(event) => { setYear(event.target.value); table.setPage(1); }}><option value="">All Years</option>{years.map((value) => <option key={value} value={value}>{value}</option>)}{programs.some((row) => !row.dateFrom) && <option value="undated">No start date</option>}</Select></div>
       </Toolbar>
-      {loading ? <p role="status" className="py-12 text-center text-sm text-slate-500">Loading training programs…</p> : error ? <div role="alert" className="space-y-3 py-8 text-center"><p className="text-sm text-red-600">{error}</p><Button variant="outline" onClick={() => setAttempt((value) => value + 1)}>Retry</Button></div> : <>
+      {loading ? <p role="status" className="py-12 text-center text-sm text-slate-500">Loading training programs…</p> : error ? <div role="alert" className="space-y-3 py-8 text-center"><p className="text-sm text-red-600">{error}</p><Button variant="outline" onClick={() => setAttempt((value) => value + 1)}>Retry</Button></div> : employeeView ? <TrainingEmployeeList programs={programs} year={year} search={table.search} onSaved={(id, count) => setPrograms((current) => current.map((row) => row.id === id ? { ...row, participantCount: count } : row))} /> : <>
         <DataTable columns={tableColumns} rows={table.pageRows} getRowId={(row) => row.id} sortKey={table.sortKey} sortDir={table.sortDir} onSort={table.toggleSort} cardTitle={(row) => row.name} minWidthPx={1160} emptyTitle="No training programs found" emptyDescription={table.search || year ? 'Try a different year or search term.' : 'No training or seminar records are available.'} />
         <Pagination page={table.page} pageCount={table.pageCount} onChange={table.setPage} total={table.filteredCount} pageSize={20} />
       </>}
