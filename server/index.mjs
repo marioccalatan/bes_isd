@@ -19,18 +19,7 @@ const json = (res, status, body, headers = {}) => {
   res.end(JSON.stringify(body));
 };
 const distRoot = path.resolve('dist');
-const TRAINING_CATEGORIES = [
-  'Mandatory, Regulatory & Compliance',
-  'Technical & Functional Competency',
-  'Safety, Health & Emergency Preparedness',
-  'Leadership & Management Development',
-  'Behavioral & Interpersonal Effectiveness',
-  'Customer Service & Stakeholder Relations',
-  'Digital, Data & Emerging Technology',
-  'Professional & Career Development',
-  'Academic & Advanced Development',
-  'Organizational & Strategic Capability',
-];
+
 const DEFAULT_MEMBER_PROGRAM_TYPES = ['Environmental Sustainability Program', 'Livelihood Program', 'Skills Training Program', 'Pailaw sa Paaralan', 'Reforestation Program', 'NGO Partnership for Social Cause', 'Other Projects', 'Linkages', 'Partnership', 'Networking'];
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -3264,6 +3253,38 @@ async function handle(req, res) {
       await withConnection(async (c) => { if (kind === 'qualifications') await c.execute(`UPDATE bes_hr_qualifications SET position_level=:positionLevel,subject=:subject,qualification_level=:qualificationLevel,description=:description,updated_at=SYSTIMESTAMP WHERE qualification_id=:itemId`, { itemId, positionLevel, subject, qualificationLevel, description }); else if (kind === 'duties') await c.execute(`UPDATE bes_hr_duties SET position_level=:positionLevel,subject=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE duty_id=:itemId`, { itemId, positionLevel, subject, description }); else await c.execute(`UPDATE bes_hr_job_spec SET position_level=:positionLevel,specification=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE job_spec_id=:itemId`, { itemId, positionLevel, subject, description }); await c.commit(); });
       return json(res, 200, { ok: true });
     }
+    const categoryMatch = req.url.match(/^\/api\/hro\/training-categories(?:\/(\d+))?$/);
+    if (categoryMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) {
+      const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : null;
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, bearerToken(req));
+        if (!user) throw Object.assign(new Error('Session required.'), { statusCode: 401 });
+        if (!await canManageTrainingPrograms(c, user)) throw Object.assign(new Error('Training program edit access required.'), { statusCode: 403 });
+        const id = Number(categoryMatch[1]);
+        if (req.method !== 'GET') {
+          await c.execute('LOCK TABLE BES_TRAINING_CATEGORIES IN SHARE ROW EXCLUSIVE MODE');
+          if (req.method !== 'POST' && (!id || !(await c.execute('SELECT ID FROM BES_TRAINING_CATEGORIES WHERE ID=:id', { id })).rows.length)) throw Object.assign(new Error('Category not found.'), { statusCode: 404 });
+          if (req.method === 'DELETE') {
+            const used = await c.execute("SELECT COUNT(*) TOTAL FROM TRAINING_SEMINAR WHERE INSTR(',' || REPLACE(TS_CATEGORY, ' ', '') || ',', ',' || :id || ',') > 0", { id: String(id) });
+            if (used.rows[0].TOTAL) throw Object.assign(new Error('This category is used by training records. Remove those assignments before deleting it.'), { statusCode: 409 });
+            await c.execute('DELETE FROM BES_TRAINING_CATEGORIES WHERE ID=:id', { id });
+          } else {
+            const name = typeof body?.name === 'string' ? body.name.trim() : '';
+            if (!name || Buffer.byteLength(name, 'utf8') > 300) throw Object.assign(new Error('Enter a category name of up to 300 bytes.'), { statusCode: 400 });
+            const duplicate = await c.execute('SELECT ID FROM BES_TRAINING_CATEGORIES WHERE UPPER(NAME)=UPPER(:name) AND ID<>:id', { name, id: id || 0 });
+            if (duplicate.rows.length) throw Object.assign(new Error('A category with this name already exists.'), { statusCode: 409 });
+            if (req.method === 'POST') await c.execute('INSERT INTO BES_TRAINING_CATEGORIES (NAME) VALUES (:name)', { name });
+            else await c.execute('UPDATE BES_TRAINING_CATEGORIES SET NAME=:name WHERE ID=:id', { name, id });
+          }
+          await c.commit();
+        }
+        const rows = await c.execute(`SELECT c.ID, c.NAME,
+          (SELECT COUNT(*) FROM TRAINING_SEMINAR t WHERE INSTR(',' || REPLACE(t.TS_CATEGORY, ' ', '') || ',', ',' || TO_CHAR(c.ID) || ',') > 0) AS USAGE_COUNT
+          FROM BES_TRAINING_CATEGORIES c ORDER BY c.ID`);
+        return { categories: rows.rows.map((row) => ({ id: String(row.ID), name: row.NAME, usageCount: Number(row.USAGE_COUNT) })) };
+      });
+      return json(res, 200, result);
+    }
     if (req.method === 'GET' && req.url === '/api/hro/training-seminars') {
       const token = bearerToken(req);
       if (!token) return json(res, 401, { error: 'Session required.' });
@@ -3273,16 +3294,17 @@ async function handle(req, res) {
         const records = await c.execute(`SELECT ID, TS_NAME, TS_ADDRESS,
           TO_CHAR(TS_DATE_FROM, 'YYYY-MM-DD') AS DATE_FROM,
           TO_CHAR(TS_DATE_TO, 'YYYY-MM-DD') AS DATE_TO,
-          TS_HOURS, TS_PROGRAM_COST, TS_TYPE, TS_CONDUCTEDBY, TS_STATUS, TS_WORKPLAN, TS_CATEGORY,
+          TS_HOURS, TS_PROGRAM_COST, TS_BUDGET_COST, TS_TYPE, TS_CONDUCTEDBY, TS_STATUS, TS_WORKPLAN, TS_CATEGORY,
           (SELECT COUNT(*) FROM BES_TRAINING_PARTICIPANTS p WHERE p.TRAINING_ID=t.ID) AS PARTICIPANT_COUNT
           FROM TRAINING_SEMINAR t ORDER BY TS_DATE_FROM DESC NULLS LAST, ID DESC`);
-        return { ...records, canEdit: await canManageTrainingPrograms(c, user) };
+        const categoryRows = await c.execute('SELECT ID, NAME FROM BES_TRAINING_CATEGORIES ORDER BY ID');
+        return { ...records, categoryOptions: categoryRows.rows.map((row) => ({ id: String(row.ID), name: row.NAME })), canEdit: await canManageTrainingPrograms(c, user) };
       });
       if (!result) return json(res, 401, { error: 'Invalid session.' });
-      return json(res, 200, { canEdit: result.canEdit, programs: result.rows.map((row) => ({
+      return json(res, 200, { canEdit: result.canEdit, categoryOptions: result.categoryOptions, programs: result.rows.map((row) => ({
         id: String(row.ID), name: row.TS_NAME, address: row.TS_ADDRESS, participantCount: Number(row.PARTICIPANT_COUNT),
-        dateFrom: row.DATE_FROM, dateTo: row.DATE_TO, hours: row.TS_HOURS, programCost: row.TS_PROGRAM_COST,
-        type: row.TS_TYPE, conductedBy: row.TS_CONDUCTEDBY, status: row.TS_STATUS, workplan: row.TS_WORKPLAN, categories: row.TS_CATEGORY ? JSON.parse(row.TS_CATEGORY) : [],
+        dateFrom: row.DATE_FROM, dateTo: row.DATE_TO, hours: row.TS_HOURS, programCost: row.TS_PROGRAM_COST, budgetCost: row.TS_BUDGET_COST,
+        type: row.TS_TYPE, conductedBy: row.TS_CONDUCTEDBY, status: row.TS_STATUS, workplan: row.TS_WORKPLAN, categories: row.TS_CATEGORY ? row.TS_CATEGORY.split(',').map((id) => id.trim()).filter(Boolean) : [],
       })) });
     }
     if (req.url === '/api/hro/training-employees' && req.method === 'GET') {
@@ -3378,29 +3400,32 @@ async function handle(req, res) {
           if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) badRequest(`Invalid ${key}.`);
           return value;
         };
-        const values = { name: textField('name', 1000), address: textField('address', 1000), dateFrom: dateField('dateFrom'), dateTo: dateField('dateTo'), type: textField('type', 10), conductedBy: textField('conductedBy', 2000), hours: body.hours ?? null, programCost: body.programCost ?? null, status: textField('status', 20), workplan: textField('workplan', 20) };
+        const values = { name: textField('name', 1000), address: textField('address', 1000), dateFrom: dateField('dateFrom'), dateTo: dateField('dateTo'), type: textField('type', 10), conductedBy: textField('conductedBy', 2000), hours: body.hours ?? null, programCost: body.programCost ?? null, budgetCost: body.budgetCost ?? null, status: textField('status', 20), workplan: textField('workplan', 20) };
         if (values.status !== null && !['Scheduled', 'Implemented'].includes(values.status)) badRequest('Status must be Scheduled or Implemented.');
         if (values.workplan !== null && !['Workplan', 'Additional'].includes(values.workplan)) badRequest('Workplan must be Workplan or Additional.');
-        if (!Array.isArray(body.categories) || body.categories.some((category) => !TRAINING_CATEGORIES.includes(category))) badRequest('Select valid training categories.');
-        const categories = TRAINING_CATEGORIES.filter((category) => body.categories.includes(category));
-        values.categoriesJson = JSON.stringify(categories);
+        await c.execute('LOCK TABLE BES_TRAINING_CATEGORIES IN SHARE ROW EXCLUSIVE MODE');
+        const lookup = (await c.execute('SELECT ID, NAME FROM BES_TRAINING_CATEGORIES ORDER BY ID')).rows;
+        if (!Array.isArray(body.categories) || body.categories.some((category) => typeof category !== 'string' || !lookup.some((row) => String(row.ID) === category || row.NAME === category))) badRequest('Select valid training categories.');
+        const categories = lookup.filter((row) => body.categories.includes(String(row.ID)) || body.categories.includes(row.NAME)).map((row) => String(row.ID));
+        values.categoryIds = categories.join(', ') || null;
         if (!values.name) badRequest('Training / Seminar name is required.');
         if (values.dateFrom && values.dateTo && values.dateTo < values.dateFrom) badRequest('End date must be on or after start date.');
         if (values.hours !== null && (typeof values.hours !== 'number' || !Number.isFinite(values.hours) || values.hours < 0 || values.hours > 99999999.99 || Math.abs(values.hours * 100 - Math.round(values.hours * 100)) > 0.000001)) badRequest('Hours must be a non-negative number with at most two decimal places.');
-        if (values.programCost !== null && (typeof values.programCost !== 'number' || !Number.isFinite(values.programCost) || values.programCost < 0 || values.programCost > 9999999999.99 || Math.abs(values.programCost * 100 - Math.round(values.programCost * 100)) > 0.0001)) badRequest('Program Cost must be a non-negative number with at most two decimal places.');
+        if (values.programCost !== null && (typeof values.programCost !== 'number' || !Number.isFinite(values.programCost) || values.programCost < 0 || values.programCost > 9999999999.99 || Math.abs(values.programCost * 100 - Math.round(values.programCost * 100)) > 0.0001)) badRequest('Actual Cost Incurred must be a non-negative number with at most two decimal places.');
+        if (values.budgetCost !== null && (typeof values.budgetCost !== 'number' || !Number.isFinite(values.budgetCost) || values.budgetCost < 0 || values.budgetCost > 9999999999.99 || Math.abs(values.budgetCost * 100 - Math.round(values.budgetCost * 100)) > 0.0001)) badRequest('Budget Cost must be a non-negative number with at most two decimal places.');
         let id = trainingProgramMatch[1];
         if (id) {
           const updated = await c.execute(`UPDATE TRAINING_SEMINAR SET TS_NAME=:name, TS_ADDRESS=:address,
             TS_DATE_FROM=TO_DATE(:dateFrom,'YYYY-MM-DD'), TS_DATE_TO=TO_DATE(:dateTo,'YYYY-MM-DD'),
-            TS_HOURS=:hours, TS_PROGRAM_COST=:programCost, TS_TYPE=:type, TS_CONDUCTEDBY=:conductedBy, TS_STATUS=:status, TS_WORKPLAN=:workplan, TS_CATEGORY=:categoriesJson WHERE ID=:id`, { ...values, id: Number(id) });
+            TS_HOURS=:hours, TS_PROGRAM_COST=:programCost, TS_BUDGET_COST=:budgetCost, TS_TYPE=:type, TS_CONDUCTEDBY=:conductedBy, TS_STATUS=:status, TS_WORKPLAN=:workplan, TS_CATEGORY=:categoryIds WHERE ID=:id`, { ...values, id: Number(id) });
           if (!updated.rowsAffected) throw Object.assign(new Error('Training program not found.'), { statusCode: 404 });
         } else {
-          const inserted = await c.execute(`INSERT INTO TRAINING_SEMINAR (TS_NAME,TS_ADDRESS,TS_DATE_FROM,TS_DATE_TO,TS_HOURS,TS_PROGRAM_COST,TS_TYPE,TS_CONDUCTEDBY,TS_STATUS,TS_WORKPLAN,TS_CATEGORY)
-            VALUES (:name,:address,TO_DATE(:dateFrom,'YYYY-MM-DD'),TO_DATE(:dateTo,'YYYY-MM-DD'),:hours,:programCost,:type,:conductedBy,:status,:workplan,:categoriesJson) RETURNING ID INTO :newId`, { ...values, newId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
+          const inserted = await c.execute(`INSERT INTO TRAINING_SEMINAR (TS_NAME,TS_ADDRESS,TS_DATE_FROM,TS_DATE_TO,TS_HOURS,TS_PROGRAM_COST,TS_BUDGET_COST,TS_TYPE,TS_CONDUCTEDBY,TS_STATUS,TS_WORKPLAN,TS_CATEGORY)
+            VALUES (:name,:address,TO_DATE(:dateFrom,'YYYY-MM-DD'),TO_DATE(:dateTo,'YYYY-MM-DD'),:hours,:programCost,:budgetCost,:type,:conductedBy,:status,:workplan,:categoryIds) RETURNING ID INTO :newId`, { ...values, newId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
           id = String(inserted.outBinds.newId[0]);
         }
         await c.commit();
-        delete values.categoriesJson;
+        delete values.categoryIds;
         const participantCount = (await c.execute('SELECT COUNT(*) TOTAL FROM BES_TRAINING_PARTICIPANTS WHERE TRAINING_ID=:id', { id: Number(id) })).rows[0].TOTAL;
         return { id, ...values, categories, participantCount: Number(participantCount) };
       });

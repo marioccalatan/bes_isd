@@ -1120,6 +1120,7 @@ export interface TrainingSeminar {
   dateTo: string | null;
   hours: number | null;
   programCost: number | null;
+  budgetCost: number | null;
   type: string | null;
   conductedBy: string | null;
   status: string | null;
@@ -1128,7 +1129,7 @@ export interface TrainingSeminar {
 }
 
 export async function fetchTrainingSeminars(token: string) {
-  const result = await apiRequest<{ programs: TrainingSeminar[]; canEdit: boolean }>('/api/hro/training-seminars', {
+  const result = await apiRequest<{ programs: TrainingSeminar[]; canEdit: boolean; categoryOptions: { id: string; name: string }[] }>('/api/hro/training-seminars', {
     headers: { authorization: `Bearer ${token}` },
   });
   return result;
@@ -1152,6 +1153,13 @@ export interface TrainingParticipant {
   employeeNo: string;
   name: string;
   employmentStatus: string | null;
+}
+
+export interface TrainingCategory { id: string; name: string; usageCount: number }
+export async function manageTrainingCategories(token: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', id?: string, name?: string) {
+  return apiRequest<{ categories: TrainingCategory[] }>(`/api/hro/training-categories${id ? `/${encodeURIComponent(id)}` : ''}`, {
+    method, headers: { authorization: `Bearer ${token}` }, ...(name !== undefined ? { body: JSON.stringify({ name }) } : {}),
+  });
 }
 
 export interface TrainingEmployee {

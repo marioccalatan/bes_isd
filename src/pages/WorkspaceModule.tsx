@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
+import TrainingPlan from './TrainingPlan';
 import LearningProgramsSummary from './LearningProgramsSummary';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -57,6 +58,7 @@ export default function WorkspaceModule() {
     officeName: isPreviewing ? previewOffice : user?.unitName,
     positionTitle: isPreviewing ? previewPosition : user?.position,
   })) return <NotFound />;
+  if (moduleId === 'learning-development' && searchParams.get('view') === 'plan') return <TrainingPlan />;
   if (moduleId === 'learning-development' && searchParams.get('view') === 'summary') return <LearningProgramsSummary />;
   if (moduleId === 'policies-issuances') return <PoliciesIssuances module={mod} />;
   if (moduleId === 'recruitment') return <RecruitmentOnboarding module={mod} />;
