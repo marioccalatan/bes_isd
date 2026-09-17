@@ -19,6 +19,18 @@ const json = (res, status, body, headers = {}) => {
   res.end(JSON.stringify(body));
 };
 const distRoot = path.resolve('dist');
+const TRAINING_CATEGORIES = [
+  'Mandatory, Regulatory & Compliance',
+  'Technical & Functional Competency',
+  'Safety, Health & Emergency Preparedness',
+  'Leadership & Management Development',
+  'Behavioral & Interpersonal Effectiveness',
+  'Customer Service & Stakeholder Relations',
+  'Digital, Data & Emerging Technology',
+  'Professional & Career Development',
+  'Academic & Advanced Development',
+  'Organizational & Strategic Capability',
+];
 const DEFAULT_MEMBER_PROGRAM_TYPES = ['Environmental Sustainability Program', 'Livelihood Program', 'Skills Training Program', 'Pailaw sa Paaralan', 'Reforestation Program', 'NGO Partnership for Social Cause', 'Other Projects', 'Linkages', 'Partnership', 'Networking'];
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -946,6 +958,19 @@ async function canManageBuildingFacilities(connection, user) {
     positionTitle: user.POSITION_TITLE,
   });
   return Number(access.rows[0]?.ADMINISTRATOR_COUNT ?? 0) > 0 || Number(access.rows[0]?.ACCESS_COUNT ?? 0) > 0;
+}
+
+async function canManageTrainingPrograms(connection, user) {
+  if (!user) return false;
+  if (user.APP_ROLE === 'Administrator') return true;
+  const result = await connection.execute(`SELECT COUNT(*) AS TOTAL FROM bes_tool_access
+    WHERE tool_code='Learning and Development' AND is_active='Y' AND tool_status='ENABLED'
+      AND access_level IN ('ADMIN','EDIT') AND department_code=:departmentCode
+      AND (office_name IS NULL OR LOWER(TRIM(office_name))=LOWER(TRIM(:officeName)))
+      AND (position_name IS NULL OR LOWER(TRIM(position_name))=LOWER(TRIM(:positionTitle)))`, {
+    departmentCode: user.DEPARTMENT_CODE, officeName: user.UNIT_NAME, positionTitle: user.POSITION_TITLE,
+  });
+  return Number(result.rows[0]?.TOTAL ?? 0) > 0;
 }
 
 async function requireBuildingFacilitiesManager(token) {
@@ -3238,6 +3263,110 @@ async function handle(req, res) {
       if (!subject) throw Object.assign(new Error('Subject is required.'), { statusCode: 400 });
       await withConnection(async (c) => { if (kind === 'qualifications') await c.execute(`UPDATE bes_hr_qualifications SET position_level=:positionLevel,subject=:subject,qualification_level=:qualificationLevel,description=:description,updated_at=SYSTIMESTAMP WHERE qualification_id=:itemId`, { itemId, positionLevel, subject, qualificationLevel, description }); else if (kind === 'duties') await c.execute(`UPDATE bes_hr_duties SET position_level=:positionLevel,subject=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE duty_id=:itemId`, { itemId, positionLevel, subject, description }); else await c.execute(`UPDATE bes_hr_job_spec SET position_level=:positionLevel,specification=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE job_spec_id=:itemId`, { itemId, positionLevel, subject, description }); await c.commit(); });
       return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && req.url === '/api/hro/training-seminars') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) return null;
+        const records = await c.execute(`SELECT ID, TS_NAME, TS_ADDRESS,
+          TO_CHAR(TS_DATE_FROM, 'YYYY-MM-DD') AS DATE_FROM,
+          TO_CHAR(TS_DATE_TO, 'YYYY-MM-DD') AS DATE_TO,
+          TS_HOURS, TS_TYPE, TS_CONDUCTEDBY, TS_STATUS, TS_WORKPLAN, TS_CATEGORY
+          FROM TRAINING_SEMINAR ORDER BY TS_DATE_FROM DESC NULLS LAST, ID DESC`);
+        return { ...records, canEdit: await canManageTrainingPrograms(c, user) };
+      });
+      if (!result) return json(res, 401, { error: 'Invalid session.' });
+      return json(res, 200, { canEdit: result.canEdit, programs: result.rows.map((row) => ({
+        id: String(row.ID), name: row.TS_NAME, address: row.TS_ADDRESS,
+        dateFrom: row.DATE_FROM, dateTo: row.DATE_TO, hours: row.TS_HOURS,
+        type: row.TS_TYPE, conductedBy: row.TS_CONDUCTEDBY, status: row.TS_STATUS, workplan: row.TS_WORKPLAN, categories: row.TS_CATEGORY ? JSON.parse(row.TS_CATEGORY) : [],
+      })) });
+    }
+    const trainingParticipantsMatch = req.url.match(/^\/api\/hro\/training-seminars\/(\d+)\/participants$/);
+    if (trainingParticipantsMatch && ['GET', 'POST'].includes(req.method)) {
+      const body = req.method === 'POST' ? await readBody(req) : null;
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, bearerToken(req));
+        if (!user) throw Object.assign(new Error('Session required.'), { statusCode: 401 });
+        if (!await canManageTrainingPrograms(c, user)) throw Object.assign(new Error('Training program edit access required.'), { statusCode: 403 });
+        const trainingId = Number(trainingParticipantsMatch[1]);
+        // Lock enrollment changes for this training so concurrent additions remain idempotent.
+        const training = await c.execute(`SELECT ID FROM TRAINING_SEMINAR WHERE ID=:trainingId${body ? ' FOR UPDATE' : ''}`, { trainingId });
+        if (!training.rows.length) throw Object.assign(new Error('Training program not found.'), { statusCode: 404 });
+        let added = 0;
+        if (body) {
+          if (!Array.isArray(body.employeeNos) || !body.employeeNos.length || body.employeeNos.length > 2000 || body.employeeNos.some((value) => typeof value !== 'string' || !value.trim() || Buffer.byteLength(value.trim()) > 10)) throw Object.assign(new Error('Select valid employees.'), { statusCode: 400 });
+          const employeeNos = [...new Set(body.employeeNos.map((value) => value.trim()))];
+          const described = await c.execute('SELECT * FROM HR_EMP_MASTERFILE WHERE 1=0');
+          const employeeColumns = new Set(described.metaData.map((column) => column.name));
+          const positionColumns = ['CURRENT_POSITION_TYPE', 'POSITION_TYPE', 'OFFICIAL_POSITION_TYPE'].filter((column) => employeeColumns.has(column));
+          const positionFilters = positionColumns.map((column) => ` AND UPPER(TRIM(NVL(${column},'-'))) <> 'BOD MEMBER'`).join('');
+          for (const employeeNo of employeeNos) {
+            const employee = await c.execute(`SELECT EMPNO FROM HR_EMP_MASTERFILE WHERE EMPNO=:employeeNo
+              AND UPPER(TRIM(ACTIVE_STAT)) IN ('ACTIVE','Y','1')${positionFilters}`, { employeeNo });
+            if (!employee.rows.length) throw Object.assign(new Error(`Employee ${employeeNo} is not available for enrollment. Refresh the employee list.`), { statusCode: 400 });
+          }
+          for (const employeeNo of employeeNos) {
+            const inserted = await c.execute(`INSERT INTO BES_TRAINING_PARTICIPANTS (TRAINING_ID,EMPLOYEE_NO,ADDED_BY)
+              SELECT :trainingId,:employeeNo,:userId FROM dual
+              WHERE NOT EXISTS (SELECT 1 FROM BES_TRAINING_PARTICIPANTS WHERE TRAINING_ID=:trainingId AND EMPLOYEE_NO=:employeeNo)`, { trainingId, employeeNo, userId: user.USER_ID });
+            added += inserted.rowsAffected;
+          }
+        }
+        const participants = await c.execute(`SELECT EMPLOYEE_NO FROM BES_TRAINING_PARTICIPANTS WHERE TRAINING_ID=:trainingId ORDER BY EMPLOYEE_NO`, { trainingId });
+        if (body) await c.commit();
+        return { employeeNos: participants.rows.map((row) => row.EMPLOYEE_NO), added };
+      });
+      return json(res, 200, result);
+    }
+    const trainingProgramMatch = req.url.match(/^\/api\/hro\/training-seminars(?:\/(\d+))?$/);
+    if (trainingProgramMatch && ((req.method === 'POST' && !trainingProgramMatch[1]) || (req.method === 'PUT' && trainingProgramMatch[1]))) {
+      const token = bearerToken(req);
+      const body = await readBody(req);
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, token);
+        if (!user) throw Object.assign(new Error('Session required.'), { statusCode: 401 });
+        if (!await canManageTrainingPrograms(c, user)) throw Object.assign(new Error('Training program edit access required.'), { statusCode: 403 });
+        const badRequest = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
+        const textField = (key, limit) => {
+          if (body[key] != null && typeof body[key] !== 'string') badRequest(`Invalid ${key}.`);
+          const value = (body[key] ?? '').trim();
+          if (Buffer.byteLength(value, 'utf8') > limit) badRequest(`${key} exceeds the maximum length of ${limit} bytes.`);
+          return value || null;
+        };
+        const dateField = (key) => {
+          const value = body[key];
+          if (value == null || value === '') return null;
+          if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) badRequest(`Invalid ${key}.`);
+          return value;
+        };
+        const values = { name: textField('name', 1000), address: textField('address', 1000), dateFrom: dateField('dateFrom'), dateTo: dateField('dateTo'), type: textField('type', 10), conductedBy: textField('conductedBy', 2000), hours: body.hours ?? null, status: textField('status', 20), workplan: textField('workplan', 20) };
+        if (values.status !== null && !['Scheduled', 'Implemented'].includes(values.status)) badRequest('Status must be Scheduled or Implemented.');
+        if (values.workplan !== null && !['Workplan', 'Additional'].includes(values.workplan)) badRequest('Workplan must be Workplan or Additional.');
+        if (!Array.isArray(body.categories) || body.categories.some((category) => !TRAINING_CATEGORIES.includes(category))) badRequest('Select valid training categories.');
+        const categories = TRAINING_CATEGORIES.filter((category) => body.categories.includes(category));
+        values.categoriesJson = JSON.stringify(categories);
+        if (!values.name) badRequest('Training / Seminar name is required.');
+        if (values.dateFrom && values.dateTo && values.dateTo < values.dateFrom) badRequest('End date must be on or after start date.');
+        if (values.hours !== null && (typeof values.hours !== 'number' || !Number.isFinite(values.hours) || values.hours < 0 || values.hours > 99999999.99 || Math.abs(values.hours * 100 - Math.round(values.hours * 100)) > 0.000001)) badRequest('Hours must be a non-negative number with at most two decimal places.');
+        let id = trainingProgramMatch[1];
+        if (id) {
+          const updated = await c.execute(`UPDATE TRAINING_SEMINAR SET TS_NAME=:name, TS_ADDRESS=:address,
+            TS_DATE_FROM=TO_DATE(:dateFrom,'YYYY-MM-DD'), TS_DATE_TO=TO_DATE(:dateTo,'YYYY-MM-DD'),
+            TS_HOURS=:hours, TS_TYPE=:type, TS_CONDUCTEDBY=:conductedBy, TS_STATUS=:status, TS_WORKPLAN=:workplan, TS_CATEGORY=:categoriesJson WHERE ID=:id`, { ...values, id: Number(id) });
+          if (!updated.rowsAffected) throw Object.assign(new Error('Training program not found.'), { statusCode: 404 });
+        } else {
+          const inserted = await c.execute(`INSERT INTO TRAINING_SEMINAR (TS_NAME,TS_ADDRESS,TS_DATE_FROM,TS_DATE_TO,TS_HOURS,TS_TYPE,TS_CONDUCTEDBY,TS_STATUS,TS_WORKPLAN,TS_CATEGORY)
+            VALUES (:name,:address,TO_DATE(:dateFrom,'YYYY-MM-DD'),TO_DATE(:dateTo,'YYYY-MM-DD'),:hours,:type,:conductedBy,:status,:workplan,:categoriesJson) RETURNING ID INTO :newId`, { ...values, newId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
+          id = String(inserted.outBinds.newId[0]);
+        }
+        await c.commit();
+        delete values.categoriesJson;
+        return { id, ...values, categories };
+      });
+      return json(res, req.method === 'POST' ? 201 : 200, { program: result });
     }
     if (req.method === 'GET' && req.url === '/api/hro/employees') {
       const token = bearerToken(req);

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
+import LearningProgramsSummary from './LearningProgramsSummary';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +31,7 @@ const STATUS_STYLES: Record<WorkspaceRecord['status'], string> = {
 
 export default function WorkspaceModule() {
   const { moduleId } = useParams<{ moduleId: string }>();
+  const [searchParams] = useSearchParams();
   const { tools } = useData();
   const { user } = useAuth();
   const { effectiveRole, isPreviewing, previewDepartmentId, previewOffice, previewPosition } = useRolePreview();
@@ -55,6 +57,7 @@ export default function WorkspaceModule() {
     officeName: isPreviewing ? previewOffice : user?.unitName,
     positionTitle: isPreviewing ? previewPosition : user?.position,
   })) return <NotFound />;
+  if (moduleId === 'learning-development' && searchParams.get('view') === 'summary') return <LearningProgramsSummary />;
   if (moduleId === 'policies-issuances') return <PoliciesIssuances module={mod} />;
   if (moduleId === 'recruitment') return <RecruitmentOnboarding module={mod} />;
   if (moduleId === 'human-resources') return <HumanResources module={mod} taskSubject="Human Resource" />;

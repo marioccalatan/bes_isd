@@ -1111,11 +1111,51 @@ export async function fetchRecruitmentRecords(token: string) {
   return result.records;
 }
 
+export interface TrainingSeminar {
+  id: string;
+  name: string;
+  address: string | null;
+  dateFrom: string | null;
+  dateTo: string | null;
+  hours: number | null;
+  type: string | null;
+  conductedBy: string | null;
+  status: string | null;
+  workplan: string | null;
+  categories: string[];
+}
+
+export async function fetchTrainingSeminars(token: string) {
+  const result = await apiRequest<{ programs: TrainingSeminar[]; canEdit: boolean }>('/api/hro/training-seminars', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result;
+}
+
+export async function saveTrainingSeminar(token: string, input: Omit<TrainingSeminar, 'id'>, id?: string) {
+  const result = await apiRequest<{ program: TrainingSeminar }>(`/api/hro/training-seminars${id ? `/${encodeURIComponent(id)}` : ''}`, {
+    method: id ? 'PUT' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
+  });
+  return result.program;
+}
+
 export async function fetchHrEmployees(token: string) {
   const result = await apiRequest<{ employees: HrEmployee[] }>('/api/hro/employees', {
     headers: { authorization: `Bearer ${token}` },
   });
   return result.employees;
+}
+
+export async function fetchTrainingParticipants(token: string, trainingId: string) {
+  return apiRequest<{ employeeNos: string[] }>(`/api/hro/training-seminars/${encodeURIComponent(trainingId)}/participants`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+export async function addTrainingParticipants(token: string, trainingId: string, employeeNos: string[]) {
+  return apiRequest<{ employeeNos: string[]; added: number }>(`/api/hro/training-seminars/${encodeURIComponent(trainingId)}/participants`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ employeeNos }),
+  });
 }
 
 export async function fetchOrganization(token: string) {

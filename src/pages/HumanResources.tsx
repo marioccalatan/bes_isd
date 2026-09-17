@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, BriefcaseBusiness, Building2, ChevronDown, ChevronRight, Download, FileSpreadsheet, Network, Paperclip, Pencil, Plus, Printer, Search, Settings, Trash2 } from 'lucide-react';
 import { HroTaskProcessingDrawer } from '@/components/shared/HroTaskProcessingDrawer';
+import { LearningPrograms } from '@/components/shared/LearningPrograms';
 import { MemberProgramsCsr } from '@/components/member-programs/MemberProgramsCsr';
 import { MemberProgramsOperations } from '@/components/member-programs/MemberProgramsOperations';
 import { MemberProgramsPrograms } from '@/components/member-programs/MemberProgramsPrograms';
@@ -147,6 +148,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
   const [processingRecords, setProcessingRecords] = useState<PolicyTaskProcessing[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<WorkspaceRecord | null>(null);
   const [csrCount, setCsrCount] = useState(0);
+  const [learningProgramCount, setLearningProgramCount] = useState<number | undefined>(undefined);
   const [communityRelationsCount, setCommunityRelationsCount] = useState(0);
   const [programDraft, setProgramDraft] = useState<MemberProgramInput | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
@@ -644,7 +646,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
       </div>}
 
       <Tabs
-        tabs={[{ value: 'tasks', label: 'Tasks', count: tasks.length }, ...(module.id === 'member-programs' ? [{ value: 'csr', label: 'CSR', count: csrCount }, { value: 'community-relations', label: 'Community Relations', count: communityRelationsCount }, { value: 'operations', label: 'Operations' }, { value: 'programs', label: 'Programs' }] : [...(module.id === 'human-resources' ? [{ value: 'employees', label: 'Employees', count: employees.length }, { value: 'organization', label: 'Organization', count: organization.length || undefined }] : []), { value: 'records', label: 'Records', count: module.records.length }]) ]}
+        tabs={[{ value: 'tasks', label: 'Tasks', count: tasks.length }, ...(module.id === 'learning-development' ? [{ value: 'learning-programs', label: 'Programs', count: learningProgramCount }] : []), ...(module.id === 'member-programs' ? [{ value: 'csr', label: 'CSR', count: csrCount }, { value: 'community-relations', label: 'Community Relations', count: communityRelationsCount }, { value: 'operations', label: 'Operations' }, { value: 'programs', label: 'Programs' }] : [...(module.id === 'human-resources' ? [{ value: 'employees', label: 'Employees', count: employees.length }, { value: 'organization', label: 'Organization', count: organization.length || undefined }] : []), { value: 'records', label: 'Records', count: module.records.length }]) ]}
         value={tab}
         onChange={(value) => { setTab(value); setSearch(''); }}
         className="mb-5"
@@ -683,7 +685,7 @@ export default function HumanResources({ module, taskSubject }: { module: Worksp
           <DataTable columns={employeeColumns} rows={employeePageRows} getRowId={(employee) => employee.employeeNo} onRowClick={openEmployee} sortKey={employeeSortKey} sortDir={employeeSortDir} onSort={toggleEmployeeSort} columnFilters={employeeFilters} onColumnFilterChange={(key, value) => { setEmployeeFilters((current) => ({ ...current, [key]: value })); setEmployeePage(1); }} cardTitle={(employee) => `${employee.lastName}, ${employee.firstName}`} emptyTitle="No active employees" emptyDescription="No active employee records match the current column filters." minWidthPx={1260} />
           {!employeesLoading && <Pagination page={safeEmployeePage} pageCount={employeePageCount} onChange={setEmployeePage} total={filteredEmployees.length} pageSize={employeePageSize} />}
         </CardContent>
-      </Card> : <Card>
+      </Card> : tab === 'learning-programs' && module.id === 'learning-development' ? <LearningPrograms onCountChange={setLearningProgramCount} /> : <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div><CardTitle>{tab === 'tasks' ? `${module.name} Tasks` : `${module.name} Records`}</CardTitle>
           <p className="mt-1 text-sm text-slate-500">{tab === 'tasks' ? (taskSubject ? `Live My Work tasks whose subject is ${taskSubject}.` : 'Live My Work tasks assigned to the Human Resource Office.') : `${module.name} operational records.`}</p></div>
