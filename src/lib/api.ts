@@ -1156,6 +1156,17 @@ export interface TrainingParticipant {
 }
 
 export interface TrainingCategory { id: string; name: string; usageCount: number }
+export interface TrainingResourcePerson {
+  id: string; lastName: string; firstName: string; middleName: string; fullName: string;
+  company: string; specializations: string; email: string; contactNumber: string; affiliation: string; profileName: string | null;
+}
+export type ResourcePersonInput = Omit<TrainingResourcePerson, 'id' | 'fullName' | 'profileName'> & { profile?: { name: string; base64: string } | null };
+export function manageResourcePersons(token: string, method = 'GET', id?: string, input?: ResourcePersonInput) {
+  return apiRequest<{ people: TrainingResourcePerson[] }>(`/api/hro/training-resource-persons${id ? `/${encodeURIComponent(id)}` : ''}`, { method, headers: { authorization: `Bearer ${token}` }, ...(input ? { body: JSON.stringify(input) } : {}) });
+}
+export function fetchResourcePersonProfile(token: string, id: string) {
+  return apiRequest<{ name: string; base64: string }>(`/api/hro/training-resource-persons/${encodeURIComponent(id)}/profile`, { headers: { authorization: `Bearer ${token}` } });
+}
 export async function manageTrainingCategories(token: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', id?: string, name?: string) {
   return apiRequest<{ categories: TrainingCategory[] }>(`/api/hro/training-categories${id ? `/${encodeURIComponent(id)}` : ''}`, {
     method, headers: { authorization: `Bearer ${token}` }, ...(name !== undefined ? { body: JSON.stringify({ name }) } : {}),

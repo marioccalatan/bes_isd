@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import oracledb from 'oracledb';
+import { resourcePersonsRequest } from './training-resource-persons.mjs';
 import { config } from './config.mjs';
 import {
   getDatabaseRuntimeStatus,
@@ -3252,6 +3253,17 @@ async function handle(req, res) {
       if (!subject) throw Object.assign(new Error('Subject is required.'), { statusCode: 400 });
       await withConnection(async (c) => { if (kind === 'qualifications') await c.execute(`UPDATE bes_hr_qualifications SET position_level=:positionLevel,subject=:subject,qualification_level=:qualificationLevel,description=:description,updated_at=SYSTIMESTAMP WHERE qualification_id=:itemId`, { itemId, positionLevel, subject, qualificationLevel, description }); else if (kind === 'duties') await c.execute(`UPDATE bes_hr_duties SET position_level=:positionLevel,subject=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE duty_id=:itemId`, { itemId, positionLevel, subject, description }); else await c.execute(`UPDATE bes_hr_job_spec SET position_level=:positionLevel,specification=:subject,description=:description,updated_at=SYSTIMESTAMP WHERE job_spec_id=:itemId`, { itemId, positionLevel, subject, description }); await c.commit(); });
       return json(res, 200, { ok: true });
+    }
+    const resourcePersonMatch = req.url.match(/^\/api\/hro\/training-resource-persons(?:\/(\d+))?(\/profile)?$/);
+    if (resourcePersonMatch && ['GET','POST','PUT','DELETE'].includes(req.method)) {
+      const body = ['POST','PUT'].includes(req.method) ? await readBody(req) : null;
+      const result = await withConnection(async (c) => {
+        const user = await currentSessionUser(c, bearerToken(req));
+        if (!user) throw Object.assign(new Error('Session required.'), { statusCode: 401 });
+        if (!await canManageTrainingPrograms(c, user)) throw Object.assign(new Error('Training program edit access required.'), { statusCode: 403 });
+        return resourcePersonsRequest(c, req.method, resourcePersonMatch[1] ? Number(resourcePersonMatch[1]) : null, Boolean(resourcePersonMatch[2]), body);
+      });
+      return json(res, 200, result);
     }
     const categoryMatch = req.url.match(/^\/api\/hro\/training-categories(?:\/(\d+))?$/);
     if (categoryMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(req.method)) {

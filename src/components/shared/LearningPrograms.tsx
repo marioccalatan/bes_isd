@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Checkbox, Input, Label, Select } from '@/components/ui/input';
 import { Toolbar } from './Toolbar';
+import { TrainingResourcePersonManager } from './TrainingResourcePersonManager';
 import { TrainingCategoryManager } from './TrainingCategoryManager';
 import { TrainingEmployeeList } from './TrainingEmployeeList';
 import { TrainingParticipantsDialog } from './TrainingParticipantsDialog';
@@ -46,6 +47,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
   const [viewParticipantTraining, setViewParticipantTraining] = useState<TrainingSeminar | null>(null);
   const [open, setOpen] = useState(false);
   const [manageCategories, setManageCategories] = useState(false);
+  const [manageResources, setManageResources] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const emptyForm = { name: '', address: '', dateFrom: '', dateTo: '', hours: '', programCost: '', budgetCost: '', type: '', conductedBy: '', status: '', workplan: '', categories: [] as string[] };
@@ -113,7 +115,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
         <Pagination page={table.page} pageCount={table.pageCount} onChange={table.setPage} total={table.filteredCount} pageSize={20} />
       </>}
     </CardContent>
-    <Dialog open={open && !manageCategories} onClose={() => { if (!saving) setOpen(false); }} title={editingId ? 'Edit Training / Seminar' : 'Add Training / Seminar'} size="lg" footer={<><Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" form="training-program-form" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save Changes' : 'Add Program'}</Button></>}>
+    <Dialog open={open && !manageCategories && !manageResources} onClose={() => { if (!saving) setOpen(false); }} title={editingId ? 'Edit Training / Seminar' : 'Add Training / Seminar'} size="lg" footer={<><Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" form="training-program-form" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save Changes' : 'Add Program'}</Button></>}>
       <form id="training-program-form" className="grid gap-4 sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         {formError && <p role="alert" className="text-sm text-red-600 sm:col-span-2">{formError}</p>}
         <div className="sm:col-span-2"><Label htmlFor="training-name" required>Training / Seminar</Label><Input id="training-name" required maxLength={1000} disabled={saving} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></div>
@@ -136,9 +138,10 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
           </details>
           {form.categories.length > 0 && <p className="mt-2 text-xs text-slate-500">{categoryOptions.filter((option) => form.categories.includes(option.id)).map((option) => option.name).join('; ')}</p>}
         </div>
-        <div className="sm:col-span-2"><Label htmlFor="training-organizer">Conducted By</Label><Input id="training-organizer" maxLength={2000} disabled={saving} value={form.conductedBy} onChange={(event) => setForm({ ...form, conductedBy: event.target.value })} /></div>
+        <div className="sm:col-span-2"><Button type="button" size="sm" variant="outline" className="mb-2 float-right" disabled={saving} onClick={() => setManageResources(true)}>Manage Resource Person</Button><Label htmlFor="training-organizer">Conducted By</Label><Input id="training-organizer" maxLength={2000} disabled={saving} value={form.conductedBy} onChange={(event) => setForm({ ...form, conductedBy: event.target.value })} /></div>
       </form>
     </Dialog>
+    {manageResources && <TrainingResourcePersonManager onClose={() => setManageResources(false)} onUse={(person) => { setForm((current) => ({ ...current, conductedBy: [person.fullName, person.company].filter(Boolean).join(', ') })); setManageResources(false); }} />}
     {manageCategories && <TrainingCategoryManager onClose={() => setManageCategories(false)} onChange={(rows) => { setCategoryOptions(rows); setForm((current) => ({ ...current, categories: current.categories.filter((id) => rows.some((row) => row.id === id)) })); }} />}
     {participantTraining && <TrainingParticipantsDialog key={participantTraining.id} training={participantTraining} onClose={() => setParticipantTraining(null)} onSaved={(count) => setPrograms((current) => current.map((row) => row.id === participantTraining.id ? { ...row, participantCount: count } : row))} />}
     {viewParticipantTraining && <TrainingParticipantsViewDialog key={viewParticipantTraining.id} training={viewParticipantTraining} onClose={() => setViewParticipantTraining(null)} onAdd={() => { setParticipantTraining(viewParticipantTraining); setViewParticipantTraining(null); }} />}
