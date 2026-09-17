@@ -3273,7 +3273,7 @@ async function handle(req, res) {
         const records = await c.execute(`SELECT ID, TS_NAME, TS_ADDRESS,
           TO_CHAR(TS_DATE_FROM, 'YYYY-MM-DD') AS DATE_FROM,
           TO_CHAR(TS_DATE_TO, 'YYYY-MM-DD') AS DATE_TO,
-          TS_HOURS, TS_TYPE, TS_CONDUCTEDBY, TS_STATUS, TS_WORKPLAN, TS_CATEGORY,
+          TS_HOURS, TS_PROGRAM_COST, TS_TYPE, TS_CONDUCTEDBY, TS_STATUS, TS_WORKPLAN, TS_CATEGORY,
           (SELECT COUNT(*) FROM BES_TRAINING_PARTICIPANTS p WHERE p.TRAINING_ID=t.ID) AS PARTICIPANT_COUNT
           FROM TRAINING_SEMINAR t ORDER BY TS_DATE_FROM DESC NULLS LAST, ID DESC`);
         return { ...records, canEdit: await canManageTrainingPrograms(c, user) };
@@ -3281,7 +3281,7 @@ async function handle(req, res) {
       if (!result) return json(res, 401, { error: 'Invalid session.' });
       return json(res, 200, { canEdit: result.canEdit, programs: result.rows.map((row) => ({
         id: String(row.ID), name: row.TS_NAME, address: row.TS_ADDRESS, participantCount: Number(row.PARTICIPANT_COUNT),
-        dateFrom: row.DATE_FROM, dateTo: row.DATE_TO, hours: row.TS_HOURS,
+        dateFrom: row.DATE_FROM, dateTo: row.DATE_TO, hours: row.TS_HOURS, programCost: row.TS_PROGRAM_COST,
         type: row.TS_TYPE, conductedBy: row.TS_CONDUCTEDBY, status: row.TS_STATUS, workplan: row.TS_WORKPLAN, categories: row.TS_CATEGORY ? JSON.parse(row.TS_CATEGORY) : [],
       })) });
     }
@@ -3378,7 +3378,7 @@ async function handle(req, res) {
           if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) badRequest(`Invalid ${key}.`);
           return value;
         };
-        const values = { name: textField('name', 1000), address: textField('address', 1000), dateFrom: dateField('dateFrom'), dateTo: dateField('dateTo'), type: textField('type', 10), conductedBy: textField('conductedBy', 2000), hours: body.hours ?? null, status: textField('status', 20), workplan: textField('workplan', 20) };
+        const values = { name: textField('name', 1000), address: textField('address', 1000), dateFrom: dateField('dateFrom'), dateTo: dateField('dateTo'), type: textField('type', 10), conductedBy: textField('conductedBy', 2000), hours: body.hours ?? null, programCost: body.programCost ?? null, status: textField('status', 20), workplan: textField('workplan', 20) };
         if (values.status !== null && !['Scheduled', 'Implemented'].includes(values.status)) badRequest('Status must be Scheduled or Implemented.');
         if (values.workplan !== null && !['Workplan', 'Additional'].includes(values.workplan)) badRequest('Workplan must be Workplan or Additional.');
         if (!Array.isArray(body.categories) || body.categories.some((category) => !TRAINING_CATEGORIES.includes(category))) badRequest('Select valid training categories.');
@@ -3387,15 +3387,16 @@ async function handle(req, res) {
         if (!values.name) badRequest('Training / Seminar name is required.');
         if (values.dateFrom && values.dateTo && values.dateTo < values.dateFrom) badRequest('End date must be on or after start date.');
         if (values.hours !== null && (typeof values.hours !== 'number' || !Number.isFinite(values.hours) || values.hours < 0 || values.hours > 99999999.99 || Math.abs(values.hours * 100 - Math.round(values.hours * 100)) > 0.000001)) badRequest('Hours must be a non-negative number with at most two decimal places.');
+        if (values.programCost !== null && (typeof values.programCost !== 'number' || !Number.isFinite(values.programCost) || values.programCost < 0 || values.programCost > 9999999999.99 || Math.abs(values.programCost * 100 - Math.round(values.programCost * 100)) > 0.0001)) badRequest('Program Cost must be a non-negative number with at most two decimal places.');
         let id = trainingProgramMatch[1];
         if (id) {
           const updated = await c.execute(`UPDATE TRAINING_SEMINAR SET TS_NAME=:name, TS_ADDRESS=:address,
             TS_DATE_FROM=TO_DATE(:dateFrom,'YYYY-MM-DD'), TS_DATE_TO=TO_DATE(:dateTo,'YYYY-MM-DD'),
-            TS_HOURS=:hours, TS_TYPE=:type, TS_CONDUCTEDBY=:conductedBy, TS_STATUS=:status, TS_WORKPLAN=:workplan, TS_CATEGORY=:categoriesJson WHERE ID=:id`, { ...values, id: Number(id) });
+            TS_HOURS=:hours, TS_PROGRAM_COST=:programCost, TS_TYPE=:type, TS_CONDUCTEDBY=:conductedBy, TS_STATUS=:status, TS_WORKPLAN=:workplan, TS_CATEGORY=:categoriesJson WHERE ID=:id`, { ...values, id: Number(id) });
           if (!updated.rowsAffected) throw Object.assign(new Error('Training program not found.'), { statusCode: 404 });
         } else {
-          const inserted = await c.execute(`INSERT INTO TRAINING_SEMINAR (TS_NAME,TS_ADDRESS,TS_DATE_FROM,TS_DATE_TO,TS_HOURS,TS_TYPE,TS_CONDUCTEDBY,TS_STATUS,TS_WORKPLAN,TS_CATEGORY)
-            VALUES (:name,:address,TO_DATE(:dateFrom,'YYYY-MM-DD'),TO_DATE(:dateTo,'YYYY-MM-DD'),:hours,:type,:conductedBy,:status,:workplan,:categoriesJson) RETURNING ID INTO :newId`, { ...values, newId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
+          const inserted = await c.execute(`INSERT INTO TRAINING_SEMINAR (TS_NAME,TS_ADDRESS,TS_DATE_FROM,TS_DATE_TO,TS_HOURS,TS_PROGRAM_COST,TS_TYPE,TS_CONDUCTEDBY,TS_STATUS,TS_WORKPLAN,TS_CATEGORY)
+            VALUES (:name,:address,TO_DATE(:dateFrom,'YYYY-MM-DD'),TO_DATE(:dateTo,'YYYY-MM-DD'),:hours,:programCost,:type,:conductedBy,:status,:workplan,:categoriesJson) RETURNING ID INTO :newId`, { ...values, newId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER } });
           id = String(inserted.outBinds.newId[0]);
         }
         await c.commit();

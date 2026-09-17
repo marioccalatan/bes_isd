@@ -1119,6 +1119,7 @@ export interface TrainingSeminar {
   dateFrom: string | null;
   dateTo: string | null;
   hours: number | null;
+  programCost: number | null;
   type: string | null;
   conductedBy: string | null;
   status: string | null;

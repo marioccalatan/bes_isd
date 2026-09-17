@@ -56,7 +56,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
-  const emptyForm = { name: '', address: '', dateFrom: '', dateTo: '', hours: '', type: '', conductedBy: '', status: '', workplan: '', categories: [] as string[] };
+  const emptyForm = { name: '', address: '', dateFrom: '', dateTo: '', hours: '', programCost: '', type: '', conductedBy: '', status: '', workplan: '', categories: [] as string[] };
   const [form, setForm] = useState(emptyForm);
   const years = useMemo(() => [...new Set(programs.flatMap((row) => row.dateFrom ? [row.dateFrom.slice(0, 4)] : []))].sort().reverse(), [programs]);
   const yearPrograms = useMemo(() => programs.filter((row) => !year || (year === 'undated' ? !row.dateFrom : row.dateFrom?.startsWith(`${year}-`))), [programs, year]);
@@ -64,7 +64,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
 
   function openForm(row?: TrainingSeminar) {
     setEditingId(row?.id);
-    setForm(row ? { name: row.name, address: row.address ?? '', dateFrom: row.dateFrom ?? '', dateTo: row.dateTo ?? '', hours: row.hours == null ? '' : String(row.hours), type: row.type ?? '', conductedBy: row.conductedBy ?? '', status: row.status ?? '', workplan: row.workplan ?? '', categories: row.categories ?? [] } : emptyForm);
+    setForm(row ? { name: row.name, address: row.address ?? '', dateFrom: row.dateFrom ?? '', dateTo: row.dateTo ?? '', hours: row.hours == null ? '' : String(row.hours), programCost: row.programCost == null ? '' : row.programCost.toFixed(2), type: row.type ?? '', conductedBy: row.conductedBy ?? '', status: row.status ?? '', workplan: row.workplan ?? '', categories: row.categories ?? [] } : emptyForm);
     setFormError('');
     setOpen(true);
   }
@@ -76,9 +76,11 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
     if (form.dateFrom && form.dateTo && form.dateTo < form.dateFrom) { setFormError('End date must be on or after start date.'); return; }
     const hours = form.hours === '' ? null : Number(form.hours);
     if (hours !== null && (!Number.isFinite(hours) || hours < 0 || hours > 99999999.99 || Math.abs(hours * 100 - Math.round(hours * 100)) > 0.000001)) { setFormError('Hours must be a non-negative number with at most two decimal places.'); return; }
+    const programCost = form.programCost === '' ? null : Number(form.programCost);
+    if (programCost !== null && (!Number.isFinite(programCost) || programCost < 0 || programCost > 9999999999.99 || Math.abs(programCost * 100 - Math.round(programCost * 100)) > 0.0001)) { setFormError('Program Cost must be a non-negative number with at most two decimal places.'); return; }
     setSaving(true);
     try {
-      const saved = await saveTrainingSeminar(token, { ...form, name: form.name.trim(), hours, dateFrom: form.dateFrom || null, dateTo: form.dateTo || null }, editingId);
+      const saved = await saveTrainingSeminar(token, { ...form, name: form.name.trim(), hours, programCost, dateFrom: form.dateFrom || null, dateTo: form.dateTo || null }, editingId);
       const updated = editingId ? programs.map((row) => row.id === editingId ? saved : row) : [saved, ...programs];
       setPrograms(updated);
       onCountChange(updated.length);
@@ -126,6 +128,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
         <div><Label htmlFor="training-end">End Date</Label><Input id="training-end" type="date" min={form.dateFrom || undefined} disabled={saving} value={form.dateTo} onChange={(event) => setForm({ ...form, dateTo: event.target.value })} /></div>
         <div><Label htmlFor="training-hours">Hours</Label><Input id="training-hours" type="number" min="0" max="99999999.99" step="0.01" disabled={saving} value={form.hours} onChange={(event) => setForm({ ...form, hours: event.target.value })} /></div>
         <div><Label htmlFor="training-type">Type</Label><Select id="training-type" disabled={saving} value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="">Select type</option>{[...new Set(['IN-HOUSE', 'OFF-PLANT', ...programs.flatMap((row) => row.type ? [row.type] : [])])].map((value) => <option key={value} value={value}>{value}</option>)}</Select></div>
+        <div><Label htmlFor="training-cost">Program Cost</Label><Input id="training-cost" type="number" min="0" max="9999999999.99" step="0.01" placeholder="0.00" disabled={saving} value={form.programCost} onChange={(event) => setForm({ ...form, programCost: event.target.value })} onBlur={() => { if (form.programCost && Number.isFinite(Number(form.programCost)) && /^\d+(\.\d{0,2})?$/.test(form.programCost)) setForm((current) => ({ ...current, programCost: Number(current.programCost).toFixed(2) })); }} /></div>
         <div><Label htmlFor="training-status">Status</Label><Select id="training-status" disabled={saving} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="">Select status</option><option value="Scheduled">Scheduled</option><option value="Implemented">Implemented</option></Select></div>
         <div><Label htmlFor="training-workplan">Workplan</Label><Select id="training-workplan" disabled={saving} value={form.workplan} onChange={(event) => setForm({ ...form, workplan: event.target.value })}><option value="">Select workplan</option><option value="Workplan">Workplan</option><option value="Additional">Additional</option></Select></div>
         <div className="sm:col-span-2">

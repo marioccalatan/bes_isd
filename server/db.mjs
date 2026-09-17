@@ -804,6 +804,7 @@ export async function initializeDatabase() {
       await addColumn(connection, `ALTER TABLE TRAINING_SEMINAR ADD (TS_STATUS VARCHAR2(20))`);
       await addColumn(connection, `ALTER TABLE TRAINING_SEMINAR ADD (TS_WORKPLAN VARCHAR2(20))`);
       await addColumn(connection, `ALTER TABLE TRAINING_SEMINAR ADD (TS_CATEGORY VARCHAR2(2000))`);
+      await addColumn(connection, `ALTER TABLE TRAINING_SEMINAR ADD (TS_PROGRAM_COST NUMBER(12,2))`);
       await runDdl(connection, `CREATE TABLE BES_TRAINING_PARTICIPANTS (
         TRAINING_ID NUMBER NOT NULL,
         EMPLOYEE_NO VARCHAR2(10) NOT NULL,
