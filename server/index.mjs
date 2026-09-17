@@ -3273,13 +3273,14 @@ async function handle(req, res) {
         const records = await c.execute(`SELECT ID, TS_NAME, TS_ADDRESS,
           TO_CHAR(TS_DATE_FROM, 'YYYY-MM-DD') AS DATE_FROM,
           TO_CHAR(TS_DATE_TO, 'YYYY-MM-DD') AS DATE_TO,
-          TS_HOURS, TS_TYPE, TS_CONDUCTEDBY, TS_STATUS, TS_WORKPLAN, TS_CATEGORY
-          FROM TRAINING_SEMINAR ORDER BY TS_DATE_FROM DESC NULLS LAST, ID DESC`);
+          TS_HOURS, TS_TYPE, TS_CONDUCTEDBY, TS_STATUS, TS_WORKPLAN, TS_CATEGORY,
+          (SELECT COUNT(*) FROM BES_TRAINING_PARTICIPANTS p WHERE p.TRAINING_ID=t.ID) AS PARTICIPANT_COUNT
+          FROM TRAINING_SEMINAR t ORDER BY TS_DATE_FROM DESC NULLS LAST, ID DESC`);
         return { ...records, canEdit: await canManageTrainingPrograms(c, user) };
       });
       if (!result) return json(res, 401, { error: 'Invalid session.' });
       return json(res, 200, { canEdit: result.canEdit, programs: result.rows.map((row) => ({
-        id: String(row.ID), name: row.TS_NAME, address: row.TS_ADDRESS,
+        id: String(row.ID), name: row.TS_NAME, address: row.TS_ADDRESS, participantCount: Number(row.PARTICIPANT_COUNT),
         dateFrom: row.DATE_FROM, dateTo: row.DATE_TO, hours: row.TS_HOURS,
         type: row.TS_TYPE, conductedBy: row.TS_CONDUCTEDBY, status: row.TS_STATUS, workplan: row.TS_WORKPLAN, categories: row.TS_CATEGORY ? JSON.parse(row.TS_CATEGORY) : [],
       })) });
@@ -3296,9 +3297,14 @@ async function handle(req, res) {
         const training = await c.execute(`SELECT ID FROM TRAINING_SEMINAR WHERE ID=:trainingId${body ? ' FOR UPDATE' : ''}`, { trainingId });
         if (!training.rows.length) throw Object.assign(new Error('Training program not found.'), { statusCode: 404 });
         let added = 0;
+        let removed = 0;
         if (body) {
-          if (!Array.isArray(body.employeeNos) || !body.employeeNos.length || body.employeeNos.length > 2000 || body.employeeNos.some((value) => typeof value !== 'string' || !value.trim() || Buffer.byteLength(value.trim()) > 10)) throw Object.assign(new Error('Select valid employees.'), { statusCode: 400 });
+          if (!Array.isArray(body.employeeNos) || body.employeeNos.length > 2000 || body.employeeNos.some((value) => typeof value !== 'string' || !value.trim() || Buffer.byteLength(value.trim()) > 10)) throw Object.assign(new Error('Select valid employees.'), { statusCode: 400 });
           const employeeNos = [...new Set(body.employeeNos.map((value) => value.trim()))];
+          const removeValues = body.removeEmployeeNos ?? [];
+          if (!Array.isArray(removeValues) || removeValues.length > 2000 || removeValues.some((value) => typeof value !== 'string' || !value.trim() || Buffer.byteLength(value.trim()) > 10)) throw Object.assign(new Error('Select valid participants to remove.'), { statusCode: 400 });
+          const removeEmployeeNos = [...new Set(removeValues.map((value) => value.trim()))];
+          if (removeEmployeeNos.some((id) => employeeNos.includes(id))) throw Object.assign(new Error('A participant cannot be added and removed together.'), { statusCode: 400 });
           const described = await c.execute('SELECT * FROM HR_EMP_MASTERFILE WHERE 1=0');
           const employeeColumns = new Set(described.metaData.map((column) => column.name));
           const positionColumns = ['CURRENT_POSITION_TYPE', 'POSITION_TYPE', 'OFFICIAL_POSITION_TYPE'].filter((column) => employeeColumns.has(column));
@@ -3314,10 +3320,19 @@ async function handle(req, res) {
               WHERE NOT EXISTS (SELECT 1 FROM BES_TRAINING_PARTICIPANTS WHERE TRAINING_ID=:trainingId AND EMPLOYEE_NO=:employeeNo)`, { trainingId, employeeNo, userId: user.USER_ID });
             added += inserted.rowsAffected;
           }
+          for (const employeeNo of removeEmployeeNos) {
+            const deleted = await c.execute('DELETE FROM BES_TRAINING_PARTICIPANTS WHERE TRAINING_ID=:trainingId AND EMPLOYEE_NO=:employeeNo', { trainingId, employeeNo });
+            removed += deleted.rowsAffected;
+          }
         }
-        const participants = await c.execute(`SELECT EMPLOYEE_NO FROM BES_TRAINING_PARTICIPANTS WHERE TRAINING_ID=:trainingId ORDER BY EMPLOYEE_NO`, { trainingId });
+        const participants = await c.execute(`SELECT p.EMPLOYEE_NO, e.E_LAST, e.E_FIRST, e.E_MIDDLE, e.ACTIVE_STAT
+          FROM BES_TRAINING_PARTICIPANTS p LEFT JOIN HR_EMP_MASTERFILE e ON e.EMPNO=p.EMPLOYEE_NO
+          WHERE p.TRAINING_ID=:trainingId ORDER BY UPPER(e.E_LAST),UPPER(e.E_FIRST),p.EMPLOYEE_NO`, { trainingId });
         if (body) await c.commit();
-        return { employeeNos: participants.rows.map((row) => row.EMPLOYEE_NO), added };
+        return { employeeNos: participants.rows.map((row) => row.EMPLOYEE_NO), added, removed,
+          participants: participants.rows.map((row) => ({ employeeNo: row.EMPLOYEE_NO,
+            name: row.E_LAST ? `${row.E_LAST}, ${[row.E_FIRST, row.E_MIDDLE].filter(Boolean).join(' ')}` : row.EMPLOYEE_NO,
+            employmentStatus: row.ACTIVE_STAT ?? null })) };
       });
       return json(res, 200, result);
     }
@@ -3364,7 +3379,8 @@ async function handle(req, res) {
         }
         await c.commit();
         delete values.categoriesJson;
-        return { id, ...values, categories };
+        const participantCount = (await c.execute('SELECT COUNT(*) TOTAL FROM BES_TRAINING_PARTICIPANTS WHERE TRAINING_ID=:id', { id: Number(id) })).rows[0].TOTAL;
+        return { id, ...values, categories, participantCount: Number(participantCount) };
       });
       return json(res, req.method === 'POST' ? 201 : 200, { program: result });
     }

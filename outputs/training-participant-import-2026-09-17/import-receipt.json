@@ -1,0 +1,16 @@
+{
+  "committedAt": "2026-09-17T02:39:39.396Z",
+  "inserted": 7625,
+  "preserved": 1,
+  "totalParticipants": 7626,
+  "sourceRows": 9093,
+  "sourceEmployees": 335,
+  "matchedEmployees": 275,
+  "unresolvedEmployees": 60,
+  "unresolvedRows": 1457,
+  "distinctPairs": 7626,
+  "duplicateSourceRows": 10,
+  "alreadyPresent": 1,
+  "toInsert": 7625,
+  "trainingIdsVerified": 1257
+}

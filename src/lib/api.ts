@@ -1113,6 +1113,7 @@ export async function fetchRecruitmentRecords(token: string) {
 
 export interface TrainingSeminar {
   id: string;
+  participantCount: number;
   name: string;
   address: string | null;
   dateFrom: string | null;
@@ -1132,7 +1133,7 @@ export async function fetchTrainingSeminars(token: string) {
   return result;
 }
 
-export async function saveTrainingSeminar(token: string, input: Omit<TrainingSeminar, 'id'>, id?: string) {
+export async function saveTrainingSeminar(token: string, input: Omit<TrainingSeminar, 'id' | 'participantCount'>, id?: string) {
   const result = await apiRequest<{ program: TrainingSeminar }>(`/api/hro/training-seminars${id ? `/${encodeURIComponent(id)}` : ''}`, {
     method: id ? 'PUT' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),
   });
@@ -1146,15 +1147,21 @@ export async function fetchHrEmployees(token: string) {
   return result.employees;
 }
 
+export interface TrainingParticipant {
+  employeeNo: string;
+  name: string;
+  employmentStatus: string | null;
+}
+
 export async function fetchTrainingParticipants(token: string, trainingId: string) {
-  return apiRequest<{ employeeNos: string[] }>(`/api/hro/training-seminars/${encodeURIComponent(trainingId)}/participants`, {
+  return apiRequest<{ employeeNos: string[]; participants: TrainingParticipant[] }>(`/api/hro/training-seminars/${encodeURIComponent(trainingId)}/participants`, {
     headers: { authorization: `Bearer ${token}` },
   });
 }
 
-export async function addTrainingParticipants(token: string, trainingId: string, employeeNos: string[]) {
-  return apiRequest<{ employeeNos: string[]; added: number }>(`/api/hro/training-seminars/${encodeURIComponent(trainingId)}/participants`, {
-    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ employeeNos }),
+export async function addTrainingParticipants(token: string, trainingId: string, employeeNos: string[], removeEmployeeNos: string[] = []) {
+  return apiRequest<{ employeeNos: string[]; added: number; removed: number }>(`/api/hro/training-seminars/${encodeURIComponent(trainingId)}/participants`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ employeeNos, removeEmployeeNos }),
   });
 }
 

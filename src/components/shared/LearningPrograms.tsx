@@ -13,6 +13,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Checkbox, Input, Label, Select } from '@/components/ui/input';
 import { Toolbar } from './Toolbar';
 import { TrainingParticipantsDialog } from './TrainingParticipantsDialog';
+import { TrainingParticipantsViewDialog } from './TrainingParticipantsViewDialog';
 
 const TRAINING_CATEGORIES = [
   'Mandatory, Regulatory & Compliance',
@@ -35,6 +36,7 @@ const columns: Column<TrainingSeminar>[] = [
   { key: 'hours', header: 'Hours', sortable: true, render: (row) => row.hours ?? '—' },
   { key: 'type', header: 'Type', sortable: true, render: (row) => row.type || '—' },
   { key: 'conductedBy', header: 'Conducted By', sortable: true, render: (row) => row.conductedBy || '—' },
+  { key: 'participantCount', header: 'QTY Participants', sortable: true, render: (row) => row.participantCount.toLocaleString() },
 ];
 
 export function LearningPrograms({ onCountChange }: { onCountChange: (count: number) => void }) {
@@ -48,6 +50,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
   const [canEdit, setCanEdit] = useState(false);
   const [editingId, setEditingId] = useState<string>();
   const [participantTraining, setParticipantTraining] = useState<TrainingSeminar | null>(null);
+  const [viewParticipantTraining, setViewParticipantTraining] = useState<TrainingSeminar | null>(null);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -84,7 +87,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
     } finally { setSaving(false); }
   }
 
-  const tableColumns: Column<TrainingSeminar>[] = canEdit ? [...columns, { key: 'participants', header: 'Participants', render: (row) => <Button variant="outline" size="sm" onClick={() => setParticipantTraining(row)}>Add Participants</Button> }, { key: 'actions', header: 'Edit', render: (row) => <Button variant="ghost" size="icon" aria-label={`Edit ${row.name}`} onClick={() => openForm(row)}><Pencil className="h-4 w-4" /></Button> }] : columns;
+  const tableColumns: Column<TrainingSeminar>[] = canEdit ? [...columns, { key: 'participants', header: 'Participants', render: (row) => <div className="flex items-center gap-1"><Button variant="outline" size="sm" onClick={() => setParticipantTraining(row)}>Add</Button><Button variant="outline" size="sm" onClick={() => setViewParticipantTraining(row)}>View</Button></div> }, { key: 'actions', header: 'Edit', render: (row) => <Button variant="ghost" size="icon" aria-label={`Edit ${row.name}`} onClick={() => openForm(row)}><Pencil className="h-4 w-4" /></Button> }] : columns;
 
   useEffect(() => {
     let cancelled = false;
@@ -136,6 +139,7 @@ export function LearningPrograms({ onCountChange }: { onCountChange: (count: num
         <div className="sm:col-span-2"><Label htmlFor="training-organizer">Conducted By</Label><Input id="training-organizer" maxLength={2000} disabled={saving} value={form.conductedBy} onChange={(event) => setForm({ ...form, conductedBy: event.target.value })} /></div>
       </form>
     </Dialog>
-    {participantTraining && <TrainingParticipantsDialog key={participantTraining.id} training={participantTraining} onClose={() => setParticipantTraining(null)} />}
+    {participantTraining && <TrainingParticipantsDialog key={participantTraining.id} training={participantTraining} onClose={() => setParticipantTraining(null)} onSaved={(count) => setPrograms((current) => current.map((row) => row.id === participantTraining.id ? { ...row, participantCount: count } : row))} />}
+    {viewParticipantTraining && <TrainingParticipantsViewDialog key={viewParticipantTraining.id} training={viewParticipantTraining} onClose={() => setViewParticipantTraining(null)} onAdd={() => { setParticipantTraining(viewParticipantTraining); setViewParticipantTraining(null); }} />}
   </Card>;
 }
