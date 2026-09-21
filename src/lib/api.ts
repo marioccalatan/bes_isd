@@ -976,7 +976,16 @@ export async function createBfmProjectLink(token: string, projectId: string, inp
   return apiRequest<{ id: string }>(`/api/bfm/projects/${encodeURIComponent(projectId)}/links`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
 }
 export async function uploadBfmProjectFile(token: string, projectId: string, file: File, options: { folderName?: string; relativePath?: string } = {}) {
-  const response = await fetch(`/api/bfm/projects/${encodeURIComponent(projectId)}/files`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name), 'x-folder-name': encodeURIComponent(options.folderName || ''), 'x-relative-path': encodeURIComponent(options.relativePath || '') }, body: file });
+  const isGlb = /\.glb$/i.test(file.name) || file.type.toLowerCase() === 'model/gltf-binary';
+  const maxMb = isGlb ? 150 : 25;
+  if (!file.size) throw new Error('The selected file is empty.');
+  if (file.size > maxMb * 1024 * 1024) throw new Error(`${file.name} exceeds the ${maxMb} MB limit.`);
+  let response: Response;
+  try {
+    response = await fetch(`/api/bfm/projects/${encodeURIComponent(projectId)}/files`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': isGlb ? 'model/gltf-binary' : file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name), 'x-folder-name': encodeURIComponent(options.folderName || ''), 'x-relative-path': encodeURIComponent(options.relativePath || '') }, body: file });
+  } catch {
+    throw new Error(`The connection was interrupted while uploading ${file.name}. Refresh the file list before retrying. If this repeats, check that the server has the latest upload update.`);
+  }
   const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || 'Unable to upload project file.'); return body as { id: string };
 }
 export async function fetchBfmProjectFileBlob(token: string, resource: BfmProjectResource, signal?: AbortSignal) {

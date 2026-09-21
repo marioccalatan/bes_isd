@@ -73,10 +73,17 @@ const readBody = async (req, maxChars = 8_000_000) => {
 const readBinaryBody = async (req, maxBytes = 25 * 1024 * 1024, label = 'File') => {
   const chunks = [];
   let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > maxBytes) throw Object.assign(new Error(`${label} exceeds the ${Math.round(maxBytes / 1024 / 1024)} MB limit.`), { statusCode: 413 });
-    chunks.push(chunk);
+  try {
+    // Keep the socket alive on rejection so the client receives the JSON 413.
+    for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+      size += chunk.length;
+      if (size > maxBytes) throw Object.assign(new Error(`${label} exceeds the ${Math.round(maxBytes / 1024 / 1024)} MB limit.`), { statusCode: 413 });
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    chunks.length = 0;
+    req.resume();
+    throw error;
   }
   return Buffer.concat(chunks, size);
 };
@@ -4853,8 +4860,9 @@ async function handle(req, res) {
       const projectUid = decodeURIComponent(bfmProjectFilesMatch[1]); let originalName = ''; let relativePath = ''; let folderName = '';
       try { originalName = decodeURIComponent(normalize(req.headers['x-file-name'])); relativePath = decodeURIComponent(normalize(req.headers['x-relative-path'])); folderName = decodeURIComponent(normalize(req.headers['x-folder-name'])); } catch { return json(res, 400, { error: 'The file or folder name is invalid.' }); }
       if (!originalName) return json(res, 400, { error: 'File name is required.' });
-      const file = await readBinaryBody(req, 25 * 1024 * 1024, 'Project file'); if (!file.length) return json(res, 400, { error: 'The selected file is empty.' });
-      const resourceUid = `BFM-RES-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`; const mimeType = normalize(req.headers['content-type']) || 'application/octet-stream';
+      const isGlb = /\.glb$/i.test(originalName) || normalize(req.headers['content-type']).split(';')[0].toLowerCase() === 'model/gltf-binary';
+      const file = await readBinaryBody(req, (isGlb ? 150 : 25) * 1024 * 1024, isGlb ? 'GLB model' : 'Project file'); if (!file.length) return json(res, 400, { error: 'The selected file is empty.' });
+      const resourceUid = `BFM-RES-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`; const mimeType = isGlb ? 'model/gltf-binary' : normalize(req.headers['content-type']) || 'application/octet-stream';
       await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) throw Object.assign(new Error('Session expired.'), { statusCode: 401 });
         let folderUid = null;
