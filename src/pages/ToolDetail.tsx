@@ -20,6 +20,7 @@ import { canAccessTool } from '@/lib/toolAccess';
 import { BuildingFacilitiesOperations } from '@/components/building/BuildingFacilitiesOperations';
 import { BuildingFacilitiesProjects } from '@/components/building/BuildingFacilitiesProjects';
 import { VehicleFleetManagement } from '@/components/fleet/VehicleFleetManagement';
+import { VehicleFleetRecords } from '@/components/fleet/VehicleFleetRecords';
 import { fetchUserDirectory, updateWorkTask, type DirectoryUser } from '@/lib/api';
 import { useToast } from '@/context/ToastContext';
 
@@ -30,7 +31,8 @@ export default function ToolDetail() {
   const { toast } = useToast();
   const { effectiveRole, isPreviewing, previewDepartmentId, previewOffice, previewPosition } = useRolePreview();
   const navigate = useNavigate();
-  const [tab, setTab] = useState('tasks');
+  const defaultTab = toolCode === 'Vehicle Fleet Management System' ? 'records' : 'tasks';
+  const [tab, setTab] = useState(defaultTab);
   const [search, setSearch] = useState('');
   const [selectedTask, setSelectedTask] = useState<WorkItem | null>(null);
   const [editTaskForm, setEditTaskForm] = useState({ status: 'In Progress', priority: 'Normal' as Priority, dueDate: '', description: '' });
@@ -54,6 +56,11 @@ export default function ToolDetail() {
   const visibleTasks = useMemo(() => !query ? tasks : tasks.filter((item) => [
     item.id, item.title, item.requestorName, item.assigneeName, item.fields.controlNumber, item.fields.taskSubject,
   ].some((value) => String(value ?? '').toLowerCase().includes(query))), [query, tasks]);
+
+  useEffect(() => {
+    setTab(defaultTab);
+    setSearch('');
+  }, [toolCode, defaultTab]);
 
   useEffect(() => {
     if (!addTaskOpen) return;
@@ -141,6 +148,8 @@ export default function ToolDetail() {
         <CardContent>
           {tab === 'tasks' ? (
             <><Toolbar search={search} onSearchChange={setSearch} placeholder="Search task, control number, subject…" /><DataTable columns={columns} rows={visibleTasks} getRowId={(item) => item.id} onRowClick={openTaskModal} cardTitle={(item) => item.title} emptyTitle={`No ${tool.code} tasks`} emptyDescription={subjects.size ? 'Matching My Work tasks will appear here automatically.' : 'Configure at least one Task Subject for this tool in Administration.'} /></>
+          ) : tab === 'records' && hasFleet ? (
+            <VehicleFleetRecords />
           ) : tab === 'records' ? (
             <div className="rounded-lg border border-dashed border-slate-200 px-6 py-10 text-center"><p className="font-medium text-slate-700">{tool.recordsTable ? 'No Oracle records found' : 'Oracle table not configured'}</p><p className="mt-1 text-sm text-slate-500">{tool.recordsTable ? `Records for this tool are sourced from ${tool.recordsTable}.` : 'A BES_ISD_XXXXX Oracle table will be connected when this tool’s Records module is implemented.'}</p></div>
           ) : tab === 'fleet' ? (

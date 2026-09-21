@@ -4084,7 +4084,7 @@ async function handle(req, res) {
         return json(res, 200, { vehicles: [...vehicles.values()] });
       });
     }
-    if (req.method === 'GET' && req.url === '/api/fleet/master-vehicles') {
+    if (req.method === 'GET' && ['/api/fleet/master-vehicles', '/api/fleet/records'].includes(req.url)) {
       const token = bearerToken(req);
       if (!token) return json(res, 401, { error: 'Session required.' });
       const sessionUser = await withConnection((c) => currentSessionUser(c, token));
@@ -4092,7 +4092,8 @@ async function handle(req, res) {
       return await withConnection(async (connection) => {
         const result = await connection.execute(`SELECT id,vehicle_no,plate_no,model,year_model,brand,description,driver,department,
           acquired_date,acquired_cost,engine_no,chasis_no,remarks,fuel_type,status,vehicle_type,fuel_eff
-          FROM vms_vehicle_mast WHERE NVL(deleted,0)=0 AND status='ACTIVE' AND vehicle_type IS NOT NULL
+          FROM vms_vehicle_mast WHERE NVL(deleted,0)=0
+          ${req.url === '/api/fleet/master-vehicles' ? "AND status='ACTIVE' AND vehicle_type IS NOT NULL" : "AND asset_type='VEHICLE' AND status='ACTIVE'"}
           ORDER BY vehicle_type,brand,model,plate_no`, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
         return json(res, 200, { vehicles: result.rows.map((row) => ({
           id: String(row.ID), vehicleNo: row.VEHICLE_NO, plateNo: row.PLATE_NO, model: row.MODEL, yearModel: row.YEAR_MODEL,

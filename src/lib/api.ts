@@ -484,6 +484,23 @@ export async function fetchFleetVehicles<T>(token: string) {
   return result.vehicles;
 }
 
+export type FleetVehicleRecord = {
+  id: string;
+  vehicleNo: string | null; plateNo: string | null; model: string | null;
+  yearModel: number | null; brand: string | null; description: string | null;
+  driver: string | null; department: string | null; acquiredDate: string | null;
+  acquiredCost: number | string | null; engineNo: string | null; chassisNo: string | null;
+  remarks: string | null; fuelType: string | null; status: string | null;
+  fuelEfficiency: number | null; vehicleType: string | null;
+};
+
+export async function fetchFleetRecords(token: string) {
+  const result = await apiRequest<{ vehicles: FleetVehicleRecord[] }>('/api/fleet/records', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result.vehicles;
+}
+
 export async function fetchFleetMasterVehicles<T>(token: string) {
   const result = await apiRequest<{ vehicles: T }>('/api/fleet/master-vehicles', {
     headers: { authorization: `Bearer ${token}` },
