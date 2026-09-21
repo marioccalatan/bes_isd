@@ -1205,6 +1205,18 @@ export async function fetchOrganization(token: string) {
   return result.organization;
 }
 
+export type PlantillaRow = {
+  id: string; name: string; deptId: string | null; officeId: string | null; groupId: string | null;
+  departmentName: string | null; departmentCode: string | null; officeName: string | null;
+};
+
+export async function fetchPlantilla(token: string) {
+  const result = await apiRequest<{ plantilla: PlantillaRow[] }>('/api/hro/organization2', {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return result.plantilla;
+}
+
 export async function saveOrganizationNode(token: string, input: Record<string, unknown>) {
   return apiRequest<{ ok: true }>('/api/hro/organization', {
     method: input.id ? 'PUT' : 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(input),

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { readPlantilla } from './plantilla.mjs';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -3018,6 +3019,15 @@ async function handle(req, res) {
       if (!result) return json(res, 404, { error: 'Policy record not found.' });
       return json(res, 200, { ok: true });
     }
+    if (req.method === 'GET' && req.url === '/api/hro/organization2') {
+      const token = bearerToken(req);
+      if (!token) return json(res, 401, { error: 'Session required.' });
+      const result = await withConnection(async (c) => {
+        if (!await currentSessionUser(c, token)) return null;
+        return readPlantilla(c);
+      });
+      return result ? json(res, 200, { plantilla: result }) : json(res, 401, { error: 'Session expired.' });
+    }
     if (req.method === 'GET' && req.url === '/api/hro/organization') {
       const token = bearerToken(req);
       if (!token) return json(res, 401, { error: 'Session required.' });
@@ -4041,7 +4051,7 @@ async function handle(req, res) {
       if (!token) return json(res, 401, { error: 'Session required.' });
       const sessionUser = await withConnection((c) => currentSessionUser(c, token));
       if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
-      return withConnection(async (connection) => {
+      return await withConnection(async (connection) => {
         const result = await connection.execute(`SELECT vehicle.id,vehicle.plate_no,vehicle.brand,vehicle.model,vehicle.description,
             vehicle.driver,vehicle.department,vehicle.vehicle_type,schedule.schedule_uid,schedule.schedule_type,
             TO_CHAR(schedule.start_date,'YYYY-MM-DD') start_date,TO_CHAR(schedule.end_date,'YYYY-MM-DD') end_date,
@@ -4072,7 +4082,7 @@ async function handle(req, res) {
       if (!token) return json(res, 401, { error: 'Session required.' });
       const sessionUser = await withConnection((c) => currentSessionUser(c, token));
       if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
-      return withConnection(async (connection) => {
+      return await withConnection(async (connection) => {
         const result = await connection.execute(`SELECT id,vehicle_no,plate_no,model,year_model,brand,description,driver,department,
           acquired_date,acquired_cost,engine_no,chasis_no,remarks,fuel_type,status,vehicle_type,fuel_eff
           FROM vms_vehicle_mast WHERE NVL(deleted,0)=0 AND status='ACTIVE' AND vehicle_type IS NOT NULL
@@ -4093,7 +4103,7 @@ async function handle(req, res) {
       const sessionUser = await withConnection((c) => currentSessionUser(c, token));
       if (!sessionUser) return json(res, 401, { error: 'Session expired.' });
       const vehicleMasterId = Number(fleetMasterActivityMatch[1]);
-      return withConnection(async (connection) => {
+      return await withConnection(async (connection) => {
         const schedules = await connection.execute(`SELECT schedule_uid,schedule_type,TO_CHAR(start_date,'YYYY-MM-DD') start_date,TO_CHAR(end_date,'YYYY-MM-DD') end_date,TO_CHAR(actual_maintenance_date,'YYYY-MM-DD') actual_maintenance_date,schedule_status,notes,created_at,updated_at
           FROM bes_fleet_schedules WHERE vehicle_master_id=:vehicleMasterId ORDER BY start_date DESC,created_at DESC`, { vehicleMasterId }, { outFormat: oracledb.OUT_FORMAT_OBJECT });
         const inspections = await connection.execute(`SELECT inspection_uid,TO_CHAR(inspection_date,'YYYY-MM-DD') inspection_date,inspected_by,inspection_status,findings,action_taken,recommendation,created_at,updated_at
@@ -4108,7 +4118,7 @@ async function handle(req, res) {
     if (renewalReceiptMatch && req.method === 'GET') {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
       const scheduleUid = decodeURIComponent(renewalReceiptMatch[1]);
-      return withConnection(async (c) => {
+      return await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' });
         const result = await c.execute(`SELECT or_number,TO_CHAR(receipt_date,'YYYY-MM-DD') receipt_date,amount_paid,issuing_office,file_name,mime_type,file_size
           FROM bes_fleet_renewal_receipts WHERE schedule_uid=:scheduleUid`, { scheduleUid }, { outFormat: oracledb.OUT_FORMAT_OBJECT });
@@ -4127,7 +4137,7 @@ async function handle(req, res) {
         if (!match || !allowedTypes.has(match[1])) return json(res, 400, { error: 'Attach a PDF, PNG, JPG/JPEG, or BMP file.' });
         fileBuffer = Buffer.from(match[2], 'base64'); fileName = safeFileName(String(body.attachment.name || 'attachment')); mimeType = match[1]; fileSize = fileBuffer.length;
       }
-      return withConnection(async (c) => {
+      return await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' });
         const schedule = await c.execute(`SELECT 1 FROM bes_fleet_schedules WHERE schedule_uid=:scheduleUid AND schedule_type='Registration Renewal'`, { scheduleUid });
         if (!schedule.rows.length) return json(res, 404, { error: 'Registration renewal schedule was not found.' });
@@ -4145,7 +4155,7 @@ async function handle(req, res) {
     if (renewalReceiptMatch && req.method === 'DELETE') {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
       const scheduleUid = decodeURIComponent(renewalReceiptMatch[1]);
-      return withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); await c.execute(`DELETE FROM bes_fleet_renewal_receipts WHERE schedule_uid=:scheduleUid`, { scheduleUid }); await c.commit(); return json(res, 200, { ok: true }); });
+      return await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); await c.execute(`DELETE FROM bes_fleet_renewal_receipts WHERE schedule_uid=:scheduleUid`, { scheduleUid }); await c.commit(); return json(res, 200, { ok: true }); });
     }
     const renewalAttachmentMatch = req.method === 'GET' && req.url?.match(/^\/api\/fleet\/renewal-receipts\/([^/]+)\/attachment$/);
     if (renewalAttachmentMatch) {
@@ -4166,7 +4176,7 @@ async function handle(req, res) {
       const startDate = normalize(body.startDate);
       const endDate = normalize(body.endDate);
       if (!Number.isFinite(vehicleMasterId) || !['Preventive Maintenance', 'Registration Renewal'].includes(scheduleType) || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return json(res, 400, { error: 'Vehicle, schedule type, and valid dates are required.' });
-      return withConnection(async (connection) => {
+      return await withConnection(async (connection) => {
         const exists = await connection.execute(`SELECT 1 FROM vms_vehicle_mast WHERE id=:vehicleMasterId AND NVL(deleted,0)=0`, { vehicleMasterId });
         if (!exists.rows[0]) return json(res, 404, { error: 'Vehicle master record was not found.' });
         const scheduleUid = `SCH-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -4183,7 +4193,7 @@ async function handle(req, res) {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' });
       const scheduleUid = decodeURIComponent(fleetScheduleStatusMatch[1]); const body = await readBody(req); const status = normalize(body.status);
       if (!['Scheduled','In Progress','Registered'].includes(status)) return json(res, 400, { error: 'Invalid renewal status.' });
-      return withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const result = await c.execute(`UPDATE bes_fleet_schedules SET schedule_status=:status,updated_at=SYSTIMESTAMP WHERE schedule_uid=:scheduleUid AND schedule_type='Registration Renewal'`, { status, scheduleUid }); if (!result.rowsAffected) return json(res, 404, { error: 'Registration renewal schedule was not found.' }); await c.commit(); return json(res, 200, { ok: true }); });
+      return await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const result = await c.execute(`UPDATE bes_fleet_schedules SET schedule_status=:status,updated_at=SYSTIMESTAMP WHERE schedule_uid=:scheduleUid AND schedule_type='Registration Renewal'`, { status, scheduleUid }); if (!result.rowsAffected) return json(res, 404, { error: 'Registration renewal schedule was not found.' }); await c.commit(); return json(res, 200, { ok: true }); });
     }
     const fleetMaintenanceUpdateMatch = req.method === 'PATCH' && req.url?.match(/^\/api\/fleet\/master-schedules\/([^/]+)\/maintenance$/);
     if (fleetMaintenanceUpdateMatch) {
@@ -4191,12 +4201,12 @@ async function handle(req, res) {
       const scheduleUid = decodeURIComponent(fleetMaintenanceUpdateMatch[1]); const body = await readBody(req); const status = normalize(body.status); const actualDate = nullableNormalize(body.actualDate);
       if (!['Scheduled','Completed'].includes(status)) return json(res, 400, { error: 'Invalid preventive maintenance status.' });
       if (actualDate && !/^\d{4}-\d{2}-\d{2}$/.test(actualDate)) return json(res, 400, { error: 'Invalid actual maintenance date.' });
-      return withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const result = await c.execute(`UPDATE bes_fleet_schedules SET schedule_status=:status,actual_maintenance_date=TO_DATE(:actualDate,'YYYY-MM-DD'),updated_at=SYSTIMESTAMP WHERE schedule_uid=:scheduleUid AND schedule_type='Preventive Maintenance'`, { status, actualDate, scheduleUid }); if (!result.rowsAffected) return json(res, 404, { error: 'Preventive maintenance schedule was not found.' }); await c.commit(); return json(res, 200, { ok: true }); });
+      return await withConnection(async (c) => { const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const result = await c.execute(`UPDATE bes_fleet_schedules SET schedule_status=:status,actual_maintenance_date=TO_DATE(:actualDate,'YYYY-MM-DD'),updated_at=SYSTIMESTAMP WHERE schedule_uid=:scheduleUid AND schedule_type='Preventive Maintenance'`, { status, actualDate, scheduleUid }); if (!result.rowsAffected) return json(res, 404, { error: 'Preventive maintenance schedule was not found.' }); await c.commit(); return json(res, 200, { ok: true }); });
     }
     const fleetInspectionRecordMatch = req.url?.match(/^\/api\/fleet\/master-inspections\/([^/]+)$/);
     if (fleetInspectionRecordMatch && req.method === 'GET') {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const inspectionUid = decodeURIComponent(fleetInspectionRecordMatch[1]);
-      return withConnection(async (c) => {
+      return await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' });
         const header = await c.execute(`SELECT inspection_uid,vehicle_master_id,TO_CHAR(inspection_date,'YYYY-MM-DD') inspection_date,inspected_by,inspection_status,findings,action_taken,recommendation FROM bes_fleet_inspections WHERE inspection_uid=:inspectionUid`, { inspectionUid }, { outFormat: oracledb.OUT_FORMAT_OBJECT });
         if (!header.rows[0]) return json(res, 404, { error: 'Inspection was not found.' });
@@ -4212,7 +4222,7 @@ async function handle(req, res) {
       const token = bearerToken(req); if (!token) return json(res, 401, { error: 'Session required.' }); const inspectionUid = decodeURIComponent(fleetInspectionRecordMatch[1]); const body = await readBody(req, 40_000_000);
       const inspectionDate = normalize(body.inspectionDate); const inspectedBy = normalize(body.inspectedBy); const inspectionStatus = normalize(body.inspectionStatus); const items = Array.isArray(body.items) ? body.items : [];
       if (!/^\d{4}-\d{2}-\d{2}$/.test(inspectionDate) || !inspectedBy || !inspectionStatus || !items.length) return json(res, 400, { error: 'Inspection date, inspector, status, and at least one detail are required.' });
-      return withConnection(async (c) => {
+      return await withConnection(async (c) => {
         const user = await currentSessionUser(c, token); if (!user) return json(res, 401, { error: 'Session expired.' }); const exists = await c.execute(`SELECT 1 FROM bes_fleet_inspections WHERE inspection_uid=:inspectionUid`, { inspectionUid }); if (!exists.rows.length) return json(res, 404, { error: 'Inspection was not found.' });
         const decodeImage = (item) => { if (!item?.dataUrl) return null; const match = String(item.dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s); if (!match) throw Object.assign(new Error('Inspection images must be valid images.'), { statusCode: 400 }); const buffer = Buffer.from(match[2], 'base64'); if (buffer.length > 12_000_000) throw Object.assign(new Error('Each inspection image must be 12 MB or smaller.'), { statusCode: 400 }); return { name: safeFileName(normalize(item.name) || 'inspection-image'), mimeType: match[1], buffer }; };
         await c.execute(`UPDATE bes_fleet_inspections SET inspection_date=TO_DATE(:inspectionDate,'YYYY-MM-DD'),inspected_by=:inspectedBy,inspection_status=:inspectionStatus,updated_at=SYSTIMESTAMP WHERE inspection_uid=:inspectionUid`, { inspectionDate, inspectedBy, inspectionStatus, inspectionUid });
@@ -4233,7 +4243,7 @@ async function handle(req, res) {
       const inspectionStatus = normalize(body.inspectionStatus);
       const items = Array.isArray(body.items) ? body.items : [];
       if (!Number.isFinite(vehicleMasterId) || !/^\d{4}-\d{2}-\d{2}$/.test(inspectionDate) || !inspectedBy || !inspectionStatus || !items.length) return json(res, 400, { error: 'Vehicle, inspection date, inspector, status, and at least one inspection detail are required.' });
-      return withConnection(async (connection) => {
+      return await withConnection(async (connection) => {
         const exists = await connection.execute(`SELECT 1 FROM vms_vehicle_mast WHERE id=:vehicleMasterId AND NVL(deleted,0)=0`, { vehicleMasterId });
         if (!exists.rows[0]) return json(res, 404, { error: 'Vehicle master record was not found.' });
         const inspectionUid = `INSP-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

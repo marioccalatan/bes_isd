@@ -196,6 +196,7 @@ async function syncPositionTitleLookup(connection) {
     long_desc VARCHAR2(200),
     postition_name VARCHAR2(200),
     postition_temp1 VARCHAR2(180),
+    position_temp2 VARCHAR2(180 BYTE),
     dept_id VARCHAR2(3),
     o_id VARCHAR2(5),
     group_id VARCHAR2(3),
@@ -205,6 +206,7 @@ async function syncPositionTitleLookup(connection) {
   )`);
   await addColumn(connection, `ALTER TABLE bes_hr_positiontitle_lookup ADD (postition_name VARCHAR2(200))`);
   await addColumn(connection, `ALTER TABLE bes_hr_positiontitle_lookup ADD (postition_temp1 VARCHAR2(180))`);
+  await addColumn(connection, `ALTER TABLE bes_hr_positiontitle_lookup ADD (position_temp2 VARCHAR2(180 BYTE))`);
   await addColumn(connection, `ALTER TABLE bes_hr_positiontitle_lookup ADD (copied_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL)`);
   await runDdl(connection, `CREATE INDEX ix_bes_hr_postitle_dept ON bes_hr_positiontitle_lookup (dept_id, o_id, active_stat)`);
   await connection.execute(`MERGE INTO bes_hr_positiontitle_lookup target
