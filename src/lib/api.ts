@@ -979,10 +979,13 @@ export async function uploadBfmProjectFile(token: string, projectId: string, fil
   const response = await fetch(`/api/bfm/projects/${encodeURIComponent(projectId)}/files`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name), 'x-folder-name': encodeURIComponent(options.folderName || ''), 'x-relative-path': encodeURIComponent(options.relativePath || '') }, body: file });
   const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || 'Unable to upload project file.'); return body as { id: string };
 }
+export async function fetchBfmProjectFileBlob(token: string, resource: BfmProjectResource, signal?: AbortSignal) {
+  const response = await fetch(`/api/bfm/project-resources/${encodeURIComponent(resource.id)}`, { headers: { authorization: `Bearer ${token}` }, signal });
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'Unable to load project file.'); }
+  return response.blob();
+}
 export async function downloadBfmProjectFile(token: string, resource: BfmProjectResource) {
-  const response = await fetch(`/api/bfm/project-resources/${encodeURIComponent(resource.id)}`, { headers: { authorization: `Bearer ${token}` } });
-  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || 'Unable to download project file.'); }
-  const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = resource.name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const url = URL.createObjectURL(await fetchBfmProjectFileBlob(token, resource)); const link = document.createElement('a'); link.href = url; link.download = resource.name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export type PolicyTaskStatus = 'Received' | 'Under Review' | 'For Approval' | 'Approved' | 'Issued' | 'Completed' | 'Returned';
