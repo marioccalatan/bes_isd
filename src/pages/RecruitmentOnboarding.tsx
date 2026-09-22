@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MessageSquarePlus, Save, Trash2 } from 'lucide-react';
+import { MessageSquarePlus, Plus, Save, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { HroTaskProcessingDrawer } from '@/components/shared/HroTaskProcessingDrawer';
 import { Toolbar } from '@/components/shared/Toolbar';
@@ -63,6 +63,7 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
   const [newPosition, setNewPosition] = useState('');
   const [profile, setProfile] = useState<ApplicantProfile>(EMPTY_PROFILE);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [addingApplicant, setAddingApplicant] = useState(false);
   const [archiveTaskId, setArchiveTaskId] = useState<string | null>(null);
   const [archiveProfile, setArchiveProfile] = useState<ApplicantProfile>(EMPTY_PROFILE);
   const [archiveStatus, setArchiveStatus] = useState<RecruitmentStatus>('Received');
@@ -250,14 +251,14 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
   }
 
   async function archiveTaskAsApplication() {
-    if (!archiveTask) return;
+    if (!archiveTask && !addingApplicant) return;
     if (!archiveProfile.firstName.trim() || !archiveProfile.lastName.trim()) {
       toast({ kind: 'error', title: 'Applicant name required', description: 'Enter the applicant’s first name and last name.' });
       return;
     }
     setSaving(true);
     try {
-      const result = await archiveRecruitmentTask(token, archiveTask.id, {
+      const result = await archiveRecruitmentTask(token, archiveTask?.id, {
         status: archiveStatus,
         positionApplying: archivePosition.trim() || undefined,
         remarks: archiveRemarks,
@@ -265,9 +266,11 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
       });
       setRecords((current) => [result.record, ...current.filter((record) => record.id !== result.record.id)]);
       setArchiveTaskId(null);
-      toast({ kind: 'success', title: 'Application archived', description: `${result.record.applicantName} is now available in the Applications tab.` });
+      setAddingApplicant(false);
+      setSearch('');
+      toast({ kind: 'success', title: addingApplicant ? 'Applicant added' : 'Application archived', description: `${result.record.applicantName} is now available in the Applications tab.` });
     } catch (error) {
-      toast({ kind: 'error', title: 'Unable to archive application', description: error instanceof Error ? error.message : 'Please try again.' });
+      toast({ kind: 'error', title: addingApplicant ? 'Unable to add applicant' : 'Unable to archive application', description: error instanceof Error ? error.message : 'Please try again.' });
     } finally {
       setSaving(false);
     }
@@ -407,7 +410,16 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
             : 'Recruitment-owned records stored in BES_HRO_RECRUITMENT_AND_ONBOARDING.'}</p>
         </CardHeader>
         <CardContent>
-          <div className="no-print"><Toolbar search={search} onSearchChange={setSearch} placeholder={tab === 'tasks' ? 'Search task, control number, creator…' : 'Search applicant, control number, position, status…'} onExport={tab === 'applications' ? exportApplicationsToExcel : undefined} onPrint={tab === 'applications' ? () => window.print() : undefined} exportLabel="Export to Excel" /></div>
+          <div className="no-print"><Toolbar search={search} onSearchChange={setSearch} placeholder={tab === 'tasks' ? 'Search task, control number, creator…' : 'Search applicant, control number, position, status…'} onExport={tab === 'applications' ? exportApplicationsToExcel : undefined} onPrint={tab === 'applications' ? () => window.print() : undefined} exportLabel="Export to Excel">
+            {tab === 'applications' && <Button size="sm" onClick={() => {
+              setArchiveTaskId(null);
+              setArchiveProfile({ ...EMPTY_PROFILE });
+              setArchiveStatus('Received');
+              setArchivePosition('');
+              setArchiveRemarks('');
+              setAddingApplicant(true);
+            }}><Plus className="h-4 w-4" aria-hidden="true" /> Add Applicants</Button>}
+          </Toolbar></div>
           {tab === 'tasks' ? (
             <DataTable
                 columns={taskColumns}
@@ -444,16 +456,16 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
         onArchive={selectedTask && !selectedTaskArchived ? () => beginArchiveTask(selectedTask) : undefined}
       />
 
-      <Drawer open={!!archiveTask} onClose={() => { if (!saving) setArchiveTaskId(null); }} title="Archive Application" widthClass="max-w-2xl">
-        {archiveTask && (
+      <Drawer open={!!archiveTask || addingApplicant} onClose={() => { if (!saving) { setArchiveTaskId(null); setAddingApplicant(false); } }} title={addingApplicant ? "Add Applicant" : "Archive Application"} widthClass="max-w-2xl">
+        {(archiveTask || addingApplicant) && (
           <div className="space-y-5">
             <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 text-sm">
-              <p className="font-medium text-slate-800">{archiveTask.title}</p>
+              {archiveTask ? <><p className="font-medium text-slate-800">{archiveTask.title}</p>
               <div className="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
                 <p>Source task: <span className="font-mono text-slate-700">{archiveTask.id}</span></p>
                 <p>Control no.: <span className="text-slate-700">{String(archiveTask.fields.controlNumber ?? '—')}</span></p>
               </div>
-              <p className="mt-2 text-xs text-slate-400">Complete the applicant information below. Saving creates the Recruitment and Onboarding application while preserving the source task.</p>
+              <p className="mt-2 text-xs text-slate-400">Complete the applicant information below. Saving creates the Recruitment and Onboarding application while preserving the source task.</p></> : <p>Enter the applicant’s details. Saving also creates a linked Application Letter task assigned to you.</p>}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -465,8 +477,8 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
               <div className="sm:col-span-2"><Label>Remarks</Label><Textarea value={archiveRemarks} onChange={(event) => setArchiveRemarks(event.target.value)} placeholder="Initial recruitment remarks" /></div>
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
-              <Button variant="outline" onClick={() => setArchiveTaskId(null)} disabled={saving}>Cancel</Button>
-              <Button onClick={archiveTaskAsApplication} disabled={saving}>{saving ? 'Archiving…' : 'Archive Application'}</Button>
+              <Button variant="outline" onClick={() => { setArchiveTaskId(null); setAddingApplicant(false); }} disabled={saving}>Cancel</Button>
+              <Button onClick={archiveTaskAsApplication} disabled={saving}>{saving ? 'Saving…' : addingApplicant ? 'Add Applicant' : 'Archive Application'}</Button>
             </div>
           </div>
         )}

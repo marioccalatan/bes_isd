@@ -1347,7 +1347,7 @@ export async function deleteRecruitmentRecord(token: string, recordId: string) {
   });
 }
 
-export async function archiveRecruitmentTask(token: string, sourceTaskId: string, input: {
+export async function archiveRecruitmentTask(token: string, sourceTaskId: string | undefined, input: {
   status: RecruitmentStatus;
   positionApplying?: string;
   remarks: string;
@@ -1368,7 +1368,7 @@ export async function archiveRecruitmentTask(token: string, sourceTaskId: string
   yearGraduated: string;
   applicationSource: string;
 }) {
-  return apiRequest<{ record: RecruitmentRecord }>('/api/hro/recruitment/archive', {
+  return apiRequest<{ record: RecruitmentRecord }>(sourceTaskId ? '/api/hro/recruitment/archive' : '/api/hro/recruitment', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
     body: JSON.stringify({ sourceTaskId, ...input }),

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { readPlantilla } from './plantilla.mjs';
 import fs from 'node:fs';
@@ -2423,11 +2424,12 @@ async function handle(req, res) {
       if (!result) return json(res, 401, { error: 'Session expired.' });
       return json(res, result.created ? 201 : 200, { positionName: result.positionName });
     }
-    if (req.method === 'POST' && req.url === '/api/hro/recruitment/archive') {
+    if (req.method === 'POST' && (req.url === '/api/hro/recruitment/archive' || req.url === '/api/hro/recruitment')) {
+      const creatingApplicant = req.url === '/api/hro/recruitment';
       const token = bearerToken(req);
       if (!token) return json(res, 401, { error: 'Session required.' });
       const body = await readBody(req);
-      const sourceTaskUid = normalize(body.sourceTaskId);
+      const sourceTaskUid = creatingApplicant ? `TASK-${randomUUID()}` : normalize(body.sourceTaskId);
       const status = normalize(body.status) || 'Received';
       const allowedStatuses = new Set(['Received', 'For Screening', 'For Interview', 'Qualified', 'Not Qualified', 'Applicant Pool', 'Hired', 'Withdrawn']);
       if (!sourceTaskUid) return json(res, 400, { error: 'Source task is required.' });
@@ -2457,6 +2459,16 @@ async function handle(req, res) {
       const result = await withConnection(async (c) => {
         const user = await currentSessionUser(c, token);
         if (!user) return null;
+        if (creatingApplicant) {
+          await c.execute(`INSERT INTO bes_work_tasks
+            (task_uid, title, department_code, task_subject, assigned_to_user_id, created_by_user_id)
+            VALUES (:sourceTaskUid, :title, :departmentCode, 'Application Letter', :userId, :userId)`, {
+            sourceTaskUid,
+            title: `Application Letter of ${[firstName, middleName, lastName, suffix].filter(Boolean).join(' ')}`,
+            departmentCode: user.DEPARTMENT_CODE ?? null,
+            userId: user.USER_ID,
+          });
+        }
         const task = await c.execute(`SELECT task_id, task_uid
           FROM bes_work_tasks
           WHERE task_uid = :sourceTaskUid
@@ -2469,6 +2481,7 @@ async function handle(req, res) {
         const recruitmentUid = existing.rows[0]?.RECRUITMENT_UID ?? `HRO-APP-${task.rows[0].TASK_ID}`;
         const binds = {
           recruitmentUid, status, positionApplying,
+          actionTaken: creatingApplicant ? 'Added directly' : 'Archived from Recruitment Task',
           remarks: remarks ? { val: remarks, type: oracledb.CLOB } : null,
           lastName, firstName, middleName, suffix, birthDate, sex, civilStatus, email, mobileNo,
           municipality, barangay, address, highestEducation, schoolName, yearGraduated, applicationSource,
@@ -2476,7 +2489,7 @@ async function handle(req, res) {
         };
         if (existing.rows[0]) {
           await c.execute(`UPDATE bes_hro_recruitment_and_onboarding SET
-              workflow_status = :status, action_taken = 'Archived from Recruitment Task',
+              workflow_status = :status, action_taken = :actionTaken,
               position_applying = :positionApplying, remarks = :remarks,
               last_name = :lastName, first_name = :firstName, middle_name = :middleName, suffix = :suffix,
               birth_date = CASE WHEN :birthDate IS NULL THEN NULL ELSE TO_DATE(:birthDate, 'YYYY-MM-DD') END,
@@ -2493,7 +2506,7 @@ async function handle(req, res) {
                municipality, barangay, address, highest_education, school_name, year_graduated,
                application_source, updated_by_user_id, is_active)
             VALUES
-              (:recruitmentUid, :sourceTaskUid, :status, 'Archived from Recruitment Task', :positionApplying, :remarks,
+              (:recruitmentUid, :sourceTaskUid, :status, :actionTaken, :positionApplying, :remarks,
                :lastName, :firstName, :middleName, :suffix,
                CASE WHEN :birthDate IS NULL THEN NULL ELSE TO_DATE(:birthDate, 'YYYY-MM-DD') END,
                :sex, :civilStatus, :email, :mobileNo, :municipality, :barangay, :address,
