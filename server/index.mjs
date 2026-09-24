@@ -1,3 +1,4 @@
+import { readRecruitmentProfile, saveRecruitmentProfile } from './recruitment-profile.mjs';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { readPlantilla } from './plantilla.mjs';
@@ -431,6 +432,7 @@ const recruitmentComment = (row) => ({
   updatedAt: localIso(row.UPDATED_AT),
 });
 const recruitmentRecord = (row, comments = []) => ({
+  ...readRecruitmentProfile(row),
   id: row.RECRUITMENT_UID,
   sourceTaskId: row.SOURCE_TASK_UID,
   title: row.TITLE,
@@ -454,7 +456,7 @@ const recruitmentRecord = (row, comments = []) => ({
   applicationSource: row.APPLICATION_SOURCE || '',
   createdBy: [row.CREATED_BY_FIRST_NAME, row.CREATED_BY_LAST_NAME].filter(Boolean).join(' ') || row.CREATED_BY_USERNAME || 'Unknown',
   assignedTo: [row.ASSIGNED_TO_FIRST_NAME, row.ASSIGNED_TO_LAST_NAME].filter(Boolean).join(' ') || row.ASSIGNED_TO_USERNAME || 'Unassigned',
-  dateSubmitted: localDateOnly(row.TASK_CREATED_AT),
+  dateSubmitted: localDateOnly(row.SUBMITTED_AT_TEXT || row.TASK_CREATED_AT),
   status: row.WORKFLOW_STATUS,
   actionTaken: row.ACTION_TAKEN || undefined,
   positionApplying: row.POSITION_APPLYING || undefined,
@@ -1394,7 +1396,7 @@ async function ensureRecruitmentRecords(connection) {
 }
 
 async function loadRecruitmentRecords(connection) {
-  const records = await connection.execute(`SELECT r.*,
+  const records = await connection.execute(`SELECT r.*, TO_CHAR(r.submitted_at, 'YYYY-MM-DD"T"HH24:MI:SS.FF3') submitted_at_text,
       t.title, t.control_number, t.created_at task_created_at,
       creator.username created_by_username, creator.first_name created_by_first_name, creator.last_name created_by_last_name,
       assignee.username assigned_to_username, assignee.first_name assigned_to_first_name, assignee.last_name assigned_to_last_name
@@ -2512,6 +2514,7 @@ async function handle(req, res) {
                :sex, :civilStatus, :email, :mobileNo, :municipality, :barangay, :address,
                :highestEducation, :schoolName, :yearGraduated, :applicationSource, :updatedByUserId, 'Y')`, { ...binds, sourceTaskUid });
         }
+        await saveRecruitmentProfile(c, recruitmentUid, body);
         await c.commit();
         return (await loadRecruitmentRecords(c)).find((record) => record.id === recruitmentUid);
       });
@@ -2665,6 +2668,7 @@ async function handle(req, res) {
           recruitmentUid,
         });
         if (!updated.rowsAffected) return false;
+        await saveRecruitmentProfile(c, recruitmentUid, body);
         await c.commit();
         return (await loadRecruitmentRecords(c)).find((record) => record.id === recruitmentUid);
       });

@@ -1,3 +1,4 @@
+import type { RecruitmentExtendedProfile } from '../../shared/recruitment-fields.mjs';
 // Core domain types for the BENECO Enterprise System (BES) prototype.
 // All data here is fictional / simulated for demonstration purposes only.
 
@@ -274,7 +275,7 @@ export interface RecruitmentComment {
   updatedAt: string;
 }
 
-export interface RecruitmentRecord {
+export interface RecruitmentRecord extends RecruitmentExtendedProfile {
   id: string;
   sourceTaskId: string;
   title: string;

@@ -1,3 +1,4 @@
+import type { RecruitmentExtendedProfile } from '../../shared/recruitment-fields.mjs';
 import type { AppTool, CalendarEvent, Comment, PolicyDocumentType, PolicyRecord, PolicyRecordNature, PolicyRecordStatus, Priority, RecruitmentComment, RecruitmentRecord, RecruitmentStatus, WorkItem } from '@/lib/types';
 
 export interface ApiUser {
@@ -1311,7 +1312,7 @@ export async function createRecruitmentPosition(token: string, positionName: str
   });
 }
 
-export async function updateRecruitmentRecord(token: string, recordId: string, update: {
+export async function updateRecruitmentRecord(token: string, recordId: string, update: Partial<RecruitmentExtendedProfile> & {
   status: RecruitmentStatus;
   actionTaken?: string;
   positionApplying?: string;
@@ -1347,7 +1348,7 @@ export async function deleteRecruitmentRecord(token: string, recordId: string) {
   });
 }
 
-export async function archiveRecruitmentTask(token: string, sourceTaskId: string | undefined, input: {
+export async function archiveRecruitmentTask(token: string, sourceTaskId: string | undefined, input: Partial<RecruitmentExtendedProfile> & {
   status: RecruitmentStatus;
   positionApplying?: string;
   remarks: string;

@@ -1,3 +1,4 @@
+import { recruitmentFields, type RecruitmentExtendedProfile } from '../../shared/recruitment-fields.mjs';
 import { useEffect, useMemo, useState } from 'react';
 import { MessageSquarePlus, Plus, Save, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -31,12 +32,13 @@ const STATUSES: RecruitmentStatus[] = [
   'Withdrawn',
 ];
 
-type ApplicantProfile = Pick<RecruitmentRecord,
+type ApplicantProfile = RecruitmentExtendedProfile & Pick<RecruitmentRecord,
   'lastName' | 'firstName' | 'middleName' | 'suffix' | 'birthDate' | 'sex' | 'civilStatus' |
   'email' | 'mobileNo' | 'municipality' | 'barangay' | 'address' | 'highestEducation' |
   'schoolName' | 'yearGraduated' | 'applicationSource'>;
 
 const EMPTY_PROFILE: ApplicantProfile = {
+  ...Object.fromEntries(recruitmentFields.map(({ key }) => [key, ''])) as RecruitmentExtendedProfile,
   lastName: '', firstName: '', middleName: '', suffix: '', birthDate: '', sex: '', civilStatus: '',
   email: '', mobileNo: '', municipality: '', barangay: '', address: '', highestEducation: '',
   schoolName: '', yearGraduated: '', applicationSource: '',
@@ -47,9 +49,12 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
   const { workItems } = useData();
   const { toast } = useToast();
   const [records, setRecords] = useState<RecruitmentRecord[]>([]);
-  const [tab, setTab] = useState('tasks');
+  const [tab, setTab] = useState('applications');
   const [selected, setSelected] = useState<RecruitmentRecord | null>(null);
   const [search, setSearch] = useState('');
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<RecruitmentStatus>('Received');
@@ -84,10 +89,29 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
 
   const visibleRecords = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return records;
-    return records.filter((record) => [record.title, record.controlNumber, record.applicantName, record.positionApplying, record.status]
-      .some((value) => String(value ?? '').toLowerCase().includes(query)));
-  }, [records, search]);
+    const filtered = records.filter((record) => {
+      const matchesSearch = !query || [record.title, record.controlNumber, record.applicantName, record.positionApplying, record.status]
+        .some((value) => String(value ?? '').toLowerCase().includes(query));
+      return matchesSearch && Object.entries(columnFilters).every(([key, filter]) => {
+        let value = applicationColumnValue(record, key);
+        if (key === 'title') value += ` ${record.applicantName} ${record.sourceTaskId}`;
+        if (key === 'dateSubmitted') value += ` ${formatDate(record.dateSubmitted)}`;
+        return value.toLowerCase().includes(filter.trim().toLowerCase());
+      });
+    });
+    if (sortKey) filtered.sort((left, right) => {
+      const leftValue = applicationColumnValue(left, sortKey);
+      const rightValue = applicationColumnValue(right, sortKey);
+      const result = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: 'base' });
+      return sortDir === 'asc' ? result : -result;
+    });
+    return filtered;
+  }, [records, search, columnFilters, sortKey, sortDir]);
+
+  function sortApplications(key: string) {
+    setSortDir(sortKey === key && sortDir === 'asc' ? 'desc' : 'asc');
+    setSortKey(key);
+  }
 
   const recordsByPosition = useMemo(() => {
     const groups = new Map<string, RecruitmentRecord[]>();
@@ -312,6 +336,7 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
 
   function exportApplicationsToExcel() {
     const headers = [
+      ...recruitmentFields.map(({ label }) => label),
       'Application ID', 'Application Title', 'Source Task ID', 'Control No.', 'Applicant Name',
       'Last Name', 'First Name', 'Middle Name', 'Suffix', 'Birth Date', 'Sex', 'Civil Status',
       'Email', 'Mobile Number', 'Municipality', 'Barangay', 'Complete Address',
@@ -320,6 +345,7 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
       'Remarks', 'Action Taken', 'Comments', 'Created At', 'Updated At',
     ];
     const rows = visibleRecords.map((record) => [
+      ...recruitmentFields.map(({ key }) => key === 'submittedAt' ? record[key].slice(0, 10) : record[key]),
       record.id, record.title, record.sourceTaskId, record.controlNumber ?? '', record.applicantName,
       record.lastName, record.firstName, record.middleName, record.suffix, record.birthDate, record.sex, record.civilStatus,
       record.email, record.mobileNo, record.municipality, record.barangay, record.address,
@@ -419,6 +445,7 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
               setArchiveRemarks('');
               setAddingApplicant(true);
             }}><Plus className="h-4 w-4" aria-hidden="true" /> Add Applicants</Button>}
+            {tab === 'applications' && Object.values(columnFilters).some(value => value.trim()) && <Button variant="ghost" size="sm" onClick={() => setColumnFilters({})}>Clear column filters</Button>}
           </Toolbar></div>
           {tab === 'tasks' ? (
             <DataTable
@@ -432,8 +459,13 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
               />
           ) : (
             <DataTable
-              columns={columns}
+              columns={columns.map(column => ({ ...column, sortable: true, filterable: true }))}
               rows={visibleRecords}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={sortApplications}
+              columnFilters={columnFilters}
+              onColumnFilterChange={(key, value) => setColumnFilters(current => ({ ...current, [key]: value }))}
               getRowId={(record) => record.id}
               onRowClick={openRecord}
               cardTitle={(record) => record.title}
@@ -456,7 +488,16 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
         onArchive={selectedTask && !selectedTaskArchived ? () => beginArchiveTask(selectedTask) : undefined}
       />
 
-      <Drawer open={!!archiveTask || addingApplicant} onClose={() => { if (!saving) { setArchiveTaskId(null); setAddingApplicant(false); } }} title={addingApplicant ? "Add Applicant" : "Archive Application"} widthClass="max-w-2xl">
+      <Dialog
+        open={!!archiveTask || addingApplicant}
+        onClose={() => { if (!saving) { setArchiveTaskId(null); setAddingApplicant(false); } }}
+        title={addingApplicant ? 'Add Applicant' : 'Archive Application'}
+        size="xl"
+        footer={<>
+          <Button variant="outline" onClick={() => { setArchiveTaskId(null); setAddingApplicant(false); }} disabled={saving}>Cancel</Button>
+          <Button onClick={archiveTaskAsApplication} disabled={saving}>{saving ? 'Saving…' : addingApplicant ? 'Add Applicant' : 'Archive Application'}</Button>
+        </>}
+      >
         {(archiveTask || addingApplicant) && (
           <div className="space-y-5">
             <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 text-sm">
@@ -469,20 +510,16 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="sm:col-span-2"><h3 className="font-semibold text-slate-900">Applicant Information</h3><p className="mt-1 text-xs text-slate-500">First name and last name are required.</p></div>
-              <ApplicantProfileFields profile={archiveProfile} onChange={updateArchiveProfile} />
-              <div className="sm:col-span-2 border-t border-slate-200 pt-4"><h3 className="font-semibold text-slate-900">Application Processing</h3></div>
+              <div className="sm:col-span-2"><h3 className="font-semibold text-slate-900">Application Processing</h3></div>
               <div><Label>Recruitment Status</Label><Select value={archiveStatus} onChange={(event) => setArchiveStatus(event.target.value as RecruitmentStatus)}>{STATUSES.map((item) => <option key={item}>{item}</option>)}</Select></div>
               <div><Label>Position Applying</Label><Select value={archivePosition} onChange={(event) => chooseArchivePosition(event.target.value)}><option value="">Select position</option>{positionOptions.map((item) => <option key={item} value={item}>{item}</option>)}<option value="__create__">＋ Create New</option></Select></div>
               <div className="sm:col-span-2"><Label>Remarks</Label><Textarea value={archiveRemarks} onChange={(event) => setArchiveRemarks(event.target.value)} placeholder="Initial recruitment remarks" /></div>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
-              <Button variant="outline" onClick={() => { setArchiveTaskId(null); setAddingApplicant(false); }} disabled={saving}>Cancel</Button>
-              <Button onClick={archiveTaskAsApplication} disabled={saving}>{saving ? 'Saving…' : addingApplicant ? 'Add Applicant' : 'Archive Application'}</Button>
+              <div className="sm:col-span-2 border-t border-slate-200 pt-4"><h3 className="font-semibold text-slate-900">Applicant Information</h3><p className="mt-1 text-xs text-slate-500">First name and last name are required.</p></div>
+              <ApplicantProfileFields profile={archiveProfile} onChange={updateArchiveProfile} />
             </div>
           </div>
         )}
-      </Drawer>
+      </Dialog>
 
       <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.applicantName ?? 'Application'} widthClass="max-w-2xl">
         {selected && (
@@ -499,15 +536,15 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="sm:col-span-2">
+              <div className="sm:col-span-2"><h3 className="font-semibold text-slate-900">Application Processing</h3></div>
+              <div><Label>Recruitment Status</Label><Select value={status} onChange={(event) => setStatus(event.target.value as RecruitmentStatus)}>{STATUSES.map((item) => <option key={item}>{item}</option>)}</Select></div>
+              <div><Label>Position Applying</Label><Select value={positionApplying} onChange={(event) => choosePosition(event.target.value)}><option value="">Select position</option>{positionOptions.map((item) => <option key={item} value={item}>{item}</option>)}<option value="__create__">＋ Create New</option></Select></div>
+              <div className="sm:col-span-2"><Label>Remarks</Label><Textarea value={remarks} onChange={(event) => setRemarks(event.target.value)} placeholder="Recruitment assessment, follow-up, or processing remarks" /></div>
+              <div className="sm:col-span-2 border-t border-slate-200 pt-4">
                 <h3 className="font-semibold text-slate-900">Applicant Information</h3>
                 <p className="mt-1 text-xs text-slate-500">Maintain the applicant’s standard recruitment profile in Oracle. First name and last name are required.</p>
               </div>
               <ApplicantProfileFields profile={profile} onChange={updateProfile} />
-              <div className="sm:col-span-2 border-t border-slate-200 pt-4"><h3 className="font-semibold text-slate-900">Application Processing</h3></div>
-              <div><Label>Recruitment Status</Label><Select value={status} onChange={(event) => setStatus(event.target.value as RecruitmentStatus)}>{STATUSES.map((item) => <option key={item}>{item}</option>)}</Select></div>
-              <div><Label>Position Applying</Label><Select value={positionApplying} onChange={(event) => choosePosition(event.target.value)}><option value="">Select position</option>{positionOptions.map((item) => <option key={item} value={item}>{item}</option>)}<option value="__create__">＋ Create New</option></Select></div>
-              <div className="sm:col-span-2"><Label>Remarks</Label><Textarea value={remarks} onChange={(event) => setRemarks(event.target.value)} placeholder="Recruitment assessment, follow-up, or processing remarks" /></div>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button onClick={saveDetails} disabled={saving}><Save className="h-4 w-4" /> Save Details</Button>
@@ -564,9 +601,23 @@ export default function RecruitmentOnboarding({ module }: { module: WorkspaceMod
   );
 }
 
+function applicationColumnValue(record: RecruitmentRecord, key: string): string {
+  switch (key) {
+    case 'title': return record.title;
+    case 'controlNumber': return record.controlNumber ?? '—';
+    case 'createdBy': return record.createdBy;
+    case 'assignedTo': return record.assignedTo;
+    case 'positionApplying': return record.positionApplying ?? '—';
+    case 'dateSubmitted': return record.dateSubmitted ?? '';
+    case 'status': return record.status;
+    default: return '';
+  }
+}
+
 function profileFromRecord(record: RecruitmentRecord): ApplicantProfile {
   if (record.firstName || record.lastName) {
     return {
+      ...Object.fromEntries(recruitmentFields.map(({ key }) => [key, record[key] ?? ''])) as RecruitmentExtendedProfile,
       lastName: record.lastName,
       firstName: record.firstName,
       middleName: record.middleName,
@@ -615,18 +666,56 @@ function ApplicantProfileFields({
       <div><Label required>First Name</Label><Input value={profile.firstName} onChange={(event) => onChange('firstName', event.target.value)} /></div>
       <div><Label>Middle Name</Label><Input value={profile.middleName} onChange={(event) => onChange('middleName', event.target.value)} /></div>
       <div><Label>Suffix</Label><Input value={profile.suffix} onChange={(event) => onChange('suffix', event.target.value)} placeholder="e.g. Jr., III" /></div>
+      <div><Label>Application Source</Label><Select value={profile.applicationSource} onChange={(event) => onChange('applicationSource', event.target.value)}><option value="">Select</option><option>Walk-in</option><option>Employee Referral</option><option>Job Portal</option><option>Social Media</option><option>Job Fair</option><option>Other</option><option>Online Application Form</option></Select></div>
+      <div className="sm:col-span-2 grid gap-4 sm:grid-cols-2">
+        <div><Label htmlFor="applicant-submittedAt">Original Submission Date</Label><Input id="applicant-submittedAt" type="date" value={profile.submittedAt.slice(0, 10)} onChange={(event) => onChange('submittedAt', event.target.value)} /></div>
+        <div><Label htmlFor="applicant-originalFullName">Full Name as Submitted</Label><Input id="applicant-originalFullName" value={profile.originalFullName} maxLength={2000} onChange={(event) => onChange('originalFullName', event.target.value)} /></div>
+      </div>
+      <ExtendedApplicantFields profile={profile} onChange={onChange} />
+    </>
+  );
+}
+
+function PersonalApplicantFields({ profile, onChange }: { profile: ApplicantProfile; onChange: <K extends keyof ApplicantProfile>(key: K, value: ApplicantProfile[K]) => void }) {
+  return <>
       <div><Label>Birth Date</Label><Input type="date" value={profile.birthDate} onChange={(event) => onChange('birthDate', event.target.value)} /></div>
       <div><Label>Sex</Label><Select value={profile.sex} onChange={(event) => onChange('sex', event.target.value)}><option value="">Select</option><option>Female</option><option>Male</option><option>Prefer not to say</option></Select></div>
       <div><Label>Civil Status</Label><Select value={profile.civilStatus} onChange={(event) => onChange('civilStatus', event.target.value)}><option value="">Select</option><option>Single</option><option>Married</option><option>Widowed</option><option>Separated</option><option>Annulled</option></Select></div>
       <div><Label>Email</Label><Input type="email" value={profile.email} onChange={(event) => onChange('email', event.target.value)} /></div>
       <div><Label>Mobile Number</Label><Input value={profile.mobileNo} onChange={(event) => onChange('mobileNo', event.target.value)} /></div>
-      <div><Label>Municipality</Label><Input value={profile.municipality} onChange={(event) => onChange('municipality', event.target.value)} /></div>
-      <div><Label>Barangay</Label><Input value={profile.barangay} onChange={(event) => onChange('barangay', event.target.value)} /></div>
-      <div className="sm:col-span-2"><Label>Complete Address</Label><Input value={profile.address} onChange={(event) => onChange('address', event.target.value)} /></div>
-      <div><Label>Highest Educational Attainment</Label><Input value={profile.highestEducation} onChange={(event) => onChange('highestEducation', event.target.value)} placeholder="e.g. Bachelor’s Degree" /></div>
-      <div><Label>School</Label><Input value={profile.schoolName} onChange={(event) => onChange('schoolName', event.target.value)} /></div>
-      <div><Label>Year Graduated</Label><Input inputMode="numeric" maxLength={4} value={profile.yearGraduated} onChange={(event) => onChange('yearGraduated', event.target.value.replace(/\D/g, '').slice(0, 4))} /></div>
-      <div><Label>Application Source</Label><Select value={profile.applicationSource} onChange={(event) => onChange('applicationSource', event.target.value)}><option value="">Select</option><option>Walk-in</option><option>Employee Referral</option><option>Job Portal</option><option>Social Media</option><option>Job Fair</option><option>Other</option></Select></div>
-    </>
-  );
+      <div><Label>Residential Municipality</Label><Input value={profile.municipality} onChange={(event) => onChange('municipality', event.target.value)} /></div>
+      <div><Label>Residential Barangay</Label><Input value={profile.barangay} onChange={(event) => onChange('barangay', event.target.value)} /></div>
+      <div className="sm:col-span-2"><Label>Residential Address</Label><Input value={profile.address} onChange={(event) => onChange('address', event.target.value)} /></div>
+  </>;
+}
+
+function ExtendedApplicantFields({ profile, onChange }: { profile: ApplicantProfile; onChange: <K extends keyof ApplicantProfile>(key: K, value: ApplicantProfile[K]) => void }) {
+  const [section, setSection] = useState('Personal Details');
+  const sections = Array.from(new Set(recruitmentFields.map(field => field.section))).filter(value => value !== 'Source');
+  return <div className="min-w-0 sm:col-span-2 space-y-3">
+    <Tabs tabs={sections.map(value => ({ value, label: value }))} value={section} onChange={setSection} className="flex-wrap overflow-visible" />
+    <section role="tabpanel" aria-label={section} className="rounded-lg border border-slate-200 p-3">
+      {section === 'Education History' && <p className="mt-2 text-xs text-slate-500">Keep the degree or strand and school details below. Select the graduation month and year for each level when known.</p>}
+      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+        {section === 'Personal Details' && <PersonalApplicantFields profile={profile} onChange={onChange} />}
+        {section === 'Education History' && <>
+          <div><Label htmlFor="applicant-highestEducation">Highest Educational Attainment</Label><Input id="applicant-highestEducation" value={profile.highestEducation} onChange={(event) => onChange('highestEducation', event.target.value)} placeholder="e.g. Bachelor’s Degree" /></div>
+          <div><Label htmlFor="applicant-schoolName">School</Label><Input id="applicant-schoolName" value={profile.schoolName} onChange={(event) => onChange('schoolName', event.target.value)} /></div>
+          <div><Label htmlFor="applicant-yearGraduated">Year Graduated</Label><Input id="applicant-yearGraduated" inputMode="numeric" maxLength={4} value={profile.yearGraduated} onChange={(event) => onChange('yearGraduated', event.target.value.replace(/\D/g, '').slice(0, 4))} /></div>
+        </>}
+        {recruitmentFields.filter(field => field.section === section).map(field => (
+        <div key={field.key} className={field.input === 'textarea' || field.key === 'permanentAddress' ? 'sm:col-span-2' : ''}>
+          <Label htmlFor={'applicant-' + field.key}>{field.label}</Label>
+          {field.input === 'textarea'
+            ? <Textarea id={'applicant-' + field.key} value={profile[field.key]} maxLength={2000} onChange={event => onChange(field.key, event.target.value)} />
+            : field.input === 'select-month'
+              ? <Select id={'applicant-' + field.key} value={profile[field.key]} onChange={event => onChange(field.key, event.target.value)}><option value="">Select month</option>{Array.from({ length: 12 }, (_, index) => <option key={index} value={String(index + 1).padStart(2, '0')}>{new Intl.DateTimeFormat('en', { month: 'long' }).format(new Date(2000, index, 1))}</option>)}</Select>
+              : field.input === 'select-year'
+                ? <Select id={'applicant-' + field.key} value={profile[field.key]} onChange={event => onChange(field.key, event.target.value)}><option value="">Select year</option>{Array.from(new Set([...(profile[field.key] ? [profile[field.key]] : []), ...Array.from({ length: new Date().getFullYear() - 1900 + 6 }, (_, index) => String(new Date().getFullYear() + 5 - index))])).sort((a, b) => Number(b) - Number(a)).map(year => <option key={year} value={year}>{year}</option>)}</Select>
+                : <Input id={'applicant-' + field.key} type={field.input} value={field.input === 'date' ? profile[field.key].slice(0, 10) : profile[field.key]} maxLength={2000} onChange={event => onChange(field.key, event.target.value)} />}
+          {section === 'Supporting Documents' && (profile[field.key].match(/https?:\/\/[^\s,]+/g) ?? []).map((url, index) => <a key={index} href={url} target="_blank" rel="noopener noreferrer" className="mt-1 block text-sm text-brand-700 underline">Open document {index + 1}</a>)}
+        </div>
+      ))}</div>
+    </section>
+  </div>;
 }
