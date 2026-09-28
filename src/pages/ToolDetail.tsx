@@ -142,7 +142,7 @@ export default function ToolDetail() {
           : { label: `${deptId} Workspace`, to: `/workspace/preview/${deptId}` },
         { label: tool.code },
       ]} />
-      <Tabs tabs={tabs} value={tab} onChange={(value) => { setTab(value); setSearch(''); }} className="mb-5" />
+      <Tabs tabs={tabs} value={tab} onChange={(value) => { setTab(value); setSearch(''); }} className="mb-5 overflow-y-hidden" />
       <Card>
         <CardHeader><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>{tool.code} {tabTitle}</CardTitle><p className="mt-1 text-sm text-slate-500">{tab === 'tasks' ? 'Tasks from My Work whose Subject exactly matches this tool’s configured Task Subjects.' : tab === 'records' ? `Operational records for ${tool.code}.` : tab === 'fleet' ? 'Manage vehicle inventory, inspection checklists, maintenance, registrations, attachments, and schedule compliance.' : 'Manage building operations, facility maintenance, space use, and service activities.'}</p></div>{tab === 'tasks' && <Button onClick={() => { setTaskForm((current) => ({ ...current, assigneeUsername: user?.username ?? current.assigneeUsername })); setAddTaskOpen(true); }}><Plus className="h-4 w-4" /> Add Task</Button>}</div></CardHeader>
         <CardContent>

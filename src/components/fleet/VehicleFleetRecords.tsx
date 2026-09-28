@@ -10,6 +10,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { useAuth } from '@/context/AuthContext';
 import { fetchFleetRecords, type FleetVehicleRecord } from '@/lib/api';
 import { VehicleRecordInspection } from './VehicleRecordInspection';
+import { createFleetWorkbook, fleetPrintHtml } from '@/lib/fleet-records-export';
 import { formatDate } from '@/lib/utils';
 
 const display = (value: unknown) => value == null || value === '' || value === '-' ? '—' : String(value);
@@ -36,6 +37,8 @@ export function VehicleFleetRecords() {
   const [records, setRecords] = useState<FleetVehicleRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [reportError, setReportError] = useState('');
   const [revision, setRevision] = useState(0);
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState('');
@@ -116,6 +119,32 @@ export function VehicleFleetRecords() {
     ...(column.key === 'vehicleType' ? { filterOptions: typeOptions } : {}),
   }));
 
+  const reportHeaders = ['Plate No.', 'Vehicle No.', 'Brand', 'Model', 'Year Model', 'Vehicle Type', 'Driver', 'Department', 'Fuel Type', 'Status'];
+  const reportRows = () => filtered.map((row) => [display(row.plateNo), display(row.vehicleNo), display(row.brand), display(row.model), row.yearModel ?? '—', vehicleTypeLabel(row.vehicleType), display(row.driver), display(row.department), display(row.fuelType), display(row.status)]);
+  const reportScope = () => ['Active vehicle assets', department && 'Department: ' + department, search.trim() && 'Search: ' + search.trim(), ...Object.entries(columnFilters).filter(([, value]) => value.trim()).map(([key, value]) => (columns.find((column) => column.key === key)?.header ?? key) + ': ' + value)].filter(Boolean).join(' · ');
+  function printRecords() {
+    setReportError('');
+    const popup = window.open('', '_blank');
+    if (!popup) { setReportError('Allow pop-ups to open the printable vehicle report.'); return; }
+    popup.opener = null;
+    popup.document.write(fleetPrintHtml(['Item', ...reportHeaders], reportRows().map((row, index) => [index + 1, ...row]), vehicleTypes, reportScope()));
+    popup.document.close();
+  }
+  async function exportRecords() {
+    setExporting(true); setReportError('');
+    try {
+      const blob = await createFleetWorkbook([
+        { name: 'Vehicles', rows: [reportHeaders, ...reportRows()] },
+        { name: 'Summary', rows: [['Vehicle Type', 'Count'], ['Total Vehicles', filtered.length], ...vehicleTypes, [], ['Filters', reportScope()], ['Generated', new Date().toLocaleString()]] },
+      ]);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); link.href = url; link.download = 'vehicle-fleet-records.xlsx';
+      document.body.appendChild(link); link.click(); link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (reason) { setReportError(reason instanceof Error ? reason.message : 'Unable to export vehicle records.'); }
+    finally { setExporting(false); }
+  }
+
   return <div>
     {!loading && !error && <section aria-label="Vehicle type summary" className="mb-5">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-1">
@@ -140,9 +169,11 @@ export function VehicleFleetRecords() {
         <Button variant="outline" size="sm" disabled={loading} onClick={() => { setPage(1); setRevision((value) => value + 1); }}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh</Button>
       </div>
     </div>
-    <Toolbar search={search} onSearchChange={(value) => { setSearch(value); setPage(1); }} placeholder="Search plate, vehicle, driver…">
+    <Toolbar onPrint={!loading && !error && filtered.length ? printRecords : undefined} onExport={!loading && !error && filtered.length && !exporting ? () => void exportRecords() : undefined} exportLabel="Export to Excel" search={search} onSearchChange={(value) => { setSearch(value); setPage(1); }} placeholder="Search plate, vehicle, driver…">
       <Select aria-label="Filter department" className="w-auto" value={department} onChange={(event) => { setDepartment(event.target.value); setPage(1); }}><option value="">All departments</option>{departments.map((value) => <option key={value}>{value}</option>)}</Select>
     </Toolbar>
+    {exporting && <p role="status" className="mb-3 text-xs text-slate-500">Preparing Excel workbook…</p>}
+    {reportError && <p role="alert" className="mb-3 text-sm text-red-600">{reportError}</p>}
     {loading ? <p role="status" className="py-10 text-center text-sm text-slate-500">Loading Oracle vehicle records…</p>
       : error ? <div role="alert" className="rounded-lg border border-red-200 p-6 text-center"><p className="text-sm text-red-600">{error}</p><Button className="mt-3" variant="outline" onClick={() => setRevision((value) => value + 1)}>Retry</Button></div>
         : <>
