@@ -81,7 +81,7 @@ export function MemberProgramsCsr({ onCountChange, onAddToPrograms, programType,
         const value = String(item[column as keyof CsrRequest] ?? '').toLowerCase();
         const expected = filter.trim().toLowerCase();
         if (['district', 'municipality'].includes(column) && expected === '__unspecified__') return !value.trim();
-        return ['programType', 'district', 'municipality'].includes(column) ? value === expected : value.includes(expected);
+        return ['programType', 'district', 'municipality', 'approvalStatus', 'institutional', 'closedApproved', 'withLetterReply'].includes(column) ? value === expected : value.includes(expected);
       });
     });
     return [...filtered].sort((a, b) => {
@@ -216,17 +216,18 @@ export function MemberProgramsCsr({ onCountChange, onAddToPrograms, programType,
     const headers = ['Item No.','Date Requested','Program Type','Requestee','Organization','Sector','Municipality','Barangay','District','Evaluation Status','Pending Reason','Evaluation Result','Approval Status','With Letter Reply','Institutional','Date Approved/Disapproved','Date Released','Amount Funding','Actual Project Cost','Additional Remarks']; let currentGroup = ''; const grouped = format !== 'date'; const groupPrefix = CSR_REPORT_FORMAT_LABELS[format].replace('Grouped by ', ''); const body = items.map((item, index) => { const group = reportGroupValue(item, format); const groupRow = grouped && group !== currentGroup ? `<tr class="group-row"><td colspan="${headers.length}">${escapeHtml(groupPrefix)}: ${escapeHtml(group)}</td></tr>` : ''; if (grouped) currentGroup = group; return `${groupRow}<tr>${[index + 1,item.dateRequested,item.programType,item.requestee,item.organization,item.sector,item.municipality,item.barangay,item.district,item.status,item.pendingReason,item.evaluationResult.length ? item.evaluationResult.join(', ') : 'Not Evaluated',item.approvalStatus,item.withLetterReply ? 'Yes' : 'No',item.institutional ? 'Yes' : 'No',item.dateApproved,item.dateReleased,item.amountFunding ? Number(item.amountFunding).toLocaleString('en-PH',{ style:'currency',currency:'PHP' }) : '',item.actualProjectCost ? Number(item.actualProjectCost).toLocaleString('en-PH',{ style:'currency',currency:'PHP' }) : '',item.additionalRemarks].map((value) => `<td>${escapeHtml(String(value || '—'))}</td>`).join('')}</tr>`; }).join(''); return `<table><thead><tr>${headers.map((header) => `<th>${header}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
   }
   function standardReportTable(items: CsrRequest[], dateFrom = '', dateTo = '', fit = false) {
+    const hasTableFilters = Boolean(search.trim()) || Object.values(columnFilters).some((value) => value.trim());
     const headers = ['Item No.','Program Type','Budget','Date Requested','Requestee','Organization','Sector','Municipality','Barangay','District','Evaluation Status','Evaluation Result','Approval Status','With Letter Reply','Date Approved/Disapproved','Date Released','Amount Funding','Actual Project Cost','Additional Remarks'];
     const years = reportBudgetYears(items, dateFrom, dateTo);
     const districtSet = new Set<string>();
     items.forEach((item) => districtSet.add(reportGroupValue(item, 'standard')));
-    budgetAllocations.filter((allocation) => years.includes(allocation.year)).forEach((allocation) => districtSet.add(allocation.district.trim() || 'Unspecified District'));
+    if (!hasTableFilters) budgetAllocations.filter((allocation) => years.includes(allocation.year)).forEach((allocation) => districtSet.add(allocation.district.trim() || 'Unspecified District'));
     const districts = [...districtSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
     const defaultProgramTypes = [...new Set([...programTypeOptions, ...PROGRAM_TYPES.filter((value) => value !== COMMUNITY_RELATIONS_PROGRAM_TYPE)])];
     let itemNumber = 0;
     const body = districts.map((district) => {
       const districtItems = items.filter((item) => reportGroupValue(item, 'standard') === district);
-      const programTypes = [...new Set([...defaultProgramTypes, ...budgetAllocations.filter((allocation) => years.includes(allocation.year) && (allocation.district.trim() || 'Unspecified District').toLowerCase() === district.toLowerCase()).map((allocation) => allocation.programType), ...districtItems.map((item) => item.programType)].filter(Boolean))];
+      const programTypes = [...new Set((hasTableFilters ? districtItems.map((item) => item.programType) : [...defaultProgramTypes, ...budgetAllocations.filter((allocation) => years.includes(allocation.year) && (allocation.district.trim() || 'Unspecified District').toLowerCase() === district.toLowerCase()).map((allocation) => allocation.programType), ...districtItems.map((item) => item.programType)]).filter(Boolean))];
       const districtBudget = programTypes.reduce((sum, programType) => sum + reportBudgetFor(district, programType, years), 0);
       const districtUtilized = districtItems.reduce((sum, item) => sum + (Number(item.actualProjectCost) || 0), 0);
       const districtSummary = `${district} (Budget: ${districtBudget.toLocaleString('en-PH',{ style:'currency',currency:'PHP' })}   Utilized: ${districtUtilized.toLocaleString('en-PH',{ style:'currency',currency:'PHP' })})`;
@@ -289,7 +290,7 @@ export function MemberProgramsCsr({ onCountChange, onAddToPrograms, programType,
     { key: 'municipality', header: 'Municipality', sortable: true, filterable: true, filterOptions: municipalityFilterOptions, render: (item) => item.municipality || '—' },
     { key: 'status', header: 'Evaluation Status', sortable: true, filterable: true, render: (item) => <Badge>{item.status}</Badge> },
     { key: 'evaluationResult', header: 'Evaluation', sortable: true, filterable: true, render: (item) => item.evaluationResult.length ? item.evaluationResult.join(', ') : 'Not Evaluated' },
-    { key: 'approvalStatus', header: 'Approval Status', sortable: true, filterable: true, filterOptions: ['Approved', 'Disapproved', 'For Evaluation'], render: (item) => <Badge>{item.approvalStatus}</Badge> },
+    { key: 'approvalStatus', header: 'Approval Status', sortable: true, filterable: true, filterOptions: ['Approved', 'Disapproved', 'For Approval', 'For Evaluation'], render: (item) => <Badge>{item.approvalStatus}</Badge> },
     { key: 'closedApproved', header: 'Implemented', className: 'text-center', sortable: true, filterable: true, filterOptions: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }], render: (item) => item.closedApproved ? <Check className="mx-auto h-5 w-5 text-emerald-500" aria-label="Implemented" /> : '—' },
     { key: 'withLetterReply', header: 'Letter Reply', className: 'text-center', sortable: true, filterable: true, filterOptions: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }], render: (item) => item.withLetterReply ? <Check className="mx-auto h-5 w-5 text-emerald-500" aria-label="With letter reply" /> : '—' },
     { key: 'dateApproved', header: 'Date Approved/Disapproved', sortable: true, filterable: true, render: (item) => item.dateApproved || '—' },
