@@ -22,8 +22,8 @@ test('renewal planning counts the last numeric digit even with trailing letters'
 
 test('all breakdowns reconcile, with missing categories and dates included', () => {
   const metrics = summarizeFleet([
-    { department: ' ISD ', vehicleType: 'Service Vehicle', brand: 'SUZUKI', description: 'JIMNY', fuelType: 'GAS', acquiredDate: '2020-06-10T00:00:00.000Z', acquiredCost: 500000, plateNo: '108YHS' },
-    { department: 'ISD', vehicleType: 'Service Vehicle', brand: 'SUZUKI', description: 'JIMNY', fuelType: 'GAS', acquiredDate: '2023-01-01', acquiredCost: 2000000, plateNo: 'ABC100' },
+    { department: ' ISD ', vehicleType: 'Service Vehicle', brand: 'SUZUKI', model: 'JIMNY', description: 'SUZUKI JIMNY WHITE', fuelType: 'GAS', acquiredDate: '2020-06-10T00:00:00.000Z', acquiredCost: 500000, plateNo: '108YHS' },
+    { department: 'ISD', vehicleType: 'Service Vehicle', brand: 'SUZUKI', model: 'JIMNY', description: 'SUZUKI JIMNY BLUE', fuelType: 'GAS', acquiredDate: '2023-01-01', acquiredCost: 2000000, plateNo: 'ABC100' },
     { department: '-', vehicleType: null, brand: null, description: null, fuelType: '', acquiredDate: 'invalid', acquiredCost: null, plateNo: null },
   ]);
   for (const key of ['departments', 'types', 'brands', 'fuels', 'acquisitions', 'endings', 'costBands']) {
@@ -32,7 +32,8 @@ test('all breakdowns reconcile, with missing categories and dates included', () 
   }
   assert.equal(metrics.departments[0].label, 'ISD');
   assert.equal(metrics.departments[0].count, 2);
-  assert.equal(metrics.brands[0].label, 'SUZUKI / JIMNY');
+  assert.equal(metrics.brands[0].label, 'SUZUKI - JIMNY');
+  assert.equal(metrics.brands[0].count, 2);
   assert.deepEqual(metrics.acquisitions.map((group) => group.label), ['2023', '2020', 'Unknown']);
   assert.equal(metrics.unknownPlates, 1);
   assert.equal(metrics.unknownDates, 1);

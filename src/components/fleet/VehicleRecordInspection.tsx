@@ -6,13 +6,14 @@ import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { createFleetMasterInspection, fetchFleetVehicleModel, fetchFleetVehicleModels, type FleetVehicleRecord } from '@/lib/api';
+import { createInspectionItemId } from '@/lib/fleet-inspection-id';
 import { VehicleModelViewer, type ModelAnnotation, type VehicleModelViewerHandle } from './VehicleModelViewer';
 
 type Evidence = { name: string; dataUrl: string };
 type Detail = { id: string; activity: string; status: string; findings: string; actionTaken: string; recommendation: string; annotations: ModelAnnotation[]; snapshot?: Evidence; photos: Evidence[] };
 type LibraryModel = { id: string; brand: string; model: string; model3d?: { name: string } };
 const activities = ['General vehicle condition', 'Engine oil and fluid levels', 'Tires, wheels, and spare tire', 'Brakes and parking brake', 'Lights, signals, and horn', 'Battery and electrical system', 'Steering and suspension', 'Safety equipment and first-aid kit', 'Body, glass, and visible damage', 'Odometer and service interval', 'Roadworthiness and test drive', 'Other'];
-const newDetail = (): Detail => ({ id: `INSP-ITEM-${crypto.randomUUID()}`, activity: activities[0], status: 'No Problem', findings: '', actionTaken: '', recommendation: '', annotations: [], photos: [] });
+const newDetail = (): Detail => ({ id: createInspectionItemId(), activity: activities[0], status: 'No Problem', findings: '', actionTaken: '', recommendation: '', annotations: [], photos: [] });
 const normalize = (value: string | null) => (value ?? '').trim().toLowerCase();
 
 export function VehicleRecordInspection({ vehicle, onClose }: { vehicle: FleetVehicleRecord; onClose: () => void }) {

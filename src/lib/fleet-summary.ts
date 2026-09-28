@@ -46,7 +46,7 @@ export function summarizeFleet(rows: FleetVehicleRecord[]) {
     unknownPlates: endings.find((group) => group.label === 'Unknown')?.count ?? 0,
     departments: groupFleet(rows, (row) => fleetLabel(row.department)),
     types: groupFleet(rows, (row) => fleetLabel(row.vehicleType)),
-    brands: groupFleet(rows, (row) => `${fleetLabel(row.brand)} / ${fleetLabel(row.description)}`),
+    brands: groupFleet(rows, (row) => `${fleetLabel(row.brand)} - ${fleetLabel(row.model)}`),
     fuels: groupFleet(rows, (row) => fleetLabel(row.fuelType)),
     acquisitions: groupFleet(rows, (row) => acquisitionYear(row.acquiredDate)).sort((a, b) => a.label === 'Unknown' ? 1 : b.label === 'Unknown' ? -1 : b.label.localeCompare(a.label)),
     endings: [...Array.from({ length: 10 }, (_, digit) => endings.find((group) => group.label === String(digit)) ?? { label: String(digit), count: 0, cost: 0, costCount: 0 }), ...endings.filter((group) => group.label === 'Unknown')],

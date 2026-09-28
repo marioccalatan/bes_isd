@@ -82,7 +82,7 @@ export default function VehicleFleetSummary() {
         <div className="grid gap-5 xl:grid-cols-2">
           <Breakdown title="Department" description="Vehicles assigned per department, including unassigned records." groups={metrics.departments} total={metrics.total} costs />
           <Breakdown title="Vehicle type" groups={metrics.types} total={metrics.total} />
-          <Breakdown title="Brand / description" description="Grouped by the master record’s brand and description fields." groups={metrics.brands} total={metrics.total} />
+          <Breakdown title="Brand - Model" description="Grouped by the master record’s brand and model fields." groups={metrics.brands} total={metrics.total} />
           <Breakdown title="Fuel type" groups={metrics.fuels} total={metrics.total} />
           <Breakdown title="Acquisition year" description={`Quantity and recorded cost by acquired date (year). ${metrics.unknownDates} missing or invalid dates.`} groups={metrics.acquisitions} total={metrics.total} costs />
           <Breakdown title="Acquisition cost band" description="Missing or invalid costs are separate from recorded zero costs." groups={metrics.costBands} total={metrics.total} costs />
