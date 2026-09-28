@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ClipboardCheck, CalendarRange, ExternalLink, RefreshCw } from 'lucide-react';
+import { BarChart3, ClipboardCheck, CalendarRange, ExternalLink, RefreshCw } from 'lucide-react';
 import { Toolbar } from '@/components/shared/Toolbar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -31,6 +31,14 @@ const fields: Array<[keyof FleetVehicleRecord, string]> = [
   ['engineNo', 'Engine No.'], ['chassisNo', 'Chassis No.'], ['remarks', 'Remarks'],
 ];
 const pageSize = 20;
+function countVehicleTypes(vehicles: FleetVehicleRecord[]) {
+  const counts = new Map<string, number>();
+  for (const vehicle of vehicles) {
+    const type = vehicleTypeLabel(vehicle.vehicleType);
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort(([leftType, leftCount], [rightType, rightCount]) => rightCount - leftCount || leftType.localeCompare(rightType));
+}
 
 export function VehicleFleetRecords() {
   const { token } = useAuth();
@@ -84,26 +92,27 @@ export function VehicleFleetRecords() {
 
   const departments = [...new Set(records.map((row) => row.department).filter((value): value is string => Boolean(value)))].sort();
   const typeOptions = [...new Set(records.map((row) => vehicleTypeLabel(row.vehicleType)))].sort();
-  const filtered = useMemo(() => {
+  const summaryRecords = useMemo(() => {
     const query = search.trim().toLowerCase();
     return records.filter((row) => (!department || row.department === department)
       && (!query || Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(query)))
       && Object.entries(columnFilters).every(([key, value]) => {
         if (!value.trim()) return true;
-        if (key === 'vehicleType') return vehicleTypeLabel(row.vehicleType) === value;
+        if (key === 'vehicleType') return true;
         const text = key === 'brand' ? `${display(row.brand)} ${display(row.model)}` : display(row[key as keyof FleetVehicleRecord]);
         return text.toLowerCase().includes(value.trim().toLowerCase());
       }))
       .sort((a, b) => String(a[sortKey] ?? '').localeCompare(String(b[sortKey] ?? ''), undefined, { numeric: true, sensitivity: 'base' }) * (sortDir === 'asc' ? 1 : -1));
   }, [records, search, department, columnFilters, sortKey, sortDir]);
-  const vehicleTypes = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const vehicle of filtered) {
-      const type = vehicleTypeLabel(vehicle.vehicleType);
-      counts.set(type, (counts.get(type) ?? 0) + 1);
-    }
-    return [...counts.entries()].sort(([leftType, leftCount], [rightType, rightCount]) => rightCount - leftCount || leftType.localeCompare(rightType));
-  }, [filtered]);
+  const selectedType = columnFilters.vehicleType || '';
+  const filtered = useMemo(() => summaryRecords.filter((row) => !selectedType || vehicleTypeLabel(row.vehicleType) === selectedType), [summaryRecords, selectedType]);
+  const summaryTypes = useMemo(() => countVehicleTypes(summaryRecords), [summaryRecords]);
+  const vehicleTypes = useMemo(() => countVehicleTypes(filtered), [filtered]);
+  function selectType(type: string) {
+    setColumnFilters((current) => ({ ...current, vehicleType: type }));
+    setPage(1);
+  }
+  const summaryCardClass = (active: boolean) => `rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 ${active ? 'border-brand-200 bg-brand-50 text-brand-700' : 'border-slate-200 bg-surface text-slate-800 hover:border-brand-300 hover:bg-brand-50'}`;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   const columns: Column<FleetVehicleRecord>[] = [
@@ -149,18 +158,18 @@ export function VehicleFleetRecords() {
     {!loading && !error && <section aria-label="Vehicle type summary" className="mb-5">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-1">
         <h3 className="text-sm font-semibold text-slate-800">Vehicle Type Summary</h3>
-        <p className="text-xs text-slate-500">{search.trim() || department || Object.values(columnFilters).some((value) => value.trim()) ? 'Matching active vehicles · All pages' : 'All active vehicles'}</p>
+        <p className="text-xs text-slate-500">{search.trim() || department || Object.entries(columnFilters).some(([key, value]) => key !== 'vehicleType' && value.trim()) ? 'Matching active vehicles · All types' : 'All active vehicles'} · Select a card to filter</p>
       </div>
-      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
-        <div className="rounded-lg border border-brand-200 bg-brand-50 p-3">
-          <dt className="text-xs font-medium text-brand-700">Total Vehicles</dt>
-          <dd className="mt-1 text-2xl font-semibold tabular-nums text-brand-700">{filtered.length.toLocaleString()}</dd>
-        </div>
-        {vehicleTypes.map(([type, count]) => <div key={type} className="rounded-lg border border-slate-200 bg-surface p-3">
-          <dt className="text-xs font-medium text-slate-500">{type}</dt>
-          <dd className="mt-1 flex items-baseline gap-2"><span className="text-2xl font-semibold tabular-nums text-slate-800">{count.toLocaleString()}</span><span className="text-xs text-slate-500">{(count / filtered.length * 100).toFixed(1)}%</span></dd>
-        </div>)}
-      </dl>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
+        <button type="button" aria-pressed={!selectedType} onClick={() => selectType('')} className={summaryCardClass(!selectedType)}>
+          <span className="block text-xs font-medium">Total Vehicles</span>
+          <span className="mt-1 block text-2xl font-semibold tabular-nums">{summaryRecords.length.toLocaleString()}</span>
+        </button>
+        {summaryTypes.map(([type, count]) => <button type="button" key={type} aria-pressed={selectedType === type} onClick={() => selectType(type)} className={summaryCardClass(selectedType === type)}>
+          <span className="block text-xs font-medium">{type}</span>
+          <span className="mt-1 flex items-baseline gap-2"><span className="text-2xl font-semibold tabular-nums">{count.toLocaleString()}</span><span className="text-xs text-slate-500">{(count / summaryRecords.length * 100).toFixed(1)}%</span></span>
+        </button>)}
+      </div>
     </section>}
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <p className="text-sm text-slate-500">Source: <span className="font-medium">VMS_VEHICLE_MAST</span> · Active vehicles only</p>
@@ -171,6 +180,7 @@ export function VehicleFleetRecords() {
     </div>
     <Toolbar onPrint={!loading && !error && filtered.length ? printRecords : undefined} onExport={!loading && !error && filtered.length && !exporting ? () => void exportRecords() : undefined} exportLabel="Export to Excel" search={search} onSearchChange={(value) => { setSearch(value); setPage(1); }} placeholder="Search plate, vehicle, driver…">
       <Select aria-label="Filter department" className="w-auto" value={department} onChange={(event) => { setDepartment(event.target.value); setPage(1); }}><option value="">All departments</option>{departments.map((value) => <option key={value}>{value}</option>)}</Select>
+      <Button variant="outline" size="sm" title="Open fleet summary in a new tab" onClick={() => window.open('/workspace/vehicle-fleet/summary', '_blank', 'noopener,noreferrer')}><BarChart3 className="h-4 w-4" /> Summary <ExternalLink className="h-3.5 w-3.5" /></Button>
     </Toolbar>
     {exporting && <p role="status" className="mb-3 text-xs text-slate-500">Preparing Excel workbook…</p>}
     {reportError && <p role="alert" className="mb-3 text-sm text-red-600">{reportError}</p>}
