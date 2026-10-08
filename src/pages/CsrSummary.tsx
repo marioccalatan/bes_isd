@@ -61,7 +61,12 @@ export default function CsrSummary() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  const matchesProgramType = (request: CsrRequest) => !programTypeFilter || (isCommunityRelations ? COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(request.programType) : request.programType === programTypeFilter);
+  const matchesProgramType = (request: CsrRequest) => {
+    const isCommunityRelationsType = COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(request.programType);
+    if (isCommunityRelations) return isCommunityRelationsType;
+    if (programTypeFilter) return request.programType === programTypeFilter;
+    return !isCommunityRelationsType;
+  };
   const isIncludedByReleaseDate = (request: CsrRequest) => !isWithinRange(request.dateRequested, startDate, endDate) && isWithinRange(request.dateReleased, startDate, endDate);
   const filtered = useMemo(() => requests.filter((request) => {
     if (!matchesProgramType(request)) return false;
