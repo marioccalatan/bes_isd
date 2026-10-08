@@ -78,6 +78,7 @@ export function MemberProgramsCsr({ onCountChange, onAddToPrograms, programType,
       if (query && !Object.values(item).some((value) => String(value ?? '').toLowerCase().includes(query))) return false;
       return Object.entries(columnFilters).every(([column, filter]) => {
         if (!filter.trim()) return true;
+        if (column === 'evaluationResult') return filter === 'Not Evaluated' ? item.evaluationResult.length === 0 : item.evaluationResult.some((result) => result === filter);
         const value = String(item[column as keyof CsrRequest] ?? '').toLowerCase();
         const expected = filter.trim().toLowerCase();
         if (['district', 'municipality'].includes(column) && expected === '__unspecified__') return !value.trim();
@@ -289,7 +290,7 @@ export function MemberProgramsCsr({ onCountChange, onAddToPrograms, programType,
     { key: 'barangay', header: 'Barangay', sortable: true, filterable: true, render: (item) => item.barangay || '—' },
     { key: 'municipality', header: 'Municipality', sortable: true, filterable: true, filterOptions: municipalityFilterOptions, render: (item) => item.municipality || '—' },
     { key: 'status', header: 'Evaluation Status', sortable: true, filterable: true, render: (item) => <Badge>{item.status}</Badge> },
-    { key: 'evaluationResult', header: 'Evaluation', sortable: true, filterable: true, render: (item) => item.evaluationResult.length ? item.evaluationResult.join(', ') : 'Not Evaluated' },
+    { key: 'evaluationResult', header: 'Evaluation', sortable: true, filterable: true, filterOptions: ['Within CSR Policy', 'Not Within CSR Policy', 'Not Evaluated'], render: (item) => item.evaluationResult.length ? item.evaluationResult.join(', ') : 'Not Evaluated' },
     { key: 'approvalStatus', header: 'Approval Status', sortable: true, filterable: true, filterOptions: ['Approved', 'Disapproved', 'For Approval', 'For Evaluation'], render: (item) => <Badge>{item.approvalStatus}</Badge> },
     { key: 'closedApproved', header: 'Implemented', className: 'text-center', sortable: true, filterable: true, filterOptions: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }], render: (item) => item.closedApproved ? <Check className="mx-auto h-5 w-5 text-emerald-500" aria-label="Implemented" /> : '—' },
     { key: 'withLetterReply', header: 'Letter Reply', className: 'text-center', sortable: true, filterable: true, filterOptions: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }], render: (item) => item.withLetterReply ? <Check className="mx-auto h-5 w-5 text-emerald-500" aria-label="With letter reply" /> : '—' },

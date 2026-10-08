@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { Checkbox } from '@/components/ui/input';
+import { Dialog } from '@/components/ui/dialog';
 import { useAuth } from '@/context/AuthContext';
 import { fetchCsrBudgetAllocations, fetchCsrRequests, type CsrBudgetAllocation, type CsrRequest } from '@/lib/api';
 import benecoLogo from '@/assets/brand/beneco-logo.png';
@@ -51,6 +52,7 @@ export default function CsrSummary() {
   const [hoveredRequest, setHoveredRequest] = useState<CsrRequest | null>(null);
   const [monthChartOrientation, setMonthChartOrientation] = useState<'horizontal' | 'vertical'>('horizontal');
   const [includeDateReleased, setIncludeDateReleased] = useState(false);
+  const [metricDetails, setMetricDetails] = useState<{ title: string; requests: CsrRequest[] } | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -180,7 +182,11 @@ export default function CsrSummary() {
   const pendingCount = nonInstitutionalStatus.Pending || 0;
   const forEvaluationCount = nonInstitutionalStatus['For evaluation'] || 0;
   const withinPolicyCount = nonInstitutionalPolicy['Within CSR Policy'] || 0;
-  const implementedCount = nonInstitutionalRequests.filter((request) => request.closedApproved).length;
+  const withinPolicyRequests = nonInstitutionalRequests.filter((request) => request.evaluationResult.includes('Within CSR Policy'));
+  const approvedWithinPolicyRequests = withinPolicyRequests.filter((request) => request.approvalStatus === 'Approved');
+  const approvedWithinPolicyCount = approvedWithinPolicyRequests.length;
+  const implementedRequests = approvedWithinPolicyRequests.filter((request) => request.closedApproved);
+  const implementedCount = implementedRequests.length;
   const statusChartImplementedCount = filtered.filter((request) => request.closedApproved).length;
   const statusChartData = Object.entries(status).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value, note: name === 'Completed' && statusChartImplementedCount ? `Implemented: ${statusChartImplementedCount}/${value}` : undefined }));
   const monthChartData = Object.entries(months).sort(([a], [b]) => a.localeCompare(b)).map(([month, requests]) => ({ month, requests }));
@@ -211,7 +217,8 @@ export default function CsrSummary() {
         <PrintMetric label="Pending" value={String(pendingCount)} />
         <PrintMetric label="For evaluation" value={String(forEvaluationCount)} />
         <PrintMetric label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
-        <PrintMetric label="Implemented" value={`${implementedCount} / ${withinPolicyCount}`} />
+        <PrintMetric label="Approved" value={`${approvedWithinPolicyCount} / ${withinPolicyCount}`} />
+        <PrintMetric label="Implemented" value={`${implementedCount} / ${approvedWithinPolicyCount}`} />
         <PrintMetric label="Institutional" value={String(institutionalCount)} />
         <PrintMetric label="Total Funding" value={money.format(totalFunding)} />
         <PrintMetric label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
@@ -233,15 +240,16 @@ export default function CsrSummary() {
     <Card className="mb-5 no-print"><CardHeader><CardTitle>Reporting Period</CardTitle></CardHeader><CardContent><div className="flex flex-wrap items-end gap-4"><div className="min-w-[280px] flex-1 max-w-xl"><DateRangePicker label="CSR Request Date Range" startDate={startDate} endDate={endDate} onChange={(start, end) => { setStartDate(start); setEndDate(end); }} /></div><label className="mb-2 flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-slate-700"><Checkbox checked={includeDateReleased} onChange={(event) => setIncludeDateReleased(event.target.checked)} />Include based on Date Released</label></div><p className="mt-2 text-sm text-slate-500">Metrics include requests dated {startDate} through {endDate}{includeDateReleased ? ', plus requests released within the range.' : '.'}</p></CardContent></Card>
     {loading ? <Card><CardContent className="py-12 text-center text-slate-500">Loading CSR metrics…</CardContent></Card> : error ? <Card><CardContent className="py-12 text-center text-red-600">{error}</CardContent></Card> : <>
       <div className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
-        <MetricCard label="Total Requests" value={String(filtered.length)} note={releaseDateIncludedCount ? `(${releaseDateIncludedCount} ${releaseDateIncludedCount === 1 ? 'request' : 'requests'} included based on date release of budget)` : undefined} />
-        <MetricCard label="Completed" value={String(completedCount)} />
-        <MetricCard label="Pending" value={String(pendingCount)} />
-        <MetricCard label="For evaluation" value={String(forEvaluationCount)} />
-        <MetricCard label="Within CSR Policy" value={`${withinPolicyCount} / ${completedCount}`} />
-        <MetricCard label="Implemented" value={`${implementedCount} / ${withinPolicyCount}`} />
-        <MetricCard label="Institutional" value={String(institutionalCount)} />
-        <MetricCard label="Total Funding" value={money.format(totalFunding)} />
-        <MetricCard label="Actual Project Cost" value={money.format(totalActualProjectCost)} />
+        <MetricCard label="Total Requests" onClick={() => setMetricDetails({ title: 'Total Requests', requests: filtered })} value={String(filtered.length)} note={releaseDateIncludedCount ? `(${releaseDateIncludedCount} ${releaseDateIncludedCount === 1 ? 'request' : 'requests'} included based on date release of budget)` : undefined} />
+        <MetricCard label="Completed" onClick={() => setMetricDetails({ title: 'Completed', requests: nonInstitutionalRequests.filter((request) => request.status === 'Completed') })} value={String(completedCount)} />
+        <MetricCard label="Pending" onClick={() => setMetricDetails({ title: 'Pending', requests: nonInstitutionalRequests.filter((request) => request.status === 'Pending') })} value={String(pendingCount)} />
+        <MetricCard label="For evaluation" onClick={() => setMetricDetails({ title: 'For evaluation', requests: nonInstitutionalRequests.filter((request) => request.status === 'For evaluation') })} value={String(forEvaluationCount)} />
+        <MetricCard label="Within CSR Policy" onClick={() => setMetricDetails({ title: 'Within CSR Policy', requests: withinPolicyRequests })} value={`${withinPolicyCount} / ${completedCount}`} />
+        <MetricCard label="Approved" onClick={() => setMetricDetails({ title: 'Approved', requests: approvedWithinPolicyRequests })} value={`${approvedWithinPolicyCount} / ${withinPolicyCount}`} />
+        <MetricCard label="Implemented" onClick={() => setMetricDetails({ title: 'Implemented', requests: implementedRequests })} value={`${implementedCount} / ${approvedWithinPolicyCount}`} />
+        <MetricCard label="Institutional" onClick={() => setMetricDetails({ title: 'Institutional', requests: filtered.filter((request) => request.institutional) })} value={String(institutionalCount)} />
+        <MetricCard label="Total Funding" onClick={() => setMetricDetails({ title: 'Total Funding', requests: approvedRequests })} value={money.format(totalFunding)} />
+        <MetricCard label="Actual Project Cost" onClick={() => setMetricDetails({ title: 'Actual Project Cost', requests: approvedRequests })} value={money.format(totalActualProjectCost)} />
       </div>
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-6">
         <StatusPieChart data={statusChartData} className="xl:col-span-2" />
@@ -255,12 +263,25 @@ export default function CsrSummary() {
       </div>
         <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} onRowMouseEnter={setHoveredRequest} onRowMouseLeave={() => setHoveredRequest(null)} minWidthPx={1950} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
     </>}
+    <Dialog open={metricDetails !== null} onClose={() => setMetricDetails(null)} title={`${metricDetails?.title ?? ''} — ${requestName} Requests`} description={`${metricDetails?.requests.length ?? 0} request(s) · Reporting period: ${startDate} to ${endDate}${includeDateReleased ? ' · Includes requests by date released' : ''}`} size="2xl" footer={<Button variant="outline" onClick={() => setMetricDetails(null)}>Close</Button>}>
+      <DataTable
+        columns={requestColumns.filter((column) => ['dateRequested', 'programType', 'requestee', 'municipality', 'status', 'evaluationResult', 'approvalStatus', 'amountFunding', 'actualProjectCost'].includes(column.key)).map((column) => ({ ...column, sortable: false, filterable: false }))}
+        rows={metricDetails?.requests ?? []}
+        getRowId={(request) => request.id}
+        cardTitle={(request) => request.requestee}
+        minWidthPx={1100}
+        emptyTitle="No matching requests"
+        emptyDescription="No requests contribute to this metric in the selected reporting period."
+      />
+    </Dialog>
     {hoveredRequest && <CsrRequestHoverSummary request={hoveredRequest} />}
     </div>
   </div>;
 }
 
-function MetricCard({ label, value, note }: { label: string; value: string; note?: string }) { return <Card><CardContent className="p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1.5 break-words text-xl font-bold text-slate-900">{value}</p>{note && <p className="mt-1 text-xs font-medium leading-snug text-blue-600">{note}</p>}</CardContent></Card>; }
+function MetricCard({ label, value, note, onClick }: { label: string; value: string; note?: string; onClick: () => void }) {
+  return <button type="button" onClick={onClick} aria-label={`View ${label} requests`} aria-haspopup="dialog" className="h-full rounded-xl text-left transition-shadow hover:ring-2 hover:ring-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"><Card className="h-full"><CardContent className="p-4"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-1.5 break-words text-xl font-bold text-slate-900">{value}</p>{note && <p className="mt-1 text-xs font-medium leading-snug text-blue-600">{note}</p>}</CardContent></Card></button>;
+}
 
 function PrintMetric({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 
