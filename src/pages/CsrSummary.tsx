@@ -32,6 +32,14 @@ function summaryApprovalStatus(request: CsrRequest) {
   return request.approvalStatus || 'For Evaluation';
 }
 
+function requestDistrict(request: CsrRequest) {
+  return request.institutional ? INSTITUTIONAL_DISTRICT : request.district || 'Unspecified';
+}
+
+function districtApprovalGroup(request: CsrRequest) {
+  const status = summaryApprovalStatus(request);
+  return status === 'Approved' || status === 'Disapproved' ? status : 'For Evaluation/Pending';
+}
 export default function CsrSummary() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
@@ -113,7 +121,7 @@ export default function CsrSummary() {
     const label = request.municipality || 'Unspecified';
     const row = result[label] ?? { label, total: 0, approved: 0 };
     row.total += 1;
-    if (summaryApprovalStatus(request) === 'Approved') row.approved += 1;
+    if (districtApprovalGroup(request) === 'Approved') row.approved += 1;
     result[label] = row;
     return result;
   }, {})).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label)), [filtered]);
@@ -150,20 +158,27 @@ export default function CsrSummary() {
     if (institutionalBudget > 0 || institutionalCount > 0) rows.push({ programType: 'Institutional', count: institutionalCount, budget: institutionalBudget, projectCost: institutionalActualProjectCost });
     return rows.sort((a, b) => b.count - a.count || a.programType.localeCompare(b.programType));
   }, [actualProjectCostByProgramType, budgetByProgramType, filtered, institutionalActualProjectCost, institutionalBudget, programs]);
-  const districtMetrics = useMemo(() => Object.values(filtered.reduce<Record<string, { district: string; quantity: number; approved: number; forEvaluation: number; amount: number; budget: number }>>((result, request) => {
-    const district = request.institutional ? INSTITUTIONAL_DISTRICT : request.district || 'Unspecified';
-    const row = result[district] ?? { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0, budget: budgetByDistrict[district] || 0 };
+  const districtMetrics = useMemo(() => Object.values(filtered.reduce<Record<string, { district: string; quantity: number; approved: number; disapproved: number; forEvaluation: number; amount: number; budget: number }>>((result, request) => {
+    const district = requestDistrict(request);
+    const row = result[district] ?? { district, quantity: 0, approved: 0, disapproved: 0, forEvaluation: 0, amount: 0, budget: budgetByDistrict[district] || 0 };
     row.quantity += 1;
     row.budget = budgetByDistrict[district] || 0;
-    if (summaryApprovalStatus(request) === 'Approved') row.approved += 1;
+    if (districtApprovalGroup(request) === 'Approved') row.approved += 1;
+    else if (districtApprovalGroup(request) === 'Disapproved') row.disapproved += 1;
     else row.forEvaluation += 1;
     if (summaryApprovalStatus(request) === 'Approved') row.amount += Number(request.amountFunding) || 0;
     result[district] = row;
     return result;
-  }, Object.entries(budgetByDistrict).reduce<Record<string, { district: string; quantity: number; approved: number; forEvaluation: number; amount: number; budget: number }>>((result, [district, budget]) => {
-    result[district] = { district, quantity: 0, approved: 0, forEvaluation: 0, amount: 0, budget };
+  }, Object.entries(budgetByDistrict).reduce<Record<string, { district: string; quantity: number; approved: number; disapproved: number; forEvaluation: number; amount: number; budget: number }>>((result, [district, budget]) => {
+    result[district] = { district, quantity: 0, approved: 0, disapproved: 0, forEvaluation: 0, amount: 0, budget };
     return result;
   }, {}))).sort((a, b) => b.amount - a.amount || b.quantity - a.quantity || a.district.localeCompare(b.district)), [budgetByDistrict, filtered]);
+  function openDistrictRequests(district: string | null, status?: ReturnType<typeof districtApprovalGroup>) {
+    setMetricDetails({
+      title: `${district ?? 'All districts'} — ${status ?? 'All'}`,
+      requests: filtered.filter((request) => (district === null || requestDistrict(request) === district) && (!status || districtApprovalGroup(request) === status)),
+    });
+  }
   const approvedRequests = filtered.filter((request) => summaryApprovalStatus(request) === 'Approved');
   const totalFunding = approvedRequests.reduce((sum, request) => sum + (Number(request.amountFunding) || 0), 0);
   const totalActualProjectCost = approvedRequests.reduce((sum, request) => sum + (Number(request.actualProjectCost) || 0), 0);
@@ -230,7 +245,7 @@ export default function CsrSummary() {
         <PrintProgramTypePanel rows={programTypeRows} />
         <PrintMonthPanel rows={monthChartData} />
         <PrintMunicipalityPanel rows={municipalityRows} />
-        <div className="csr-print-panel csr-print-wide"><h2>District Metrics</h2><table><thead><tr><th>District</th><th>Total</th><th>Approved</th><th>For Evaluation</th><th>Amount</th><th>Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district}><td>{row.district}</td><td>{row.quantity}</td><td>{row.approved}</td><td>{row.forEvaluation}</td><td>{money.format(row.amount)}</td><td>{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr><td>Total</td><td>{filtered.length}</td><td>{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td>{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td>{money.format(totalFunding)}</td><td>{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div>
+        <div className="csr-print-panel csr-print-wide"><h2>District Metrics</h2><table><thead><tr><th>District</th><th>Total</th><th>Approved</th><th>Disapproved</th><th>For Evaluation/Pending</th><th>Amount</th><th>Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district}><td>{row.district}</td><td>{row.quantity}</td><td>{row.approved}</td><td>{row.disapproved}</td><td>{row.forEvaluation}</td><td>{money.format(row.amount)}</td><td>{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr><td>Total</td><td>{filtered.length}</td><td>{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td>{districtMetrics.reduce((sum, row) => sum + row.disapproved, 0)}</td><td>{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td>{money.format(totalFunding)}</td><td>{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div>
         <div className="csr-print-panel"><h2>Institutional</h2>{institutionalByProgramType.length ? <table><tbody>{institutionalByProgramType.map((row) => <tr key={row.programType}><td>{row.programType}</td><td>{money.format(row.amount)}</td></tr>)}</tbody></table> : <p className="csr-print-empty">No institutional requests for this period.</p>}</div>
       </div>
       <footer className="csr-print-footer">BENECO Enterprise System · {summaryTitle}</footer>
@@ -257,7 +272,7 @@ export default function CsrSummary() {
         <Breakdown title="Approval Status" values={approval} total={filtered.length} className="xl:col-span-2" />
         <ProgramTypeBudgetCard rows={programTypeRows} total={filtered.length} className="xl:col-span-3" />
         <MonthlyBarChart data={monthChartData} orientation={monthChartOrientation} onToggleOrientation={() => setMonthChartOrientation((current) => current === 'horizontal' ? 'vertical' : 'horizontal')} className="xl:col-span-3" />
-        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, approved funding, and selected-year budget by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">For Evaluation</th><th className="py-2 text-right">Amount</th><th className="py-2 text-right">Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right">{row.quantity}</td><td className="py-3 text-right text-emerald-600">{row.approved}</td><td className="py-3 text-right">{row.forEvaluation}</td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td><td className="py-3 text-right font-semibold text-blue-600">{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right">{filtered.length}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</td><td className="py-3 text-right">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</td><td className="py-3 text-right">{money.format(totalFunding)}</td><td className="py-3 text-right text-blue-600">{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
+        <Card className="xl:col-span-4 xl:row-span-2"><CardHeader><CardTitle>District Metrics</CardTitle><p className="text-sm text-slate-500">Total requests, approval breakdown, approved funding, and selected-year budget by district.</p></CardHeader><CardContent>{districtMetrics.length ? <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase text-slate-500"><th className="py-2">District</th><th className="py-2 text-right">Total</th><th className="py-2 text-right">Approved</th><th className="py-2 text-right">Disapproved</th><th className="py-2 text-right">For Evaluation/Pending</th><th className="py-2 text-right">Amount</th><th className="py-2 text-right">Budget</th></tr></thead><tbody>{districtMetrics.map((row) => <tr key={row.district} className="border-b last:border-0"><td className="py-3 font-medium">{row.district}</td><td className="py-3 text-right"><button type="button" onClick={() => openDistrictRequests(row.district)} aria-label={`View all requests for ${row.district}`} aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{row.quantity}</button></td><td className="py-3 text-right text-emerald-600"><button type="button" onClick={() => openDistrictRequests(row.district, 'Approved')} aria-label={`View Approved requests for ${row.district}`} aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{row.approved}</button></td><td className="py-3 text-right text-red-600"><button type="button" onClick={() => openDistrictRequests(row.district, 'Disapproved')} aria-label={`View Disapproved requests for ${row.district}`} aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{row.disapproved}</button></td><td className="py-3 text-right"><button type="button" onClick={() => openDistrictRequests(row.district, 'For Evaluation/Pending')} aria-label={`View For Evaluation/Pending requests for ${row.district}`} aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{row.forEvaluation}</button></td><td className="py-3 text-right font-semibold">{money.format(row.amount)}</td><td className="py-3 text-right font-semibold text-blue-600">{money.format(row.budget)}</td></tr>)}</tbody><tfoot><tr className="border-t-2 font-bold"><td className="py-3">Total</td><td className="py-3 text-right"><button type="button" onClick={() => openDistrictRequests(null)} aria-label="View all requests across all districts" aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{filtered.length}</button></td><td className="py-3 text-right"><button type="button" onClick={() => openDistrictRequests(null, 'Approved')} aria-label="View Approved requests across all districts" aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{districtMetrics.reduce((sum, row) => sum + row.approved, 0)}</button></td><td className="py-3 text-right"><button type="button" onClick={() => openDistrictRequests(null, 'Disapproved')} aria-label="View Disapproved requests across all districts" aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{districtMetrics.reduce((sum, row) => sum + row.disapproved, 0)}</button></td><td className="py-3 text-right"><button type="button" onClick={() => openDistrictRequests(null, 'For Evaluation/Pending')} aria-label="View For Evaluation/Pending requests across all districts" aria-haspopup="dialog" className="min-w-8 rounded px-2 py-1 font-semibold underline decoration-dotted underline-offset-4 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">{districtMetrics.reduce((sum, row) => sum + row.forEvaluation, 0)}</button></td><td className="py-3 text-right">{money.format(totalFunding)}</td><td className="py-3 text-right text-blue-600">{money.format(districtMetrics.reduce((sum, row) => sum + row.budget, 0))}</td></tr></tfoot></table></div> : <p className="py-8 text-center text-sm text-slate-500">No district data for this period.</p>}</CardContent></Card>
         <MunicipalityApprovalBreakdown rows={municipalityRows} className="xl:col-span-2 xl:row-span-2" />
         <InstitutionalAmountCard rows={institutionalByProgramType} className="xl:col-span-2" />
       </div>
