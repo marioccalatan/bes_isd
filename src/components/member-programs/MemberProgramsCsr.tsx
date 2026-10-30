@@ -14,7 +14,7 @@ import { addCsrProjectEvent, createCsrSector, deleteCsrAttachment, deleteCsrBudg
 
 const PROGRAM_TYPES = ['Environmental Sustainability Program', 'Livelihood Program', 'Skills Training Program', 'Pailaw sa Paaralan', 'Reforestation Program', 'NGO Partnership for Social Cause', 'Other Projects', 'Linkages'];
 const COMMUNITY_RELATIONS_PROGRAM_TYPE = 'Linkages';
-const COMMUNITY_RELATIONS_PROGRAM_TYPES = ['Partnership', 'Linkages', 'Networking'];
+const COMMUNITY_RELATIONS_PROGRAM_TYPES = ['Partnership', 'Linkages', 'Networking', 'Advertisement'];
 function evaluationResultLabel(programType: string, result: string) {
   if (!COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(programType)) return result;
   if (result === 'Within CSR Policy') return 'Approved for Linkages';
@@ -259,7 +259,7 @@ export function MemberProgramsCsr({ onCountChange, onAddToPrograms, programType,
     const isLinkages = COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(form.programType);
     const printTitle = isLinkages ? 'Linkages' : 'CSR PROGRAM EVALUATION FORM';
     const focusTitle = isLinkages ? 'Area of Focus of the Proposed Linkages:' : 'Area of Focus of the Proposed CSR Program:';
-    const focusTypes = isLinkages ? ['Linkages', 'Partnership', 'Networking'] : PROGRAM_TYPES;
+    const focusTypes = isLinkages ? ['Linkages', 'Partnership', 'Networking', 'Advertisement'] : PROGRAM_TYPES;
     const popup = window.open('', '_blank', 'width=900,height=1100'); if (!popup) return;
     const value = (text: unknown) => escapeHtml(String(text || '—'));
     const checked = (condition: boolean) => condition ? '☒' : '☐';

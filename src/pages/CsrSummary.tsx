@@ -17,7 +17,7 @@ const money = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP
 const currentYear = new Date().getFullYear();
 const CHART_COLORS = ['#10b981', '#38bdf8', '#f59e0b', '#a78bfa', '#f43f5e', '#14b8a6'];
 const PAGE_SIZE = 20;
-const COMMUNITY_RELATIONS_PROGRAM_TYPES = ['Partnership', 'Linkages', 'Networking'];
+const COMMUNITY_RELATIONS_PROGRAM_TYPES = ['Partnership', 'Linkages', 'Networking', 'Advertisement'];
 const INSTITUTIONAL_DISTRICT = 'INSTITUTIONAL';
 
 function isWithinRange(date: string, startDate: string, endDate: string) {
