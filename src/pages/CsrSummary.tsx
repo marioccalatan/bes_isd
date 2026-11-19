@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { Checkbox } from '@/components/ui/input';
+import { MemberProgramsCsr } from '@/components/member-programs/MemberProgramsCsr';
 import { Dialog } from '@/components/ui/dialog';
 import { useAuth } from '@/context/AuthContext';
 import { fetchCsrBudgetAllocations, fetchCsrRequests, type CsrBudgetAllocation, type CsrRequest } from '@/lib/api';
@@ -60,16 +61,35 @@ export default function CsrSummary() {
   const [hoveredRequest, setHoveredRequest] = useState<CsrRequest | null>(null);
   const [monthChartOrientation, setMonthChartOrientation] = useState<'horizontal' | 'vertical'>('horizontal');
   const [includeDateReleased, setIncludeDateReleased] = useState(false);
+  const [editingRequest, setEditingRequest] = useState<CsrRequest | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [contextMenu, setContextMenu] = useState<{ request: CsrRequest; x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = () => setContextMenu(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopImmediatePropagation(); dismiss(); } };
+    window.addEventListener('click', dismiss);
+    window.addEventListener('scroll', dismiss, true);
+    window.addEventListener('resize', dismiss);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('click', dismiss);
+      window.removeEventListener('scroll', dismiss, true);
+      window.removeEventListener('resize', dismiss);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [contextMenu]);
   const [metricDetails, setMetricDetails] = useState<{ title: string; requests: CsrRequest[] } | null>(null);
 
   useEffect(() => {
     if (!token) return;
     setLoading(true);
+    setError('');
     Promise.all([fetchCsrRequests(token), fetchCsrBudgetAllocations(token)])
       .then(([csrRequests, allocations]) => { setRequests(csrRequests); setBudgetAllocations(allocations); })
       .catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load CSR summary data.'))
       .finally(() => setLoading(false));
-  }, [token]);
+  }, [token, refreshVersion]);
 
   const matchesProgramType = (request: CsrRequest) => {
     const isCommunityRelationsType = COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(request.programType);
@@ -308,9 +328,14 @@ export default function CsrSummary() {
       </div>
         <Card className="mt-5"><CardHeader><CardTitle>CSR Request Summary</CardTitle></CardHeader><CardContent><DataTable columns={requestColumns} rows={pagedRows} getRowId={(request) => request.id} cardTitle={(request) => request.programType} sortKey={sortKey} sortDir={sortDir} onSort={sortBy} columnFilters={columnFilters} onColumnFilterChange={(key, value) => setColumnFilters((current) => ({ ...current, [key]: value }))} onRowMouseEnter={setHoveredRequest} onRowMouseLeave={() => setHoveredRequest(null)} minWidthPx={1950} emptyTitle="No CSR requests" emptyDescription="No CSR requests fall within the selected reporting period." />{tableRows.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4"><p className="text-sm text-slate-500">Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}><ChevronLeft className="h-4 w-4" /> Previous</Button><span className="min-w-24 text-center text-sm text-slate-600">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>Next <ChevronRight className="h-4 w-4" /></Button></div></div>}</CardContent></Card>
     </>}
-    <Dialog open={metricDetails !== null} onClose={() => setMetricDetails(null)} title={`${metricDetails?.title ?? ''} — ${requestName} Requests`} description={`${metricDetails?.requests.length ?? 0} request(s) · Reporting period: ${startDate} to ${endDate}${includeDateReleased ? ' · Includes requests by date released' : ''}`} size="2xl" footer={<Button variant="outline" onClick={() => setMetricDetails(null)}>Close</Button>}>
+    <Dialog open={metricDetails !== null && !editingRequest} onClose={() => setMetricDetails(null)} title={`${metricDetails?.title ?? ''} — ${requestName} Requests`} description={`${metricDetails?.requests.length ?? 0} request(s) · Reporting period: ${startDate} to ${endDate}${includeDateReleased ? ' · Includes requests by date released' : ''}`} size="2xl" footer={<Button variant="outline" onClick={() => setMetricDetails(null)}>Close</Button>}>
       <DataTable
         columns={requestColumns.filter((column) => ['dateRequested', 'programType', 'requestee', 'municipality', 'district', 'status', 'evaluationResult', 'approvalStatus', 'amountFunding', 'actualProjectCost'].includes(column.key)).map((column) => ({ ...column, sortable: false, filterable: false }))}
+        onRowContextMenu={(request, event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setContextMenu({ request, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 168)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 64)) });
+        }}
         rows={metricDetails?.requests ?? []}
         getRowId={(request) => request.id}
         cardTitle={(request) => request.requestee}
@@ -319,6 +344,14 @@ export default function CsrSummary() {
         emptyDescription="No requests contribute to this metric in the selected reporting period."
       />
     </Dialog>
+    {contextMenu && <div role="menu" aria-label="CSR actions" className="fixed z-[70] min-w-40 rounded-lg border border-slate-200 bg-surface p-1 shadow-xl" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" autoFocus className="w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-brand-500" onClick={() => { setEditingRequest(contextMenu.request); setContextMenu(null); }}>Edit</button></div>}
+    {editingRequest && <MemberProgramsCsr
+      editorOnly
+      editRequest={editingRequest}
+      programType={COMMUNITY_RELATIONS_PROGRAM_TYPES.includes(editingRequest.programType) ? 'Linkages' : undefined}
+      onEditorClose={() => setEditingRequest(null)}
+      onRecordsChanged={() => { setMetricDetails(null); setRefreshVersion((current) => current + 1); }}
+    />}
     {hoveredRequest && <CsrRequestHoverSummary request={hoveredRequest} />}
     </div>
   </div>;
